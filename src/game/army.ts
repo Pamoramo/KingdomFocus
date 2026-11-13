@@ -5,7 +5,7 @@ import { awayBats } from '../lib/warActions.ts';
 import { sFrame, bFrame, bannerTex, BW, BH, HD, S } from './textures.ts';
 
 export const LOD_ZOOM = 1.25;
-const SX = 13, SY = 11, SQ_W = 4 * SX + 4, SQ_H = 3 * SY + 8;
+const SX = 11, SY = 10, SQ_W = 4 * SX + 4, SQ_H = 3 * SY + 6;
 interface Bob { b: Phaser.GameObjects.Bob; ox: number; oy: number; cls: string; rank: number; ph: number; squad: string; idx: number }
 interface View { tick: number; detail: Phaser.GameObjects.Blitter; blocks: Phaser.GameObjects.Blitter; bobs: Bob[]; banner: Phaser.GameObjects.Image; label: Phaser.GameObjects.Text; ring: Phaser.GameObjects.Ellipse; x: number; y: number; sig: string; w: number; h: number; moving: boolean }
 
@@ -48,7 +48,7 @@ export class Army {
         const items: Omit<Bob, 'b'>[] = [];
         for (const { q, x, y } of pos) {
           v.blocks.create(x + 2, y - 2, bFrame(q.cls, q.rank));
-          for (let k = 0; k < q.count; k++) items.push({ ox: x + (k % 4) * SX - 6, oy: y + Math.floor(k / 4) * SY - 16, cls: q.cls, rank: q.rank, ph: Math.floor(Math.random() * 4), squad: q.id, idx: k });
+          for (let k = 0; k < q.count; k++) items.push({ ox: x + (k % 4) * SX - 4, oy: y + Math.floor(k / 4) * SY - 12, cls: q.cls, rank: q.rank, ph: Math.floor(Math.random() * 4), squad: q.id, idx: k });
         }
         items.sort((a, b) => a.oy - b.oy);
         for (const it of items) v.bobs.push({ ...it, b: v.detail.create(it.ox * HD, it.oy * HD, sFrame(it.cls, it.rank, 0)) });
@@ -96,7 +96,7 @@ export class Army {
       if (Math.abs(wx - v.x) > v.w / 2 + 8 || wy > v.y + 8 || wy < v.y - v.h - 24) continue;
       if (this.lod) return { bat: id };
       let best: Bob | null = null, bd = 99;
-      for (const bb of v.bobs) { const d = Math.hypot(wx - (v.x + bb.ox + 10), wy - (v.y + bb.oy + 14)); if (d < bd) { bd = d; best = bb; } }
+      for (const bb of v.bobs) { const d = Math.hypot(wx - (v.x + bb.ox + 8), wy - (v.y + bb.oy + 12)); if (d < bd) { bd = d; best = bb; } }
       return best && bd < 10 ? { bat: id, squad: best.squad, idx: best.idx } : { bat: id };
     }
     return null;
