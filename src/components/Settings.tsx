@@ -54,8 +54,14 @@ export function SettingsPanel() {
         <label>Long break<select className="inp" value={cfg.longBreakMin} onChange={(e) => setSettings({ cfg: { ...cfg, longBreakMin: +e.target.value } })}>{[15, 20, 30].map((m) => <option key={m} value={m}>{m} min</option>)}</select></label>
       </div>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.requireNote} onChange={(e) => setSettings({ requireNote: e.target.checked })} /> Ask what I studied at each check-in</label>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.sound} onChange={(e) => setSettings({ sound: e.target.checked })} /> Sounds</label>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.notify} onChange={(e) => { setSettings({ notify: e.target.checked }); if (e.target.checked && 'Notification' in window) Notification.requestPermission(); }} /> Notifications when a check-in is due</label>
+    </Section>
+    <Section title="Sound & music">
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.sound} onChange={(e) => setSettings({ sound: e.target.checked })} /> All sound</label>
+      <label className="flex items-center gap-2 text-sm">Music<input type="range" min={0} max={1} step={0.05} className="flex-1" value={st.music ?? 0.5} onChange={(e) => setSettings({ music: +e.target.value })} /></label>
+      <label className="flex items-center gap-2 text-sm">Effects<input type="range" min={0} max={1} step={0.05} className="flex-1" value={st.sfx ?? 0.7} onChange={(e) => setSettings({ sfx: +e.target.value })} /></label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.ambience ?? true} onChange={(e) => setSettings({ ambience: e.target.checked })} /> Ambience (birdsong by day, crickets at night)</label>
+      <p className="text-xs opacity-75">All music is generated live: a lute, recorder and drum play in a medieval mode that shifts with day, night and war.</p>
     </Section>
     <Section title="Appearance">
       <div className="flex gap-1 flex-wrap">{THEMES.map(([id, name, req]) => { const ok = !req || unlocked(s, req); return <button key={id} disabled={!ok} title={ok ? '' : 'Unlocked by an achievement'} className={`btn text-sm ${st.theme === id ? 'btn-gold' : ''}`} onClick={() => setSettings({ theme: id })}>{name}{ok ? '' : ' (locked)'}</button>; })}</div>

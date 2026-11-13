@@ -6,13 +6,15 @@ import { upgrade, upgradeAll, demolish, canAfford, costOf, lockReason, count } f
 import { setUI } from '../game/ui.ts';
 import { drawBuilding, drawTile } from '../game/art/buildings.ts';
 import { Sprite } from './Icon.tsx';
+import { hdify, HD } from '../game/art/hd.ts';
+import { withoutOutline } from '../game/art/px.ts';
 import { Cost, Tabs } from './Cost.tsx';
 
 const TILES = new Set<BKind>(['road', 'palisade', 'wall', 'courtyard', 'moat']);
 export function Preview({ kind, lvl, max = 64 }: { kind: BKind; lvl: number; max?: number }) {
-  const draw = () => (TILES.has(kind) ? drawTile(kind as 'road', lvl, 10) : drawBuilding(kind, lvl, 0).cv);
+  const draw = () => hdify(withoutOutline(() => (TILES.has(kind) ? drawTile(kind as 'road', lvl, 10) : drawBuilding(kind, lvl, 0).cv)));
   const d = BUILDINGS[kind], h = TILES.has(kind) ? 30 : d.h * 16 + 60, w = d.w * 16, scale = Math.max(1, Math.min(3, Math.floor(max / Math.max(w, h * 0.7))));
-  return <Sprite id={`b-${kind}-${lvl}`} draw={draw} scale={scale} />;
+  return <Sprite id={`bh-${kind}-${lvl}`} draw={draw} scale={scale / HD} />;
 }
 const fxText = (e: Effects) => [e.cap && `+${e.cap} army capacity`, e.gold && `+${Math.round(e.gold * 100)}% gold`, e.wood && `+${Math.round(e.wood * 100)}% wood`, e.stone && `+${Math.round(e.stone * 100)}% stone`, e.renown && `+${Math.round(e.renown * 100)}% renown`, e.xp && `+${Math.round(e.xp * 100)}% troop XP`, e.discount && `-${Math.round(e.discount * 100)}% castle costs`].filter(Boolean).join(' · ');
 

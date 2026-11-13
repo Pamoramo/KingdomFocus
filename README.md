@@ -21,7 +21,7 @@ npm run test:db      # schema + sync function against a local Postgres (needs ps
 ## Cloud saves (Supabase)
 
 1. Create a project at supabase.com.
-2. In the SQL editor, run `supabase/migrations/0001_kingdom.sql`.
+2. In the SQL editor, run `supabase/migrations/0001_kingdom.sql`, then `0002_war.sql`.
 3. Copy `.env.example` to `.env.local` and set:
    - `NEXT_PUBLIC_SUPABASE_URL`: Project Settings → API → Project URL
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Project Settings → API → anon public key
@@ -33,6 +33,15 @@ How saving works:
 - `sync_kingdom()` applies all pending changes in one transaction and returns the merged kingdom.
 - Triggers reject rewards that aren't backed by a real study session or habit completion, rewards above the allowed rate, and sessions claiming more time than actually passed.
 - Row Level Security limits every table to its owner. Studying as a guest and then signing in merges your guest progress into the account.
+
+## War & diplomacy
+
+- Seven neighbours appear on the world map: a bandit lord and six kingdoms, each with a ruler, a personality, a castle level, an army and relations with you.
+- Trade, gifts and lending troops build trust. At 60 relations a kingdom will ally with you, and allies join your campaigns and defend you.
+- Siege engines (rams, towers, mangonels, ballistae, trebuchets) are built at the Siege Workshop.
+- On campaign you first fight a field battle, choosing a tactic: assault, defensive line, flanking, volley, feigned retreat or ambush. Terrain, army composition, ranks and commanders all matter.
+- During a siege, every 20 verified study minutes is one siege day. Farms produce supplies while you study, and each siege day the army eats them.
+- Your own castle can only be besieged once you reach stage 4 and are at odds with someone, or when a kingdom truly hates you. Losing costs part of your stores, never your buildings.
 
 ## Deploy (Vercel)
 
@@ -47,7 +56,8 @@ How saving works:
   - `economy`: buildings, troops, technologies, stages, ranks.
   - `state`: store, actions and the ledger.
   - `syncCore`, `sync`: cloud sync.
-- `src/game`: the Phaser scene.
+- `src/lib/battle.ts`, `war.ts`, `warActions.ts`: battle simulation, the world and diplomacy, and the war actions.
+- `src/game`: the Phaser scenes (kingdom, world map, battle) and `audio.ts` (generated music and sound).
   - `world`: terrain, river, buildings, construction, lights.
   - `army`: formations with zoom-based detail.
   - `ambient`: villagers, patrols, archers, sparring.

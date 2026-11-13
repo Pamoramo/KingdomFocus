@@ -34,4 +34,16 @@ assert.equal(S.armySize(merged), 6);
 assert.deepEqual(merged.habits[0].done, local.habits[0].done);
 assert.equal(merged.sessions[0].verifiedSec, 45 * 60);
 assert.deepEqual(merged.sessions[0].reward, { gold: 450, wood: 225, stone: 135, renown: 45 });
-console.log('roundtrip ok', JSON.stringify(snap.balance));
+// war: trade + casualties sync and cannot double count
+import('../../src/lib/warActions.ts').then(async (WA) => {
+  S._with({ ...merged, res: { ...merged.res } });
+  const k = S.getState().world.rivals.find((r) => !r.bandits)!;
+  assert.equal(WA.trade(k.id, 'gold', 100, 'wood'), null);
+  const sq = S.getState().squads[0];
+  S._with({ ...S.getState(), squads: S.getState().squads.map((q) => (q.id === sq.id ? { ...q, count: 2 } : q)), outbox: { ...S.getState().outbox, dirty: { ...S.getState().outbox.dirty, squads: [sq.id] } } });
+  const sent2 = buildPayload(S.getState()), snap2 = call(sent2.payload);
+  assert.deepEqual(snap2.balance, S.getState().res, 'trade synced into the balance');
+  assert.equal(snap2.squads.find((q: { id: string }) => q.id === sq.id).count, 2, 'casualties persist');
+  assert.equal(snap2.kingdom.world.rivals.length, 7, 'world map state persists');
+  console.log('roundtrip ok', JSON.stringify(snap2.balance));
+});

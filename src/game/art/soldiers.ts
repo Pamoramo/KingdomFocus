@@ -1,4 +1,5 @@
 import { type C, P, r, px, canvas, outline, shade } from './px.ts';
+import { HD } from './hd.ts';
 import { TCLASSES, type TClass } from '../../lib/economy.ts';
 
 type Helm = 'none' | 'straw' | 'cap' | 'hood' | 'kettle' | 'nasal' | 'bascinet' | 'sallet' | 'great' | 'crown' | 'feather';
@@ -30,7 +31,7 @@ export const SPECS: Record<TClass | 'worker' | 'villager', Spec> = {
   villager: { tab: '#8a4a5a', body: 'cloth', helm: 'cap', weapon: 'none', shield: 'none', skirt: true },
 };
 export const SHEET_CLASSES = [...TCLASSES, 'worker', 'villager'] as const;
-export const FW = 16, FH = 20, FRAMES = 6, RANKS_N = 5;
+export const FW = 20, FH = 24, FRAMES = 6, RANKS_N = 5;
 const PER_ROW = 8; // entries per sheet row
 
 const HORSE = { brown: ['#6b4423', '#4a2e16'], white: ['#e8e2d4', '#b8b0a0'], black: ['#2e2a2a', '#1a1616'], grey: ['#8a8680', '#5e5a56'] } as const;
@@ -42,98 +43,157 @@ function metal(body: Spec['body'], rank: number): [string, string, string] {
   return ['#8a6a44', '#6a4e30', '#a8865a'];
 }
 
-/** Draws one 16x20 frame. f: 0-3 walk cycle, 4 wind-up, 5 strike/release. */
+// ---------- chunky 16-bit style figures (big helmets, 4-tone ramps, crisp outlines) ----------
+type Ramp = [string, string, string, string]; // light, mid, dark, deep
+const ramp = (c: string): Ramp => [shade(c, 40), c, shade(c, -38), shade(c, -75)];
+const STEEL: Ramp = ['#eef2f6', '#b6bec8', '#7e8894', '#4c5562'];
+const STEEL_POL: Ramp = ['#ffffff', '#d6dde5', '#9ea8b4', '#646e7c'];
+const GOLD: Ramp = ['#fff1a8', '#ecc94b', '#b08a22', '#6e5410'];
+const LEATHER: Ramp = ['#ba8654', '#8a5a32', '#5e3e24', '#3c2616'];
+const SKIN: Ramp = ['#f7d6b4', '#e6b88e', '#bb8660', '#8a5a3e'];
+const WOOD: Ramp = ['#c69256', '#8f5e30', '#5e3b1c', '#3c2410'];
+const HORSES: Record<string, Ramp> = { brown: ['#9a6a3e', '#6e4626', '#4c2e16', '#2e1a0c'], white: ['#ffffff', '#e4ded2', '#b6ae9e', '#7e766a'], black: ['#5a5454', '#363232', '#221e1e', '#120f0f'], grey: ['#b0aca6', '#8a8680', '#5e5a56', '#3a3734'] };
+const INK = '#151019';
+
 function drawUnit(c: C, ox: number, oy: number, s: Spec, rank: number, f: number) {
-  const Q = (x: number, y: number, w: number, h: number, col: string) => r(c, ox + x, oy + y, w, h, col);
-  const [arm, armD, armL] = metal(s.body, rank), gold = rank >= 4, mounted = !!s.mount;
-  const tab = s.tab, tabD = shade(tab, -35), trim = gold ? P.gold : s.trim;
+  const P1 = (x: number, y: number, col: string) => r(c, ox + x, oy + y, 1, 1, col);
+  const R = (x: number, y: number, w: number, h: number, col: string) => r(c, ox + x, oy + y, w, h, col);
+  /** Shaded block: light top/left, dark right, deep bottom, rounded corners. */
+  const blob = (x: number, y: number, w: number, h: number, rp: Ramp, round = true) => {
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      if (round && w > 2 && h > 2 && (i === 0 || i === w - 1) && (j === 0 || j === h - 1)) continue;
+      P1(x + i, y + j, j === h - 1 ? rp[3] : i === w - 1 || j === h - 2 && i > w / 2 ? rp[2] : i === 0 || j === 0 ? rp[0] : rp[1]);
+    }
+  };
+  const steel = rank >= 3 ? STEEL_POL : STEEL, gold = rank >= 4, trim = gold ? GOLD : null;
+  const body: Ramp = s.body === 'plate' ? steel : s.body === 'chain' ? ['#c8ccd2', '#9aa0a8', '#6e747c', '#474c54'] : s.body === 'leather' ? LEATHER : ramp(shade(s.tab, -10));
+  const tab = ramp(s.tab), mounted = !!s.mount;
   const walk = f < 4, bob = walk && f % 2 === 1 ? 1 : 0, atk = f === 4 ? -1 : f === 5 ? 1 : 0;
-  let y0 = 4 + bob; // top of head
+  const cape = s.cape ?? (rank >= 4 ? '#5a2a7a' : rank >= 3 ? '#8a1d1a' : null);
+
+  // ---- horse (mounted units) ----
+  let hx = 4, hy = 2 + bob, ty = 12 + bob, hs = 10; // head x/y, torso y, head size
   if (mounted) {
-    const [hc, hd] = HORSE[s.mount!], lg = [[0, 0], [1, -1], [0, 0], [-1, 1], [0, 0], [1, -1]][f];
-    const hy = 11 + bob;
-    Q(2, hy, 11, 5, hc); Q(2, hy + 4, 11, 1, hd); Q(11, hy - 4, 3, 6, hc); Q(13, hy - 5, 3, 3, hc); px(c, ox + 15, oy + hy - 4, P.out); Q(11, hy - 5, 1, 5, hd);
-    Q(0, hy, 2, 4, hd); px(c, ox + 1, hy + oy - 1, hd);
-    for (const [x, d] of [[3, lg[0]], [5, lg[1]], [10, lg[1]], [12, lg[0]]]) { Q(x + d, hy + 5, 1, 3, hd); px(c, ox + x + d, oy + 19, P.out); }
-    if (s.barding) { Q(3, hy, 9, 5, s.barding); for (let i = 3; i < 12; i += 2) px(c, ox + i, oy + hy + 4, gold ? P.gold : shade(s.barding, 40)); Q(12, hy - 5, 3, 2, arm); }
-    else { Q(5, hy, 4, 2, '#5a3a1e'); }
-    y0 = 0 + bob;
+    const hr = HORSES[s.mount!], lg = [[0, 1], [1, 0], [0, 1], [1, 0], [0, 0], [1, 1]][f], b = bob;
+    R(0, 12 + b, 2, 6, hr[2]); P1(1, 11 + b, hr[1]); P1(0, 18 + b, hr[3]); // tail
+    for (const [x, ph] of [[2, 0], [5, 1], [11, 0], [13, 1]]) { const up = lg[ph]; R(x, 17 + b, 2, 5 - b - up, x < 8 ? hr[2] : hr[1]); R(x, 22 - up, 2, 1, hr[3]); }
+    blob(1, 11 + b, 14, 7, hr); blob(12, 6 + b, 4, 7, hr, false); blob(14, 3 + b, 5, 5, hr); blob(16, 6 + b, 4, 3, hr, false);
+    P1(15, 2 + b, hr[2]); P1(16, 4 + b, INK); P1(19, 7 + b, hr[3]); P1(19, 8 + b, hr[3]); R(12, 5 + b, 1, 7, hr[3]); R(13, 4 + b, 1, 2, hr[3]);
+    if (s.barding) { const br = ramp(s.barding); blob(2, 12 + b, 12, 5, br, false); for (let i = 2; i < 14; i += 2) P1(i, 16 + b, gold ? GOLD[1] : br[0]); R(14, 3 + b, 4, 2, steel[1]); R(14, 3 + b, 4, 1, steel[0]); }
+    else { R(5, 10 + b, 6, 2, LEATHER[1]); R(5, 10 + b, 6, 1, LEATHER[0]); P1(8, 12 + b, GOLD[1]); R(16, 6 + b, 1, 3, LEATHER[3]); }
+    hx = 5; hy = -1 + b; ty = 6 + b; hs = 7;
   }
-  // cape behind body (rank 3+ get one if the class has none)
-  const cape = s.cape ?? (rank >= 4 ? '#5a2a7a' : rank >= 3 ? '#7a1d1a' : null);
-  if (cape) { Q(3, y0 + 6, 2, mounted ? 6 : 8, cape); Q(4, y0 + 5, 6, 1, cape); }
-  // legs
+  const hcx = hx + Math.floor(hs / 2);
+  // ---- cape ----
+  if (cape) { const cr = ramp(cape); R(hx - 1, ty + 1, 3, mounted ? 6 : 9, cr[2]); R(hx, ty, hs - 2, 2, cr[1]); P1(hx - 1, ty + (mounted ? 6 : 9), cr[3]); }
+  // ---- legs ----
   if (!mounted) {
-    const l = [[0, 0], [-1, 1], [0, 0], [1, -1], [0, 0], [-1, 1]][f], legC = s.body === 'plate' ? armD : s.body === 'chain' ? '#5a5a62' : '#5a4030';
-    Q(5 + l[0], 16, 2, 3, legC); Q(8 + l[1], 16, 2, 3, legC); Q(5 + l[0], 19, 2, 1, P.boot); Q(8 + l[1], 19, 2, 1, P.boot);
-    if (s.body === 'plate') { px(c, ox + 5 + l[0], oy + 17, armL); px(c, ox + 8 + l[1], oy + 17, armL); }
-  } else Q(6, y0 + 10, 2, 3, armD);
-  // torso
-  const ty = y0 + 7;
-  Q(4, ty, 7, 5, s.body === 'cloth' ? tabD : arm);
-  if (s.body === 'chain') for (let i = 0; i < 7; i += 2) for (let j = 0; j < 5; j += 2) px(c, ox + 4 + i + (j % 4 ? 1 : 0), oy + ty + j, armD);
-  Q(5, ty, 5, 5, tab); if (s.skirt) Q(5, ty + 5, 5, 2, tab);
-  if (s.body === 'plate') { Q(4, ty, 1, 2, armL); Q(10, ty, 1, 2, arm); }
-  if (trim) { Q(5, ty, 5, 1, trim); if (s.skirt) Q(5, ty + 6, 5, 1, trim); }
-  if (s === SPECS.knight || s === SPECS.mknight) { Q(7, ty + 1, 1, 4, P.red); Q(6, ty + 2, 3, 1, P.red); }
-  Q(4, ty + 4, 7, 1, rank >= 1 ? '#a8803a' : P.woodD); if (rank >= 1) px(c, ox + 7, oy + ty + 4, P.gold);
-  if (rank >= 2 && rank < 4) { px(c, ox + 6, oy + ty + 2, '#f0f0f0'); px(c, ox + 7, oy + ty + 1, '#f0f0f0'); px(c, ox + 8, oy + ty + 2, '#f0f0f0'); } // chevron
-  if (gold) { px(c, ox + 6, oy + ty + 2, P.gold); px(c, ox + 8, oy + ty + 2, P.gold); px(c, ox + 7, oy + ty + 3, P.gold); }
-  // head
-  const hy = y0 + 2;
-  Q(5, hy, 5, 5, P.skin); px(c, ox + 8, oy + hy + 2, P.out); px(c, ox + 6, oy + hy + 4, P.skinD);
-  const helmC = s.body === 'cloth' || s.body === 'leather' ? (rank >= 3 ? '#9aa1aa' : armL) : arm;
+    const l = [[0, 0], [-1, 1], [0, 0], [1, -1], [0, 0], [-1, 2]][f], legR = s.body === 'plate' ? steel : ['#7a6450', '#5a4636', '#3e3026', '#2a2018'] as Ramp;
+    blob(5 + l[0], 18, 3, 4, legR, false); blob(9 + l[1], 18, 3, 4, legR, false);
+    R(5 + l[0], 22, 4, 2, '#3a2a20'); R(9 + l[1], 22, 4, 2, '#3a2a20'); P1(5 + l[0], 22, '#5a4434'); P1(9 + l[1], 22, '#5a4434');
+  } else { blob(8, ty + 4, 2, 5, s.body === 'plate' ? steel : LEATHER, false); R(8, ty + 9, 3, 1, '#3a2a20'); }
+  // ---- torso ----
+  const tw = mounted ? 6 : 10, tx = mounted ? 6 : 4, th = mounted ? 5 : 7;
+  blob(tx, ty, tw, th, body);
+  if (s.body === 'chain') for (let j = 1; j < th - 1; j++) for (let i = 1; i < tw - 1; i++) if ((i + j) % 2) P1(tx + i, ty + j, '#7e848c');
+  blob(tx + 2, ty + 1, tw - 4, th - (s.skirt ? -1 : 1), tab, false);
+  if (s.trim || trim) { R(tx + 2, ty + 1, tw - 4, 1, trim?.[1] ?? s.trim!); }
+  if (s === SPECS.knight || s === SPECS.mknight) { R(tx + Math.floor(tw / 2), ty + 2, 1, th - 3, '#c02a2a'); R(tx + 3, ty + 3, tw - 6, 1, '#c02a2a'); }
+  R(tx + 1, ty + th - 2, tw - 2, 1, rank >= 1 ? '#6a4420' : LEATHER[3]); if (rank >= 1) P1(tx + Math.floor(tw / 2), ty + th - 2, GOLD[0]);
+  if (rank === 2 || rank === 3) { P1(tx + 3, ty + 4, '#f4f0e8'); P1(tx + 4, ty + 3, '#f4f0e8'); P1(tx + 5, ty + 4, '#f4f0e8'); }
+  if (s.body === 'plate' || rank >= 1) { blob(tx + tw - 2, ty - 1, 4, 3, trim ?? steel); blob(tx - 1, ty, 3, 3, steel); }
+  // ---- head / helmet ----
+  const H = (x: number, y: number) => [hx + x, hy + y] as const;
+  const face = () => { blob(hx + 1, hy + 2, hs - 1, hs - 2, SKIN); const [ex, ey] = H(Math.round(hs * 0.55), Math.round(hs * 0.55)); P1(ex, ey, INK); P1(ex + 2, ey, INK); P1(ex + 1, ey + 2, SKIN[2]); };
+  const helmC = s.body === 'cloth' || s.body === 'leather' ? (rank >= 2 ? steel : ['#a0a6ae', '#7e848c', '#5a6068', '#3a3e44'] as Ramp) : steel;
   switch (s.helm) {
-    case 'none': Q(5, hy, 5, 1, P.hair); Q(4, hy + 1, 1, 2, P.hair); break;
-    case 'straw': Q(3, hy, 9, 1, P.thatch); Q(5, hy - 1, 5, 1, P.thatchD); break;
-    case 'cap': Q(5, hy - 1, 5, 2, s.tab === SPECS.villager.tab ? P.cloth : '#7a5232'); Q(4, hy, 1, 2, '#5e3e24'); break;
-    case 'hood': Q(4, hy - 1, 6, 3, s.hood!); Q(4, hy + 1, 1, 5, s.hood!); px(c, ox + 9, oy + hy, s.hood!); break;
-    case 'feather': Q(4, hy - 1, 7, 2, s.tab); px(c, ox + 4, oy + hy + 1, s.tab); Q(9, hy - 3, 1, 2, P.red); px(c, ox + 10, oy + hy - 4, P.red); break;
-    case 'kettle': Q(3, hy, 9, 1, helmC); Q(5, hy - 2, 5, 2, helmC); px(c, ox + 6, oy + hy - 2, '#f0f0f0'); break;
-    case 'nasal': Q(5, hy - 2, 5, 3, helmC); px(c, ox + 7, oy + hy - 3, helmC); Q(8, hy + 1, 1, 2, helmC); Q(4, hy, 1, 2, armD); break;
-    case 'bascinet': Q(5, hy - 2, 5, 4, helmC); px(c, ox + 7, oy + hy - 3, helmC); Q(9, hy + 1, 2, 2, helmC); Q(7, hy + 2, 3, 1, P.out); Q(4, hy + 1, 1, 3, armD); break;
-    case 'sallet': Q(4, hy - 1, 6, 4, helmC); Q(3, hy + 2, 2, 1, helmC); Q(6, hy + 1, 4, 1, P.out); break;
-    case 'great': case 'crown': Q(5, hy - 1, 5, 6, helmC); Q(5, hy - 1, 5, 1, armL); Q(6, hy + 1, 4, 1, P.out); px(c, ox + 8, oy + hy + 3, P.out); if (s.helm === 'crown' || gold) { Q(5, hy - 1, 5, 1, P.gold); px(c, ox + 5, oy + hy - 2, P.gold); px(c, ox + 7, oy + hy - 2, P.gold); px(c, ox + 9, oy + hy - 2, P.gold); } break;
-  }
-  if (rank >= 2 && !['straw', 'cap', 'hood', 'none', 'feather'].includes(s.helm)) { const pc = gold ? P.gold : P.red; px(c, ox + 6, oy + hy - 3, pc); px(c, ox + 5, oy + hy - 3, pc); px(c, ox + 4, oy + hy - 2, pc); }
-  // shield (front, left side)
-  const sc = s.shieldCol ?? tab, sx = 1, sy = ty - 1;
-  if (s.shield === 'buckler') { Q(sx + 1, sy + 2, 3, 3, armD); px(c, ox + sx + 2, oy + sy + 3, P.gold); }
-  if (s.shield === 'round') { Q(sx, sy + 1, 4, 5, sc); Q(sx + 1, sy, 2, 7, sc); px(c, ox + sx + 1, oy + sy + 3, armL); px(c, ox + sx + 2, oy + sy + 3, P.stoneD); }
-  if (s.shield === 'heater' || s.shield === 'kite') {
-    const h = s.shield === 'kite' ? 7 : 5; Q(sx, sy, 4, h - 1, sc); Q(sx + 1, sy + h - 1, 2, 1, sc); px(c, ox + sx + 1, oy + sy + h, sc);
-    Q(sx, sy, 4, 1, gold ? P.gold : shade(sc, 40)); if (s === SPECS.knight || s === SPECS.mknight) { Q(sx + 1, sy + 1, 1, 3, P.red); Q(sx, sy + 2, 3, 1, P.red); } else px(c, ox + sx + 1, oy + sy + 2, P.gold);
-  }
-  if (s.shield === 'tower') { Q(sx - 1, sy - 1, 5, 9, sc); Q(sx - 1, sy - 1, 5, 1, shade(sc, 40)); Q(sx, sy + 3, 3, 1, gold ? P.gold : armL); Q(sx + 1, sy + 1, 1, 5, gold ? P.gold : armL); }
-  // weapon (front hand at x~11)
-  const wx = 11 + atk, wy = ty + 2;
-  const steel = rank >= 3 ? '#eef2f6' : P.stoneL;
-  switch (s.weapon) {
-    case 'fork': Q(wx, wy - 12, 1, 15, P.woodL); Q(wx - 1, wy - 13, 3, 1, P.stoneD); px(c, ox + wx - 1, oy + wy - 14, P.stoneD); px(c, ox + wx + 1, oy + wy - 14, P.stoneD); break;
-    case 'club': Q(wx, wy - 5 - atk, 1, 6, P.wood); Q(wx - 1, wy - 7 - atk, 3, 3, P.woodD); break;
-    case 'spear': Q(wx, wy - 12 + Math.max(0, atk) * -1, 1, 16, P.woodL); Q(wx, wy - 14 - Math.max(0, atk), 1, 2, steel); px(c, ox + wx, oy + wy - 15 - Math.max(0, atk), steel); break;
-    case 'sword': case 'longsword': {
-      const len = s.weapon === 'sword' ? 6 : 8;
-      if (atk > 0) { Q(wx, wy, len, 1, steel); Q(wx, wy - 1, 1, 3, P.goldD); }
-      else { Q(wx, wy - len + (atk < 0 ? -1 : 0), 1, len, steel); Q(wx - 1, wy, 3, 1, P.goldD); px(c, ox + wx, oy + wy + 1, P.woodD); }
+    case 'none': face(); R(hx + 1, hy + 1, hs - 2, 2, '#5a3a1e'); R(hx + 1, hy + 3, 2, 3, '#5a3a1e'); P1(hx + 2, hy + 1, '#7a5a3a'); break;
+    case 'straw': face(); R(hx - 2, hy + 3, hs + 4, 1, '#e8c060'); blob(hx + 1, hy, hs - 2, 4, ['#f4dc80', '#d8b048', '#a8822a', '#7a5a18'], false); R(hx + 1, hy + 3, hs - 2, 1, '#8a2a20'); break;
+    case 'cap': face(); blob(hx + 1, hy, hs - 1, 4, s.tab === SPECS.villager.tab ? ['#ffffff', '#e8e0c8', '#b8b098', '#888070'] : LEATHER); R(hx + 1, hy + 3, 2, 3, LEATHER[2]); break;
+    case 'hood': case 'feather': { const hr2 = ramp(s.helm === 'hood' ? s.hood! : s.tab); blob(hx, hy, hs + 1, hs + 1, hr2); blob(hx + 3, hy + 3, hs - 3, hs - 4, SKIN, false); const [ex, ey] = H(Math.round(hs * 0.6), Math.round(hs * 0.55)); P1(ex, ey, INK); P1(ex + 2, ey, INK);
+      if (s.helm === 'feather') { R(hx + 2, hy - 2, 1, 3, '#d03a2a'); P1(hx + 1, hy - 3, '#f05a3a'); R(hx, hy + 2, hs + 1, 1, GOLD[1]); } break; }
+    case 'kettle': face(); blob(hx + 1, hy - 1, hs - 1, 4, helmC); R(hx - 1, hy + 3, hs + 3, 1, helmC[2]); R(hx - 1, hy + 2, hs + 3, 1, helmC[0]); break;
+    case 'nasal': face(); blob(hx + 1, hy - 1, hs - 1, 5, helmC); P1(hcx, hy - 2, helmC[1]); R(hx + Math.round(hs * 0.7), hy + 4, 1, 3, helmC[1]); R(hx + 1, hy + 4, 2, 4, helmC[2]); break;
+    case 'sallet': face(); blob(hx, hy - 1, hs + 1, 6, helmC); R(hx - 2, hy + 4, 4, 2, helmC[2]); R(hx + 4, hy + 4, hs - 3, 1, INK); P1(hx + 3, hy, helmC[0]); break;
+    case 'bascinet': case 'great': case 'crown': {
+      blob(hx, hy, hs + 1, hs + 1, helmC);
+      const sy = hy + Math.round(hs * 0.45); R(hx + 3, sy, hs - 2, 1, INK); R(hx + Math.round(hs * 0.7), sy, 1, 4, INK);
+      for (let i = 0; i < 2; i++) P1(hx + hs - 2 + i, sy + 3, helmC[3]);
+      R(hx + 1, hy + 1, 1, hs - 2, helmC[0]); P1(hx + 2, hy + 1, '#ffffff');
+      if (s.helm === 'bascinet') { R(hx + hs + 1, sy - 1, 1, 3, helmC[2]); P1(hx + hs + 2, sy, helmC[3]); }
+      if (s.helm === 'crown' || gold) { R(hx + 1, hy, hs - 1, 1, GOLD[1]); for (const x of [1, Math.floor(hs / 2), hs - 1]) P1(hx + x, hy - 1, GOLD[0]); }
+      else R(hx + 2, hy, hs - 3, 1, helmC[0]);
       break;
     }
-    case 'greatsword': if (atk > 0) { Q(wx - 1, wy - 2, 9, 1, steel); Q(wx - 1, wy - 3, 1, 3, P.gold); } else { Q(wx - 1, wy - 11, 2, 11, steel); Q(wx - 3, wy, 6, 1, P.gold); Q(wx - 1, wy + 1, 2, 2, P.woodD); } break;
-    case 'mace': Q(wx, wy - 5 - atk, 1, 7, P.woodD); Q(wx - 1, wy - 8 - atk, 3, 3, steel); px(c, ox + wx, oy + wy - 9 - atk, steel); break;
-    case 'hammer': Q(wx, wy - 4 - atk, 1, 6, P.wood); Q(wx - 1, wy - 6 - atk, 3, 2, P.stoneD); break;
-    case 'bow': case 'longbow': {
-      const h = s.weapon === 'bow' ? 9 : 13, top = wy - Math.floor(h / 2) - 1, bw = rank >= 4 ? P.gold : s.weapon === 'longbow' ? '#7a4a1e' : P.woodL;
-      for (let j = 0; j < h; j++) px(c, ox + wx + (j > 1 && j < h - 2 ? 1 : 0), oy + top + j, bw);
-      const pull = f === 4 ? -3 : 0; for (let j = 1; j < h - 1; j++) px(c, ox + wx + Math.round(pull * (1 - Math.abs(j - h / 2) / (h / 2))), oy + top + j, P.cloth);
-      if (f === 4) Q(wx - 3, wy - 1, 6, 1, P.woodL);
-      Q(3, ty, 2, 5, P.woodD); px(c, ox + 3, oy + ty - 1, P.cloth); px(c, ox + 4, oy + ty - 1, P.red); break;
-    }
-    case 'xbow': Q(wx - 3, wy, 7, 1, P.wood); Q(wx + 2, wy - 3, 1, 7, P.stoneD); if (f !== 5) Q(wx - 1, wy - 1, 3, 1, P.woodL); Q(3, ty + 1, 2, 4, P.woodD); break;
-    case 'pike': Q(wx, wy - 18 - Math.max(0, atk), 1, 21, P.woodL); Q(wx, wy - 20 - Math.max(0, atk), 1, 2, steel); break;
-    case 'halberd': Q(wx, wy - 15 - Math.max(0, atk), 1, 18, P.woodD); Q(wx, wy - 17 - Math.max(0, atk), 1, 2, steel); Q(wx + 1, wy - 15 - Math.max(0, atk), 2, 3, steel); px(c, ox + wx - 1, oy + wy - 14 - Math.max(0, atk), steel); break;
-    case 'lance': for (let j = 0; j < 11; j++) px(c, ox + 9 + j + atk, oy + wy + 2 - Math.round(j * 0.6), j > 8 ? steel : '#c8c0b0'); if (s.trim) { px(c, ox + 15 + atk, oy + wy - 3, s.trim); px(c, ox + 15 + atk, oy + wy - 2, s.trim); } break;
   }
-  if (s.weapon !== 'none' && s.weapon !== 'bow' && s.weapon !== 'longbow' && s.weapon !== 'lance') px(c, ox + wx, oy + wy + 1, P.skin);
+  // plume
+  if ((rank >= 2 || s === SPECS.knight || s === SPECS.mknight || s === SPECS.royalguard) && !['straw', 'cap', 'hood', 'none', 'feather'].includes(s.helm)) {
+    const pr = gold ? GOLD : s === SPECS.knight || s === SPECS.mknight ? ramp('#3a7a8a') : ramp('#c0302a');
+    R(hx + 2, hy - 2, 3, 2, pr[1]); R(hx, hy - 1, 2, 3, pr[2]); P1(hx + 3, hy - 3, pr[0]); P1(hx - 1, hy + 1, pr[3]); P1(hx + 2, hy - 2, pr[0]);
+  }
+  // ---- weapon (front hand) ----
+  const wx = mounted ? 12 : 16 + atk, wy = mounted ? ty + 3 : ty + 4;
+  const blade = (x: number, top: number, len: number, wide = 2) => { R(x, top, 1, len, '#ffffff'); R(x + 1, top, wide - 1, len, rank >= 3 ? '#d6dde5' : '#b6bec8'); R(x + wide - 1, top + 1, 1, len - 1, '#7e8894'); P1(x + Math.floor(wide / 2), top - 1, '#d6dde5'); };
+  switch (s.weapon) {
+    case 'sword': case 'longsword': case 'greatsword': {
+      const len = s.weapon === 'sword' ? 7 : s.weapon === 'longsword' ? 9 : 11, wide = s.weapon === 'sword' ? 2 : 3;
+      if (f === 5) { R(wx + 1, wy - 1, 5, 2, '#d6dde5'); R(wx + 1, wy - 1, 5, 1, '#ffffff'); R(wx, wy - 3, 1, 5, GOLD[2]); }
+      else { const top = wy - len - (f === 4 ? 2 : 0); blade(wx, top, len, wide); R(wx - 1, wy - (f === 4 ? 2 : 0), wide + 2, 1, trim ? GOLD[1] : GOLD[2]); R(wx + Math.floor(wide / 2), wy + 1 - (f === 4 ? 2 : 0), 1, 2, WOOD[2]); }
+      break;
+    }
+    case 'spear': case 'pike': case 'halberd': case 'fork': {
+      const top = s.weapon === 'pike' ? 0 : 2, x = wx + 1 + Math.max(0, atk);
+      R(x, top + 2, 1, 22 - top - 3, WOOD[1]); P1(x, top + 3, WOOD[0]);
+      if (s.weapon === 'fork') { R(x - 1, top + 1, 3, 1, '#7e8894'); for (const dx of [-1, 0, 1]) R(x + dx, top - 1, 1, 2, '#b6bec8'); }
+      else { R(x, top, 1, 3, '#ffffff'); P1(x - 1, top + 2, '#b6bec8'); P1(x + 1, top + 2, '#7e8894'); }
+      if (s.weapon === 'halberd') { blob(x + 1, top + 3, 3, 4, steel, false); P1(x - 1, top + 4, '#b6bec8'); }
+      break;
+    }
+    case 'mace': case 'club': case 'hammer': {
+      const up = f === 4 ? 2 : 0; R(wx + 1, wy - 6 - up, 1, 8, WOOD[1]);
+      if (s.weapon === 'mace') { blob(wx, wy - 9 - up, 3, 3, steel, false); P1(wx + 1, wy - 10 - up, '#eef2f6'); P1(wx + 3, wy - 8 - up, '#7e8894'); P1(wx - 1, wy - 8 - up, '#b6bec8'); }
+      else if (s.weapon === 'club') blob(wx, wy - 9 - up, 3, 5, WOOD);
+      else { R(wx - 1, wy - 8 - up, 4, 2, '#7e8894'); R(wx - 1, wy - 8 - up, 4, 1, '#b6bec8'); }
+      break;
+    }
+    case 'bow': case 'longbow': {
+      const h = s.weapon === 'bow' ? 11 : 15, top = wy - Math.floor(h / 2) - 1, bw = gold ? GOLD : s.weapon === 'longbow' ? WOOD : ['#d6a060', '#a87438', '#7a4e20', '#4e3010'] as Ramp;
+      for (let j = 0; j < h; j++) { const bend = j < 2 || j > h - 3 ? 0 : j < 4 || j > h - 5 ? 1 : 2; P1(wx + bend, top + j, bw[1]); P1(wx + bend + 1, top + j, bw[2]); }
+      const pull = f === 4 ? -3 : 0; for (let j = 1; j < h - 1; j++) P1(wx + Math.round(pull * (1 - Math.abs(j - h / 2) / (h / 2))), top + j, '#f0e8d8');
+      if (f === 4) { R(wx - 3, wy - 1, 7, 1, WOOD[0]); P1(wx + 4, wy - 1, '#d6dde5'); }
+      R(tx - 1, ty + 1, 2, 6, LEATHER[2]); P1(tx - 1, ty, '#f0e8d8'); P1(tx, ty, '#c02a2a'); break;
+    }
+    case 'xbow': R(wx - 4, wy, 8, 2, WOOD[1]); R(wx - 4, wy, 8, 1, WOOD[0]); R(wx + 3, wy - 3, 1, 8, '#7e8894'); if (f !== 5) R(wx - 2, wy - 1, 4, 1, '#d6dde5'); R(tx - 1, ty + 1, 2, 5, LEATHER[2]); break;
+    case 'lance': for (let j = 0; j < 10; j++) { const x = 10 + j + atk, y = wy - Math.round(j * 0.55); P1(x, y, j > 9 ? '#ffffff' : WOOD[0]); P1(x, y + 1, j > 9 ? '#7e8894' : WOOD[2]); } if (s.trim) { R(16 + atk, wy - 5, 2, 2, s.trim); } break;
+  }
+  if (s.weapon !== 'none' && s.weapon !== 'lance') blob(wx, wy, 3, 3, s.body === 'plate' ? steel : SKIN, false);
+  // ---- shield (front, near side) ----
+  const sc = ramp(s.shieldCol ?? s.tab), sx = mounted ? 3 : 0, sy = mounted ? ty + 1 : ty;
+  const rim = trim ?? steel, cross = s === SPECS.knight || s === SPECS.mknight;
+  if (s.shield === 'buckler') { blob(sx + 1, sy + 3, 4, 4, steel); P1(sx + 2, sy + 4, '#ffffff'); P1(sx + 3, sy + 5, GOLD[1]); }
+  if (s.shield === 'round') { blob(sx, sy + 1, 7, 7, sc); R(sx + 1, sy + 1, 5, 1, rim[0]); blob(sx + 2, sy + 3, 3, 3, steel); }
+  if (s.shield === 'heater' || s.shield === 'kite') {
+    const h = mounted ? 6 : s.shield === 'kite' ? 11 : 9, w = mounted ? 4 : 7;
+    for (let j = 0; j < h; j++) { const ins = j < h - 4 ? 0 : j - (h - 4) + 0; const x0 = sx + ins, x1 = sx + w - 1 - ins; if (x1 < x0) break; for (let x = x0; x <= x1; x++) P1(x, sy + j, x === x0 ? sc[0] : x === x1 ? sc[2] : j === 0 ? rim[0] : sc[1]); }
+    R(sx, sy, w, 1, rim[1]);
+    if (cross) { R(sx + Math.floor(w / 2), sy + 1, 1, h - 3, '#d02a2a'); R(sx + 1, sy + 3, w - 2, 1, '#d02a2a'); P1(sx + Math.floor(w / 2) + 1, sy + 1, '#8a1a1a'); }
+    else P1(sx + Math.floor(w / 2), sy + 3, GOLD[0]);
+  }
+  if (s.shield === 'tower') { blob(sx - 1, sy - 2, 7, 12, sc, false); R(sx - 1, sy - 2, 7, 1, rim[0]); R(sx - 1, sy - 2, 1, 12, rim[1]); R(sx + 2, sy, 1, 8, rim[1]); R(sx, sy + 3, 5, 1, rim[1]); }
+}
+
+/** One 2x sheet with every class, rank and frame, drawn in chunky pixels with crisp outlines. */
+export function soldierSheet(): HTMLCanvasElement {
+  const n = SHEET_CLASSES.length * RANKS_N, rows = Math.ceil(n / PER_ROW);
+  const [base, c] = canvas(PER_ROW * FRAMES * FW, rows * FH);
+  for (const cls of SHEET_CLASSES) for (let rk = 0; rk < RANKS_N; rk++) for (let f = 0; f < FRAMES; f++) {
+    const { x, y } = frameRect(cls, rk, f);
+    c.save(); c.beginPath(); c.rect(x + 1, y + 1, FW - 2, FH - 1); c.clip();
+    drawUnit(c, x, y, SPECS[cls], rk, f); c.restore();
+    outline(base, INK, x, y, FW, FH);
+  }
+  const [cv, c2] = canvas(base.width * HD, base.height * HD); c2.imageSmoothingEnabled = false; c2.drawImage(base, 0, 0, cv.width, cv.height);
+  return cv;
 }
 
 export const entryIndex = (cls: string, rank: number) => SHEET_CLASSES.indexOf(cls as TClass) * RANKS_N + rank;
@@ -142,17 +202,6 @@ export const frameRect = (cls: string, rank: number, f: number) => {
   return { x: (col * FRAMES + f) * FW, y: row * FH };
 };
 /** One sheet with every class, rank and frame. */
-export function soldierSheet(): HTMLCanvasElement {
-  const n = SHEET_CLASSES.length * RANKS_N, rows = Math.ceil(n / PER_ROW);
-  const [cv, c] = canvas(PER_ROW * FRAMES * FW, rows * FH);
-  for (const cls of SHEET_CLASSES) for (let rk = 0; rk < RANKS_N; rk++) for (let f = 0; f < FRAMES; f++) {
-    const { x, y } = frameRect(cls, rk, f);
-    c.save(); c.beginPath(); c.rect(x, y + 1, FW, FH - 1); c.clip(); // keep tall weapons inside the cell (row 0 left for outline)
-    drawUnit(c, x, y, SPECS[cls], rk, f); c.restore();
-    outline(cv, P.out, x, y, FW, FH);
-  }
-  return cv;
-}
 /** Distant-zoom LOD: one 46x32 block of 12 tiny figures per class/rank, matching a squad's footprint. */
 export const BW = 46, BH = 32;
 export function blockSheet(): HTMLCanvasElement {

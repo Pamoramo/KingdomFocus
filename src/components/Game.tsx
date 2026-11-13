@@ -2,11 +2,16 @@
 import { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
 import { KingdomScene } from '../game/KingdomScene.ts';
+import { WorldScene } from '../game/WorldScene.ts';
+import { BattleScene } from '../game/BattleScene.ts';
+import { audio, type Sfx } from '../game/audio.ts';
+import { worldTick } from '../lib/warActions.ts';
+import { WorldPanel, BattleReport, worldBadge } from './World.tsx';
 import { initPersistence } from '../lib/sync.ts';
 import { getState, setState, studyTick, fxBus, type Fx } from '../lib/state.ts';
 import { isAwaiting, dueAt } from '../lib/study.ts';
 import { BUILDINGS, STAGES } from '../lib/economy.ts';
-import { useGame, useUI, fmt, chime } from './hooks.ts';
+import { useGame, useUI, fmt } from './hooks.ts';
 import { setUI } from '../game/ui.ts';
 import { Icon } from './Icon.tsx';
 import { StudyPanel, CheckInModal, StudyMini, FocusMode, SessionComplete } from './Study.tsx';
@@ -17,8 +22,8 @@ import { RealmPanel } from './Realm.tsx';
 import { ChroniclePanel } from './Chronicle.tsx';
 import { SettingsPanel, useSync } from './Settings.tsx';
 
-const TABS = [['study', 'Study', 'study'], ['build', 'Build', 'build'], ['army', 'Army', 'army'], ['habits', 'Habits', 'habits'], ['realm', 'Realm', 'realm'], ['chronicle', 'Chronicle', 'stats'], ['settings', 'Settings', 'account']] as const;
-const PANELS: Record<string, () => React.ReactNode> = { study: StudyPanel, build: BuildPanel, army: ArmyPanel, habits: HabitsPanel, realm: RealmPanel, chronicle: ChroniclePanel, settings: SettingsPanel };
+const TABS = [['study', 'Study', 'study'], ['build', 'Build', 'build'], ['army', 'Army', 'army'], ['world', 'War', 'map'], ['habits', 'Habits', 'habits'], ['realm', 'Realm', 'realm'], ['chronicle', 'Chronicle', 'stats'], ['settings', 'Settings', 'account']] as const;
+const PANELS: Record<string, () => React.ReactNode> = { world: WorldPanel, study: StudyPanel, build: BuildPanel, army: ArmyPanel, habits: HabitsPanel, realm: RealmPanel, chronicle: ChroniclePanel, settings: SettingsPanel };
 
 /** Ticks the study timer, and alerts (sound, vibration, notification) when a check-in is due, even from a background tab. */
 function useStudyAlerts() {
@@ -32,7 +37,7 @@ function useStudyAlerts() {
         const key = breakOver ? sess.breakUntil! : dueAt(sess)!;
         if (notified.current !== key) {
           notified.current = key;
-          if (s.settings.sound) chime(breakOver ? 'break' : 'checkin');
+          if (s.settings.sound) audio.play(breakOver ? 'break' : 'checkin');
           navigator.vibrate?.([200, 100, 200]);
           if (s.settings.notify && 'Notification' in window && Notification.permission === 'granted' && document.hidden)
             try { new Notification(breakOver ? 'Break is over' : 'Check-in: are you still studying?', { body: breakOver ? 'Return to your studies when ready.' : `Confirm within ${sess.cfg.graceMin} minutes to keep your session running.`, tag: 'kod-checkin', requireInteraction: true }); } catch { /* unsupported */ }
@@ -81,7 +86,12 @@ function TopBar() {
       <span className={`w-2 h-2 rounded-full ${sync.startsWith('saved') ? 'bg-green-400' : sync.startsWith('offline') || sync.startsWith('sync error') ? 'bg-red-400' : 'bg-yellow-300'}`} title={`Cloud: ${sync}`} />
       <Icon name={ui.night > 0.5 ? 'moon' : 'sun'} size={16} />
     </div>
-    <div className="pointer-events-auto pt-1 w-full lg:w-auto flex justify-center lg:block"><StudyMini onOpen={() => setUI({ panel: 'study' })} /></div>
+    <div className="pointer-events-auto pt-1 w-full lg:w-auto flex justify-center gap-1.5 flex-wrap">
+      <StudyMini onOpen={() => setUI({ panel: 'study' })} />
+      <button className="wood rounded px-2.5 py-1 flex items-center gap-1 text-sm" onClick={() => setUI({ view: ui.view === 'world' ? 'kingdom' : 'world' })}><Icon name={ui.view === 'world' ? 'realm' : 'map'} size={18} />{ui.view === 'world' ? 'Kingdom' : 'World'}</button>
+      {s.world.threat && <button className="rounded px-2.5 py-1 text-sm bg-blood text-parch border-2 border-black pulse" onClick={() => setUI({ panel: 'world' })}>Under siege!</button>}
+      {s.world.campaign && <button className="wood rounded px-2.5 py-1 text-sm" onClick={() => setUI({ panel: 'world' })}>{s.world.campaign.phase === 'field' ? 'Battle awaits' : `Siege day ${s.world.campaign.day}`}</button>}
+    </div>
   </div>;
 }
 
@@ -99,11 +109,27 @@ function Welcome() {
 }
 
 export default function Game() {
-  const host = useRef<HTMLDivElement>(null), ui = useUI(), s = useGame();
+  const host = useRef<HTMLDivElement>(null), ui = useUI(), s = useGame(), gameRef = useRef<Phaser.Game | null>(null);
   useStudyAlerts();
   useEffect(() => {
     initPersistence();
-    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
+    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, BattleScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
+    gameRef.current = game;
+    worldTick(); const wt = setInterval(worldTick, 60000);
+    const wake = () => { audio.start(); const st = getState().settings; audio.setVolumes({ music: st.music ?? 0.5, sfx: st.sfx ?? 0.7, ambience: st.ambience ?? true }); };
+    addEventListener('pointerdown', wake); addEventListener('keydown', wake);
+    const click = (e: MouseEvent) => { if ((e.target as HTMLElement).closest?.('.btn')) audio.play('click'); };
+    addEventListener('click', click, true);
+    const SFX: Partial<Record<Fx['kind'], Sfx>> = { reward: 'coin', build: 'build', promote: 'promote', achieve: 'achieve', stage: 'stage', error: 'error', war: 'horn' };
+    const onFx = (e: Event) => {
+      const fx = (e as CustomEvent<Fx>).detail;
+      if (fx.kind === 'battle' && fx.battle) { setUI({ battle: { play: fx.battle, phase: 'playing' }, panel: null }); game.scene.start('battle', fx.battle); game.scene.bringToTop('battle'); return; }
+      if (!getState().settings.sound) return;
+      if (fx.kind === 'info' && fx.text.startsWith('Recruited')) audio.play('recruit');
+      else if (fx.kind === 'reward' && fx.big) audio.play('reward');
+      else { const k = SFX[fx.kind]; if (k) audio.play(k); }
+    };
+    fxBus.addEventListener('fx', onFx);
     Object.assign(window, { __game: game, __kod: { getState, setState } });
     const keys = (e: KeyboardEvent) => {
       const el = document.activeElement; if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
@@ -111,9 +137,12 @@ export default function Game() {
     };
     addEventListener('keydown', keys);
     if ('serviceWorker' in navigator && location.hostname !== 'localhost') navigator.serviceWorker.register('/sw.js').catch(() => {});
-    return () => { game.destroy(true); removeEventListener('keydown', keys); };
+    return () => { game.destroy(true); removeEventListener('keydown', keys); clearInterval(wt); removeEventListener('pointerdown', wake); removeEventListener('keydown', wake); removeEventListener('click', click, true); fxBus.removeEventListener('fx', onFx); };
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = s.settings.theme; }, [s.settings.theme]);
+  useEffect(() => { audio.setVolumes({ music: s.settings.sound ? s.settings.music ?? 0.5 : 0, sfx: s.settings.sound ? s.settings.sfx ?? 0.7 : 0, ambience: s.settings.sound && (s.settings.ambience ?? true) }); }, [s.settings.music, s.settings.sfx, s.settings.ambience, s.settings.sound]);
+  useEffect(() => { audio.setMood(s.world.campaign || s.world.threat || ui.battle ? 'war' : ui.night > 0.5 ? 'night' : 'day'); }, [!!s.world.campaign, !!s.world.threat, !!ui.battle, ui.night]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const g = gameRef.current; if (!g) return; if (ui.view === 'world') { g.scene.sleep('kingdom'); if (g.scene.isSleeping('world')) g.scene.wake('world'); else g.scene.run('world'); } else { g.scene.sleep('world'); g.scene.wake('kingdom'); } }, [ui.view]);
   const Panel = ui.panel ? PANELS[ui.panel] : null;
   const placing = ui.placing ? BUILDINGS[ui.placing].name : null;
   const hint = placing ? `Placing ${placing}: tap the map${BUILDINGS[ui.placing!].paint ? ' or drag to paint' : ''}` : ui.moving ? 'Tap a new spot for the building' : ui.selArmy ? `Tap the map to march the ${ui.selArmy}` : ui.selBat && !Panel ? 'Tap the map to march the battalion' : null;
@@ -128,8 +157,10 @@ export default function Game() {
     </aside>}
     <nav className="absolute bottom-0 inset-x-0 z-30 flex justify-center pb-[env(safe-area-inset-bottom)]">
       <div className="wood rounded-t-md flex max-w-full overflow-x-auto">{TABS.map(([k, label, icon]) => <button key={k} onClick={() => setUI({ panel: ui.panel === k ? null : k, placing: null, moving: null, selArmy: null })}
-        className={`flex flex-col items-center px-2 sm:px-4 py-1 text-xs sm:text-sm ${ui.panel === k ? 'bg-black/30' : ''}`} aria-pressed={ui.panel === k}><Icon name={icon} size={24} />{label}</button>)}</div>
+        className={`relative flex flex-col items-center px-2 sm:px-3.5 py-1 text-xs sm:text-sm ${ui.panel === k ? 'bg-black/30' : ''}`} aria-pressed={ui.panel === k}><Icon name={icon} size={24} />{label}{k === 'world' && worldBadge(s) > 0 && <span className="absolute top-0 right-1 bg-blood text-parch rounded-full text-[10px] px-1">{worldBadge(s)}</span>}</button>)}</div>
     </nav>
+    {ui.battle?.phase === 'playing' && <button className="absolute z-[72] bottom-20 right-3 btn btn-gold" onClick={() => (gameRef.current?.scene.getScene('battle') as BattleScene | undefined)?.finish()}>Skip battle</button>}
+    <BattleReport />
     <SoldierCard />
     <Toasts />
     {ui.focus && <FocusMode />}

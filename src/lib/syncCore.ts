@@ -26,7 +26,7 @@ export function buildPayload(s: GameState): Sent {
     techs: s.outbox.techs ? s.techs : [],
     events: events.map((e) => ({ id: e.id, t: iso(e.t), type: e.type, text: e.text.slice(0, 300), n: e.n ?? null })),
     dead: s.outbox.dead,
-    kingdom: { stage: s.stage, achievements: s.achievements, subjects: s.subjects, settings: s.settings, active_session: s.session },
+    kingdom: { stage: s.stage, achievements: s.achievements, subjects: s.subjects, settings: s.settings, active_session: s.session, world: s.world },
   };
   return { payload, refs: { ledger: s.outbox.ledger, dirty: { sessions, habits, completions: comps, buildings, battalions: bats, squads }, dead: s.outbox.dead, events: s.outbox.events, techs: s.outbox.techs } };
 }
@@ -73,6 +73,7 @@ export function adoptSnapshot(s: GameState, snap: Snapshot): GameState {
     ...s, res: num(snap.balance), lifetime: num(snap.lifetime), sessions, habits, completions: comps,
     buildings: buildings.length ? buildings : s.buildings, battalions, squads, techs: snap.techs as TechId[], events: events.length ? events : s.events,
     stage: Math.max(s.stage, k?.stage ?? 1), achievements: [...new Set([...s.achievements, ...(k?.achievements ?? [])])],
+    world: k?.world ?? s.world,
     subjects: [...new Set([...s.subjects, ...(k?.subjects ?? [])])], settings: k?.settings && Object.keys(k.settings).length ? { ...s.settings, ...k.settings } : s.settings, session,
   };
 }

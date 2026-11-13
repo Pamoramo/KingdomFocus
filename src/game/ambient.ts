@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { type GameState, type Building, footprint, TILE, count } from '../lib/state.ts';
-import { sFrame } from './textures.ts';
+import { sFrame, S } from './textures.ts';
 
 type Mode = 'walk' | 'patrol' | 'archer' | 'spar' | 'tilt';
 interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number] }
@@ -37,7 +37,7 @@ export class Ambient {
     }
   }
   private add(cls: string, rank: number, mode: Mode, x: number, y: number): Actor {
-    const img = this.scene.add.image(x, y, 'soldiers', sFrame(cls, rank, 0)).setOrigin(0.5, 1);
+    const img = this.scene.add.image(x, y, 'soldiers', sFrame(cls, rank, 0)).setOrigin(0.5, 1).setScale(S);
     const a: Actor = { img, cls, rank, mode, x, y, tx: x, ty: y, wait: Math.random() * 3000, a: x, b: x, ph: Math.floor(Math.random() * 8) };
     this.actors.push(a); return a;
   }

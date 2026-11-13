@@ -3,5 +3,6 @@
 set -e
 cd "$(dirname "$0")"
 DB=kod_test
-dropdb --if-exists $DB 2>/dev/null; createdb $DB
-psql -q -d $DB -f stub_auth.sql -f ../migrations/0001_kingdom.sql -f sync_test.sql 2>&1 | grep -v NOTICE
+pg_isready -q || { echo "Postgres is not running"; exit 1; }
+dropdb --if-exists $DB 2>/dev/null || true; createdb $DB
+psql -q -d $DB -f stub_auth.sql -f ../migrations/0001_kingdom.sql -f ../migrations/0002_war.sql -f sync_test.sql 2>&1 | grep -v NOTICE

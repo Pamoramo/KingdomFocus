@@ -24,8 +24,12 @@ export function shade(hex: string, amt: number) {
 }
 export const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
 
+let OUTLINE = true;
+/** Runs a draw function with 1x outlines disabled (the HD pipeline adds its own softer ones). */
+export function withoutOutline<T>(fn: () => T): T { OUTLINE = false; try { return fn(); } finally { OUTLINE = true; } }
 /** 1px dark outline around opaque pixels in a region (gives sprites crisp silhouettes). */
 export function outline(cv: HTMLCanvasElement, col = P.out, x0 = 0, y0 = 0, w = cv.width, h = cv.height) {
+  if (!OUTLINE) return;
   const c = cv.getContext('2d')!, d = c.getImageData(x0, y0, w, h).data;
   const a = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : d[(y * w + x) * 4 + 3]);
   c.fillStyle = col;

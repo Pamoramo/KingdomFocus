@@ -126,6 +126,7 @@ const ICONS: Record<string, string[]> = {
   account: ['.ssssssss.', 'sSSSSSSSSd', 'sSrrrrrrSd', 'sSrryyrrSd', 'sSryyyyrSd', 'sSrryyrrSd', '.sSrrrrSd.', '..sSrrSd..', '...sSSd...', '....dd....'],
   check: ['..........', '.........g', '........gg', '.......gg.', 'g.....gg..', 'gg...gg...', '.gg.gg....', '..ggg.....', '...g......', '..........'],
   hourglass: ['bbbbbbbbbb', '.wyyyyyyw.', '..wyyyyw..', '...wyyw...', '....ww....', '....ww....', '...w.yw...', '..w.yyyw..', '.wyyyyyyw.', 'bbbbbbbbbb'],
+  map: ['bbbbbbbbbb', 'bwwgwwwwwb', 'bwggwwrwwb', 'bwwgwwwwwb', 'bwwwwkkwwb', 'bwggwwkwwb', 'bwgggwwwwb', 'bwwgwwwrwb', 'bwwwwwwwwb', 'bbbbbbbbbb'],
   sun: ['....y.....', '.y..y..y..', '..yYYYy...', '.yYYYYYy..', 'yyYYYYYyyy', '.yYYYYYy..', '..yYYYy...', '.y..y..y..', '....y.....', '..........'],
   moon: ['...wWW....', '..wWW.....', '.wWW......', '.wWW......', '.wWW......', '.wWWW.....', '..wWWW....', '...wWWWWw.', '....wwww..', '..........'],
 };

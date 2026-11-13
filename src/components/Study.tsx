@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useGame, useNow, clock, fmt, hm, chime } from './hooks.ts';
+import { useGame, useNow, clock, fmt, hm } from './hooks.ts';
 import { studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState } from '../lib/state.ts';
 import { pendingAt, dueAt, isAwaiting, totalMs } from '../lib/study.ts';
 import { studyReward, MANUAL_FACTOR, type Res } from '../lib/rewards.ts';
@@ -153,7 +153,7 @@ export function FocusMode() {
 export function SessionComplete() {
   const [fx, setFx] = useState<Fx | null>(null), [t, setT] = useState(0), s = useGame();
   useEffect(() => {
-    const on = (e: Event) => { const d = (e as CustomEvent<Fx>).detail; if (d.kind === 'reward' && d.big) { setFx(d); setT(0); if (getState().settings.sound) chime('reward'); } };
+    const on = (e: Event) => { const d = (e as CustomEvent<Fx>).detail; if (d.kind === 'reward' && d.big) { setFx(d); setT(0); } };
     fxBus.addEventListener('fx', on); return () => fxBus.removeEventListener('fx', on);
   }, []);
   useEffect(() => { if (!fx || t >= 1) return; const id = requestAnimationFrame(() => setT((x) => Math.min(1, x + 0.025))); return () => cancelAnimationFrame(id); }, [fx, t]);

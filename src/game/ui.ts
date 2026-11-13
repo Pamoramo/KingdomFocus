@@ -1,7 +1,8 @@
 import type { BKind } from '../lib/economy.ts';
+import type { BattlePlay } from '../lib/state.ts';
 export interface Inspect { squad: string; idx: number }
-export interface UI { placing: BKind | null; selBat: string | null; selArmy: string | null; selBuilding: string | null; moving: string | null; panel: string | null; inspect: Inspect | null; focus: boolean; night: number }
-let ui: UI = { placing: null, selBat: null, selArmy: null, selBuilding: null, moving: null, panel: null, inspect: null, focus: false, night: 0 };
+export interface UI { view: 'kingdom' | 'world'; selRival: string | null; battle: { play: BattlePlay; phase: 'playing' | 'report' } | null; placing: BKind | null; selBat: string | null; selArmy: string | null; selBuilding: string | null; moving: string | null; panel: string | null; inspect: Inspect | null; focus: boolean; night: number }
+let ui: UI = { view: 'kingdom', selRival: null, battle: null, placing: null, selBat: null, selArmy: null, selBuilding: null, moving: null, panel: null, inspect: null, focus: false, night: 0 };
 const ls = new Set<() => void>();
 export const getUI = () => ui;
 export const setUI = (p: Partial<UI>) => { ui = { ...ui, ...p }; ls.forEach((l) => l()); };

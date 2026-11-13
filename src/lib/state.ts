@@ -3,6 +3,8 @@ import { type Session, type SessionCfg, DEFAULT_CFG, startSession, tick, checkIn
 import { type Habit, type Freq, progress, streak, habitReward, MILESTONES, dayKey, periodKey } from './habits.ts';
 import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
 import { nameFor } from './names.ts';
+import { type WorldState, type Engines, initWorld } from './war.ts';
+import type { Unit, BattleResult } from './battle.ts';
 
 // ---------------- types ----------------
 export interface Building { id: string; kind: BKind; x: number; y: number; level: number; at: number }
@@ -12,16 +14,16 @@ export interface Squad { id: string; cls: TClass; count: number; xp: number; ran
 export type Source = 'timer' | 'pomodoro' | 'manual';
 export interface StudyRecord { id: string; subject: string; source: Source; startedAt: number; endedAt: number | null; verifiedSec: number; forfeitedSec: number; checkIns: number; missed: number; notes: string; reward: Res }
 export interface Completion { id: string; habitId: string; period: string; count: number; done: boolean; at: number; note?: string }
-export type LedgerKind = 'start' | 'study' | 'manual' | 'habit' | 'milestone' | 'achievement' | 'spend' | 'refund';
+export type LedgerKind = 'start' | 'study' | 'manual' | 'habit' | 'milestone' | 'achievement' | 'spend' | 'refund' | 'trade' | 'loot';
 export interface Ledger { kind: LedgerKind; ref: string; amt: Res; at: number }
 export interface KEvent { id: string; t: number; type: string; text: string; n?: number }
 export type Table = 'buildings' | 'battalions' | 'squads' | 'habits' | 'sessions' | 'completions';
-export interface Settings { rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean }
+export interface Settings { rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean; music: number; sfx: number; ambience: boolean }
 export interface GameState {
   v: 2; owner: string | null; updatedAt: number; res: Res; lifetime: Res;
   buildings: Building[]; battalions: Battalion[]; squads: Squad[]; techs: TechId[];
   session: (Session & { xpMs: number; source: Source }) | null; sessions: StudyRecord[]; subjects: string[];
-  habits: Habit[]; completions: Completion[]; achievements: string[]; events: KEvent[]; stage: number;
+  habits: Habit[]; completions: Completion[]; achievements: string[]; events: KEvent[]; stage: number; world: WorldState;
   settings: Settings;
   outbox: { ledger: Ledger[]; dirty: Partial<Record<Table, string[]>>; dead: Partial<Record<Table, string[]>>; events: string[]; techs: boolean };
 }
@@ -37,7 +39,8 @@ export function newGame(): GameState {
     battalions: [], squads: [], techs: [],
     session: null, sessions: [], subjects: ['Mathematics', 'Languages', 'Science', 'History', 'Programming', 'Reading'],
     habits: [], completions: [], achievements: [], events: [{ id: uid(), t: now, type: 'stage', text: 'A lonely camp is pitched on barren land.' }], stage: 1,
-    settings: { rates: { ...DEFAULT_RATES }, cfg: { ...DEFAULT_CFG }, sound: true, requireNote: false, theme: 'parchment', dayNight: 'auto', notify: true },
+    settings: { rates: { ...DEFAULT_RATES }, cfg: { ...DEFAULT_CFG }, sound: true, requireNote: false, theme: 'parchment', dayNight: 'auto', notify: true, music: 0.5, sfx: 0.7, ambience: true },
+    world: initWorld(now % 100000),
     outbox: { ledger: [{ kind: 'start', ref: 'start', amt: start, at: now }], dirty: { buildings: [camp] }, dead: {}, events: [], techs: false },
   };
 }
@@ -47,12 +50,15 @@ type L = () => void;
 let state: GameState = newGame();
 const listeners = new Set<L>();
 export const fxBus = new EventTarget();
-export type Fx = { kind: 'reward' | 'build' | 'error' | 'info' | 'achieve' | 'stage' | 'promote'; text: string; res?: Partial<Res>; x?: number; y?: number; id?: string; big?: boolean };
+export interface BattlePlay { title: string; a: Unit[]; b: Unit[]; result: BattleResult; aName: string; bName: string; aColor: number; bColor: number; engines?: Engines }
+export type Fx = { kind: 'reward' | 'build' | 'error' | 'info' | 'achieve' | 'stage' | 'promote' | 'battle' | 'war'; text: string; res?: Partial<Res>; x?: number; y?: number; id?: string; big?: boolean; battle?: BattlePlay };
 export const emit = (fx: Fx) => fxBus.dispatchEvent(new CustomEvent('fx', { detail: fx }));
 export const getState = () => state;
 export const subscribe = (l: L) => (listeners.add(l), () => { listeners.delete(l); });
 export function setState(next: GameState, touch = true) { state = touch ? { ...next, updatedAt: Date.now() } : next; listeners.forEach((l) => l()); }
 
+/** Extra effects of verified study minutes (siege days, supplies, loans), registered by war actions. */
+export const studyHooks: ((s: GameState, minutes: number) => GameState)[] = [];
 /** Runs a pure transition; strings are user-facing errors. */
 function update(fn: (s: GameState) => GameState | string | void): string | null {
   const r = fn(state);
@@ -102,7 +108,11 @@ export function effects(s: GameState): Required<Effects> {
 export const armyCap = (s: GameState) => effects(s).cap;
 export const armySize = (s: GameState) => s.squads.reduce((a, q) => a + q.count, 0);
 export const batSize = (s: GameState, id: string) => s.squads.reduce((a, q) => (q.bat === id ? a + q.count : a), 0);
-export const studyMult = (s: GameState): Res => { const e = effects(s); return { gold: 1 + e.gold, wood: 1 + e.wood, stone: 1 + e.stone, renown: 1 + e.renown }; };
+/** Study multipliers: buildings, vassal tribute (+5% gold each, max 30%), and an enemy blockade (-25% gold). */
+export const studyMult = (s: GameState): Res => {
+  const e = effects(s), w = s.world, vassals = w ? w.rivals.filter((r) => r.status === 'vassal').length : 0;
+  return { gold: Math.max(0.5, 1 + e.gold + Math.min(0.3, vassals * 0.05) - (w?.threat ? 0.25 : 0)), wood: 1 + e.wood, stone: 1 + e.stone, renown: 1 + e.renown + vassals * 0.02 };
+};
 export function costOf(s: GameState, kind: BKind, lvlIdx: number): Res {
   const d = BUILDINGS[kind], c = full(d.levels[lvlIdx].cost);
   return d.cat === 'castle' ? scale(c, 1 - effects(s).discount) : c;
@@ -329,6 +339,7 @@ function settle(s: GameState, sess: NonNullable<GameState['session']>): GameStat
   let o = studyLedger(s, 'study', sess.id, total, sess.awarded);
   const xpMin = (sess.verifiedMs - sess.xpMs) / MIN;
   o = giveXp(o, xpMin);
+  o = studyHooks.reduce((acc, h) => h(acc, xpMin), o);
   const sess2 = { ...sess, awarded, xpMs: sess.verifiedMs };
   const rec = record(sess2, now);
   o = mark({ ...o, sessions: [rec, ...o.sessions.filter((r) => r.id !== rec.id)] }, 'sessions', rec.id);
@@ -377,6 +388,7 @@ export const logManual = (subject: string, minutes: number, when: number, note: 
   let o = mark({ ...s, sessions: [rec, ...s.sessions], subjects: s.subjects.includes(subject) ? s.subjects : [...s.subjects, subject] }, 'sessions', id);
   o = studyLedger(o, 'manual', id, reward, ZERO);
   o = giveXp(o, minutes * MANUAL_FACTOR);
+  o = studyHooks.reduce((acc, h) => h(acc, minutes * MANUAL_FACTOR), o);
   emit({ kind: 'reward', text: `Logged ${minutes} min (manual)`, res: reward });
   return event(o, 'study', `Logged ${minutes} min of ${subject} manually.`, minutes);
 });
@@ -445,6 +457,10 @@ export const ACHIEVEMENTS: Ach[] = [
   { id: 'elite', name: 'The Finest', desc: 'Promote a squad to Elite', renown: 60, test: (s) => s.squads.some((q) => q.rank >= 3) },
   { id: 'general', name: 'Warlord', desc: 'Promote a commander to General', renown: 150, test: (s) => s.battalions.some((b) => b.commander.rank >= 4) },
   { id: 'scholarlord', name: 'Age of Learning', desc: 'Research 8 technologies', renown: 80, test: (s) => s.techs.length >= 8 },
+  { id: 'victory', name: 'First Blood', desc: 'Win a battle', renown: 20, test: (s) => s.world?.reports.some((r) => r.win) ?? false },
+  { id: 'ally', name: 'Bonds of Trust', desc: 'Form an alliance', renown: 40, test: (s) => s.world?.rivals.some((r) => r.status === 'ally') ?? false },
+  { id: 'conquer', name: 'Conqueror', desc: 'Take a castle by siege', renown: 150, test: (s) => (s.world?.conquests ?? 0) >= 1 },
+  { id: 'emperor', name: 'Emperor', desc: 'Make three kingdoms your vassals', renown: 600, unlock: 'emblem:eagle', test: (s) => (s.world?.conquests ?? 0) >= 3 },
 ];
 export const unlocked = (s: GameState, what: string) => ACHIEVEMENTS.some((a) => a.unlock === what && s.achievements.includes(a.id));
 
@@ -464,4 +480,6 @@ function post(s: GameState): GameState {
   return out;
 }
 export const _post = post;
+/** Internal helpers for the war action module. */
+export const _internal = { update, ledger, spend, mark, kill, event };
 export { canAfford };

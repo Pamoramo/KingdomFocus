@@ -8,16 +8,17 @@ import { hash } from '../lib/names.ts';
 import { setUI, focusOn } from '../game/ui.ts';
 import { soldierSheet, frameRect, FW, FH } from '../game/art/soldiers.ts';
 import { banner, portrait, insignia } from '../game/art/misc.ts';
-import { canvas } from '../game/art/px.ts';
+import { canvas, withoutOutline } from '../game/art/px.ts';
+import { hdify, HD } from '../game/art/hd.ts';
 import { Sprite } from './Icon.tsx';
 import { Cost, Tabs, Bar, Section } from './Cost.tsx';
 
 let sheet: HTMLCanvasElement | null = null;
 export function Soldier({ cls, rank, scale = 3, f = 0 }: { cls: string; rank: number; scale?: number; f?: number }) {
-  return <Sprite id={`s-${cls}-${rank}-${f}`} scale={scale} draw={() => { sheet ??= soldierSheet(); const { x, y } = frameRect(cls, rank, f); const [c, ctx] = canvas(FW, FH); ctx.drawImage(sheet, x, y, FW, FH, 0, 0, FW, FH); return c; }} />;
+  return <Sprite id={`s-${cls}-${rank}-${f}`} scale={scale / HD} draw={() => { sheet ??= soldierSheet(); const { x, y } = frameRect(cls, rank, f); const [c, ctx] = canvas(FW * HD, FH * HD); ctx.drawImage(sheet, x * HD, y * HD, FW * HD, FH * HD, 0, 0, FW * HD, FH * HD); return c; }} />;
 }
-export const Banner = ({ color, emblem, scale = 2 }: { color: number; emblem: string; scale?: number }) => <Sprite id={`ban-${color}-${emblem}`} scale={scale} draw={() => banner(hex(color), emblem, 0)} />;
-export const Portrait = ({ b, scale = 3 }: { b: Battalion; scale?: number }) => <Sprite id={`p-${b.commander.seed}-${b.commander.rank}-${b.color}`} scale={scale} draw={() => portrait(hash(b.commander.seed), b.commander.rank, hex(b.color))} />;
+export const Banner = ({ color, emblem, scale = 2 }: { color: number; emblem: string; scale?: number }) => <Sprite id={`ban-${color}-${emblem}`} scale={scale / HD} draw={() => hdify(withoutOutline(() => banner(hex(color), emblem, 0)), { grain: 3 })} />;
+export const Portrait = ({ b, scale = 3 }: { b: Battalion; scale?: number }) => <Sprite id={`p-${b.commander.seed}-${b.commander.rank}-${b.color}`} scale={scale / HD} draw={() => hdify(withoutOutline(() => portrait(hash(b.commander.seed), b.commander.rank, hex(b.color))), { grain: 4, outline: false })} />;
 export const Insignia = ({ kind, rank, scale = 2 }: { kind: 'officer' | 'soldier'; rank: number; scale?: number }) => <Sprite id={`i-${kind}-${rank}`} scale={scale} draw={() => insignia(kind, rank)} />;
 
 const QTY = [1, 5, 12, 50, 100];
