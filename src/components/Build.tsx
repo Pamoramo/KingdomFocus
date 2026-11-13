@@ -1,51 +1,58 @@
 'use client';
-import { useCallback } from 'react';
-import { useGame, useUI } from './hooks.ts';
-import { BUILDINGS, type BKind } from '../lib/economy.ts';
-import { keepLevel, upgrade, demolish, canAfford, armyCap, armySize } from '../lib/state.ts';
+import { useState } from 'react';
+import { useGame, useUI, mobile } from './hooks.ts';
+import { BUILDINGS, BKINDS, type BKind, type Cat, type Effects } from '../lib/economy.ts';
+import { upgrade, upgradeAll, demolish, canAfford, costOf, lockReason, count } from '../lib/state.ts';
 import { setUI } from '../game/ui.ts';
-import { drawBuilding, drawTile } from '../game/art.ts';
+import { drawBuilding, drawTile } from '../game/art/buildings.ts';
 import { Sprite } from './Icon.tsx';
-import { Cost } from './Cost.tsx';
+import { Cost, Tabs } from './Cost.tsx';
 
-function Preview({ kind, lvl, scale = 1 }: { kind: BKind; lvl: number; scale?: number }) {
-  const fn = useCallback(() => (kind === 'wall' || kind === 'road' ? drawTile(kind, lvl, 10) : drawBuilding(kind, lvl, BUILDINGS[kind].size, 0)), [kind, lvl]);
-  return <Sprite canvas={fn} scale={scale} />;
+const TILES = new Set<BKind>(['road', 'palisade', 'wall', 'courtyard', 'moat']);
+export function Preview({ kind, lvl, max = 64 }: { kind: BKind; lvl: number; max?: number }) {
+  const draw = () => (TILES.has(kind) ? drawTile(kind as 'road', lvl, 10) : drawBuilding(kind, lvl, 0).cv);
+  const d = BUILDINGS[kind], h = TILES.has(kind) ? 30 : d.h * 16 + 60, w = d.w * 16, scale = Math.max(1, Math.min(3, Math.floor(max / Math.max(w, h * 0.7))));
+  return <Sprite id={`b-${kind}-${lvl}`} draw={draw} scale={scale} />;
 }
+const fxText = (e: Effects) => [e.cap && `+${e.cap} army capacity`, e.gold && `+${Math.round(e.gold * 100)}% gold`, e.wood && `+${Math.round(e.wood * 100)}% wood`, e.stone && `+${Math.round(e.stone * 100)}% stone`, e.renown && `+${Math.round(e.renown * 100)}% renown`, e.xp && `+${Math.round(e.xp * 100)}% troop XP`, e.discount && `-${Math.round(e.discount * 100)}% castle costs`].filter(Boolean).join(' · ');
 
 export function BuildPanel() {
-  const s = useGame(), ui = useUI(), kl = keepLevel(s);
+  const s = useGame(), ui = useUI(), [cat, setCat] = useState<Cat>('civil');
   const sel = s.buildings.find((b) => b.id === ui.selBuilding);
   if (sel) {
-    const d = BUILDINGS[sel.kind], next = d.levels[sel.level];
+    const d = BUILDINGS[sel.kind], next = d.levels[sel.level], lock = next ? lockReason(s, sel.kind, sel.level) : null, cost = next ? costOf(s, sel.kind, sel.level) : null;
+    const same = s.buildings.filter((b) => b.kind === sel.kind && b.level < d.levels.length).length;
     return <div className="space-y-3">
       <div className="flex items-end gap-3">
-        <div className="panel p-2 grid place-items-center min-w-24"><Preview kind={sel.kind} lvl={sel.level} /></div>
-        <div><h3 className="font-title text-3xl">{d.levels[sel.level - 1].name}</h3><div className="text-sm">{d.name} · Level {sel.level}/{d.levels.length}</div><p className="text-xs opacity-80">{d.desc}</p></div>
+        <div className="card p-2 grid place-items-center min-w-24 min-h-24"><Preview kind={sel.kind} lvl={sel.level} max={96} /></div>
+        <div><h3 className="font-title text-3xl leading-none">{d.levels[sel.level - 1].name}</h3><div className="text-sm">{d.name} · level {sel.level}/{d.levels.length}</div><p className="text-sm opacity-80">{d.desc}</p>
+          {fxText(d.fx(sel.level)) && <p className="text-sm text-moss font-bold">{fxText(d.fx(sel.level))}</p>}</div>
       </div>
-      {next ? <div className="panel p-2 space-y-2">
-        <div className="flex items-center gap-3"><div className="grid place-items-center min-w-20"><Preview kind={sel.kind} lvl={sel.level + 1} /></div>
-          <div className="text-sm"><b>Upgrade to {next.name}</b><div><Cost cost={next.cost} have={s.res} /></div>
-            {kl < next.keep && <div className="text-blood text-xs">Requires {BUILDINGS.keep.levels[next.keep - 1].name}</div>}</div></div>
-        <button className="btn btn-gold w-full" disabled={kl < next.keep || !canAfford(s.res, next.cost)} onClick={() => upgrade(sel.id)}>Upgrade</button>
+      {next && cost ? <div className="card p-2 space-y-2">
+        <div className="flex items-center gap-3"><div className="grid place-items-center min-w-20"><Preview kind={sel.kind} lvl={sel.level + 1} max={80} /></div>
+          <div className="text-sm"><b>Upgrade to {next.name}</b><div><Cost cost={cost} have={s.res} zero="free" /></div>{fxText(d.fx(sel.level + 1)) && <div className="text-xs">{fxText(d.fx(sel.level + 1))}</div>}
+            {lock && <div className="text-blood text-sm">{lock}</div>}</div></div>
+        <button className="btn btn-gold w-full" disabled={!!lock || !canAfford(s.res, cost)} onClick={() => upgrade(sel.id)}>Upgrade</button>
+        {d.paint && same > 1 && <button className="btn w-full" disabled={!!lock} onClick={() => upgradeAll(sel.kind)}>Upgrade all {same} {d.name} tiles (as resources allow)</button>}
       </div> : <div className="text-sm italic">Fully upgraded.</div>}
       <div className="flex gap-2">
-        {sel.kind !== 'keep' && <button className="btn flex-1" onClick={() => setUI({ moving: sel.id, selBuilding: null, panel: null })}>Move</button>}
-        {sel.kind !== 'keep' && <button className="btn btn-red flex-1" onClick={() => { demolish(sel.id); setUI({ selBuilding: null }); }}>Demolish</button>}
+        {sel.kind !== 'camp' && <button className="btn flex-1" onClick={() => setUI({ moving: sel.id, selBuilding: null, panel: mobile() ? null : 'build' })}>Move</button>}
+        {sel.kind !== 'camp' && <button className="btn btn-red flex-1" onClick={() => { if (confirm(`Demolish this ${d.name}? Half its cost is refunded.`)) { demolish(sel.id); setUI({ selBuilding: null }); } }}>Demolish</button>}
         <button className="btn flex-1" onClick={() => setUI({ selBuilding: null })}>Back</button>
       </div>
     </div>;
   }
   return <div className="space-y-2">
-    <div className="text-sm">Army cap: <b>{armySize(s)}/{armyCap(s)}</b>. Tap a building on the map to upgrade it.</div>
-    {(Object.keys(BUILDINGS) as BKind[]).filter((k) => !BUILDINGS[k].unique).map((k) => {
-      const d = BUILDINGS[k], l = d.levels[0], locked = kl < l.keep;
-      return <div key={k} className={`panel p-2 flex items-center gap-3 ${ui.placing === k ? 'ring-4 ring-gold' : ''}`}>
-        <div className="w-16 h-16 grid place-items-center overflow-hidden"><Preview kind={k} lvl={1} scale={d.size > 2 ? 1 : 2} /></div>
-        <div className="flex-1 min-w-0"><div className="font-bold">{d.name} <span className="text-xs opacity-60">{d.size}×{d.size}</span></div>
-          <p className="text-xs opacity-80">{d.desc}</p><Cost cost={l.cost} have={s.res} />
-          {locked && <div className="text-blood text-xs">Requires {BUILDINGS.keep.levels[l.keep - 1].name}</div>}</div>
-        <button className="btn" disabled={locked} onClick={() => setUI({ placing: ui.placing === k ? null : k, selBat: null, panel: window.innerWidth < 768 ? null : 'build' })}>{ui.placing === k ? 'Stop' : 'Place'}</button>
+    <Tabs value={cat} onChange={setCat} items={[['civil', 'Civil'], ['military', 'Military'], ['castle', 'Castle']]} />
+    <p className="text-xs opacity-75">Tap a building on the map to upgrade it. Walls, roads, courtyards and moats can be dragged to paint lines.</p>
+    {BKINDS.filter((k) => BUILDINGS[k].cat === cat && k !== 'camp').map((k) => {
+      const d = BUILDINGS[k], lock = lockReason(s, k, 0), uniqueDone = d.unique && count(s, k) > 0, cost = costOf(s, k, 0);
+      return <div key={k} className={`card p-2 flex items-center gap-3 ${ui.placing === k ? 'ring-4 ring-gold' : ''} ${lock ? 'opacity-60' : ''}`}>
+        <div className="w-16 h-16 grid place-items-center overflow-hidden shrink-0"><Preview kind={k} lvl={1} /></div>
+        <div className="flex-1 min-w-0"><div className="font-bold">{d.name} <span className="text-xs opacity-60">{d.w}×{d.h} · {d.levels.length} lvl{count(s, k) ? ` · built ${count(s, k)}` : ''}</span></div>
+          <p className="text-xs opacity-80">{d.desc}</p><Cost cost={cost} have={s.res} zero="free" />
+          {lock && <div className="text-blood text-xs">{lock}</div>}</div>
+        <button className="btn shrink-0" disabled={!!lock || !!uniqueDone} onClick={() => setUI({ placing: ui.placing === k ? null : k, selBat: null, selArmy: null, panel: mobile() ? null : 'build' })}>{uniqueDone ? 'Built' : ui.placing === k ? 'Stop' : 'Place'}</button>
       </div>;
     })}
   </div>;

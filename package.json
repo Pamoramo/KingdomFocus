@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test --experimental-strip-types src/lib/*.test.ts"
+    "test": "node --test --experimental-strip-types src/lib/*.test.ts",
+    "test:db": "bash supabase/tests/run.sh && node --experimental-strip-types supabase/tests/roundtrip.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.0",

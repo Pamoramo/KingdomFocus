@@ -1,0 +1,5 @@
+const FIRST = ['Aldric', 'Cedric', 'Edmund', 'Godfrey', 'Roland', 'Tristan', 'Percival', 'Osric', 'Leofric', 'Bertram', 'Hugh', 'Walter', 'Gareth', 'Alaric', 'Baldwin', 'Conrad', 'Edric', 'Gervase', 'Humphrey', 'Ivo', 'Jocelyn', 'Lambert', 'Merek', 'Odo', 'Rowan', 'Simon', 'Theobald', 'Ulric', 'Wystan', 'Anselm', 'Brom', 'Cuthbert', 'Drogo', 'Eustace', 'Fulk', 'Giles', 'Hamon', 'Isembard', 'Ralf', 'Warin'];
+const LAST = ['of Ashford', 'Blackwood', 'the Bold', 'Stonehand', 'of Marrow', 'Greyson', 'Ironside', 'of Dunmere', 'Hale', 'Thorne', 'of Wexley', 'Redmane', 'Oakheart', 'the Steadfast', 'Fairbairn', 'of Holloway', 'Brightwater', 'Coldbrook', 'Fenwick', 'the Elder'];
+export function hash(s: string) { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; }
+export const nameFor = (seed: string) => { const h = hash(seed); return `${FIRST[h % FIRST.length]} ${LAST[(h >>> 8) % LAST.length]}`; };
+export const firstName = (seed: string) => FIRST[hash(seed) % FIRST.length];

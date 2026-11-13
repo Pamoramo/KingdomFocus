@@ -1,76 +1,166 @@
 'use client';
-import { useCallback, useState } from 'react';
-import { useGame, useUI } from './hooks.ts';
-import { TROOPS, TCLASSES, ARMOR, armorCost, armorKeepReq, rankFor, EMBLEMS, BANNER_COLORS, SQUADS_PER_COMPANY, BUILDINGS, type TClass } from '../lib/economy.ts';
-import { recruit, upgradeArmor, troopUnlocked, armyCap, armySize, newBattalion, editBattalion, disbandBattalion, transferSquad, keepLevel, canAfford } from '../lib/state.ts';
-import { setUI } from '../game/ui.ts';
-import { soldierSheet, banner, canvas } from '../game/art.ts';
+import { useState } from 'react';
+import { useGame, useUI, hex, fmt, mobile } from './hooks.ts';
+import { TROOPS, TCLASSES, RANKS, OFFICERS, SQUADS_PER_COMPANY, COLORS, HERALD_COLORS, EMBLEMS, HERALD_EMBLEMS, PRESTIGE_EMBLEMS, type TClass, type Formation } from '../lib/economy.ts';
+import { recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
+import { nameFor } from '../lib/names.ts';
+import { hash } from '../lib/names.ts';
+import { setUI, focusOn } from '../game/ui.ts';
+import { soldierSheet, frameRect, FW, FH } from '../game/art/soldiers.ts';
+import { banner, portrait, insignia } from '../game/art/misc.ts';
+import { canvas } from '../game/art/px.ts';
 import { Sprite } from './Icon.tsx';
-import { Cost } from './Cost.tsx';
+import { Cost, Tabs, Bar, Section } from './Cost.tsx';
 
 let sheet: HTMLCanvasElement | null = null;
-function Soldier({ cls, tier }: { cls: TClass; tier: number }) {
-  const fn = useCallback(() => { sheet ??= soldierSheet(); const [c, x] = canvas(16, 16); x.drawImage(sheet, 0, (TCLASSES.indexOf(cls) * 4 + tier) * 16, 16, 16, 0, 0, 16, 16); return c; }, [cls, tier]);
-  return <Sprite canvas={fn} scale={3} />;
+export function Soldier({ cls, rank, scale = 3, f = 0 }: { cls: string; rank: number; scale?: number; f?: number }) {
+  return <Sprite id={`s-${cls}-${rank}-${f}`} scale={scale} draw={() => { sheet ??= soldierSheet(); const { x, y } = frameRect(cls, rank, f); const [c, ctx] = canvas(FW, FH); ctx.drawImage(sheet, x, y, FW, FH, 0, 0, FW, FH); return c; }} />;
 }
-const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
-function Banner({ color, emblem }: { color: number; emblem: string }) {
-  const fn = useCallback(() => banner(hex(color), emblem, 0), [color, emblem]);
-  return <Sprite canvas={fn} scale={2} />;
-}
+export const Banner = ({ color, emblem, scale = 2 }: { color: number; emblem: string; scale?: number }) => <Sprite id={`ban-${color}-${emblem}`} scale={scale} draw={() => banner(hex(color), emblem, 0)} />;
+export const Portrait = ({ b, scale = 3 }: { b: Battalion; scale?: number }) => <Sprite id={`p-${b.commander.seed}-${b.commander.rank}-${b.color}`} scale={scale} draw={() => portrait(hash(b.commander.seed), b.commander.rank, hex(b.color))} />;
+export const Insignia = ({ kind, rank, scale = 2 }: { kind: 'officer' | 'soldier'; rank: number; scale?: number }) => <Sprite id={`i-${kind}-${rank}`} scale={scale} draw={() => insignia(kind, rank)} />;
 
+const QTY = [1, 5, 12, 50, 100];
 export function ArmyPanel() {
-  const s = useGame(), ui = useUI();
-  const [tab, setTab] = useState<'recruit' | 'host' | 'armory'>('recruit');
-  const [qty, setQty] = useState(5);
-  const bat = s.battalions.find((b) => b.id === ui.selBat) ?? s.battalions[0];
+  const s = useGame(), ui = useUI(), [tab, setTab] = useState<'recruit' | 'host' | 'ranks'>('host');
+  const bat = s.battalions.find((b) => b.id === ui.selBat);
+  if (bat && tab === 'host') return <BattalionDetail bat={bat} />;
   return <div className="space-y-3">
-    <div className="flex gap-1">{(['recruit', 'host', 'armory'] as const).map((t) => <button key={t} className={`btn flex-1 capitalize ${tab === t ? 'btn-gold' : ''}`} onClick={() => setTab(t)}>{t}</button>)}</div>
-    <div className="text-sm">Soldiers: <b>{armySize(s)}/{armyCap(s)}</b> · Battalion: <select className="inp !w-auto" value={bat.id} onChange={(e) => setUI({ selBat: e.target.value })}>{s.battalions.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
-    {ui.selBat && <div className="text-xs bg-gold/40 p-1 rounded">Tap the map to march <b>{bat.name}</b>. <button className="underline" onClick={() => setUI({ selBat: null })}>Deselect</button></div>}
-    {tab === 'recruit' && <>
-      <div className="flex items-center gap-2 text-sm">Quantity {[1, 5, 12, 50].map((n) => <button key={n} className={`btn !px-2 ${qty === n ? 'btn-gold' : ''}`} onClick={() => setQty(n)}>{n}</button>)}</div>
-      {TCLASSES.map((c) => { const d = TROOPS[c], ok = troopUnlocked(s, c);
-        return <div key={c} className="panel p-2 flex items-center gap-2">
-          <Soldier cls={c} tier={s.armor[c] ?? 0} />
-          <div className="flex-1"><div className="font-bold">{d.name} <span className="text-xs opacity-60">power {d.power}</span></div><Cost cost={d.cost} have={s.res} n={qty} />
-            {!ok && <div className="text-xs text-blood">Needs {Object.entries(d.req).map(([k, l]) => `${BUILDINGS[k as keyof typeof BUILDINGS].levels[l! - 1].name}`).join(', ')}</div>}</div>
-          <button className="btn" disabled={!ok || !canAfford(s.res, d.cost, qty)} onClick={() => recruit(c, qty, bat.id)}>Recruit</button>
-        </div>; })}
-    </>}
-    {tab === 'armory' && TCLASSES.map((c) => { const t = s.armor[c] ?? 0, cost = t < 3 ? armorCost(c, t + 1) : null, need = armorKeepReq(t + 1);
-      return <div key={c} className="panel p-2 flex items-center gap-2">
-        <Soldier cls={c} tier={t} />{t < 3 && <><span>→</span><Soldier cls={c} tier={t + 1} /></>}
-        <div className="flex-1 text-sm"><b>{TROOPS[c].name}</b><div>{ARMOR[t]}{cost && <> → {ARMOR[t + 1]}</>}</div>{cost && <Cost cost={cost} have={s.res} />}
-          {cost && keepLevel(s) < need && <div className="text-xs text-blood">Requires {BUILDINGS.keep.levels[need - 1].name}</div>}</div>
-        {cost && <button className="btn" disabled={keepLevel(s) < need || !canAfford(s.res, cost)} onClick={() => upgradeArmor(c)}>Forge</button>}
-      </div>; })}
-    {tab === 'host' && <Host batId={bat.id} />}
+    <Tabs value={tab} onChange={setTab} items={[['host', 'Host'], ['recruit', 'Recruit'], ['ranks', 'Ranks']]} />
+    <div className="text-sm flex items-center justify-between"><span>Soldiers <b>{fmt(armySize(s))}/{fmt(armyCap(s))}</b></span><span>Battalions <b>{s.battalions.length}</b></span></div>
+    <Bar value={armySize(s)} max={armyCap(s)} />
+    {tab === 'recruit' && <Recruit />}
+    {tab === 'host' && <Host />}
+    {tab === 'ranks' && <Ranks />}
   </div>;
 }
 
-function Host({ batId }: { batId: string }) {
-  const s = useGame(), [name, setName] = useState('');
-  const b = s.battalions.find((q) => q.id === batId)!, squads = s.squads.filter((q) => q.bat === b.id);
-  const n = squads.reduce((a, q) => a + q.count, 0);
-  const companies = Array.from({ length: Math.ceil(squads.length / SQUADS_PER_COMPANY) }, (_, i) => squads.slice(i * SQUADS_PER_COMPANY, (i + 1) * SQUADS_PER_COMPANY));
-  const roman = (i: number) => ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][i] ?? String(i + 1);
+function Recruit() {
+  const s = useGame(), ui = useUI(), [qty, setQty] = useState(5);
+  const target = ui.selBat ?? s.battalions[0]?.id;
   return <div className="space-y-2">
-    <div className="panel p-2 flex gap-3">
-      <Banner color={b.color} emblem={b.emblem} />
-      <div className="flex-1 space-y-1 text-sm">
-        <input className="inp font-bold" value={b.name} onChange={(e) => editBattalion(b.id, { name: e.target.value })} />
-        <div className="flex gap-1 items-center"><span className="whitespace-nowrap">{rankFor(n)}</span><input className="inp" value={b.commander} onChange={(e) => editBattalion(b.id, { commander: e.target.value })} /></div>
-        <div className="flex gap-1 flex-wrap">{BANNER_COLORS.map((c) => <button key={c} aria-label="color" onClick={() => editBattalion(b.id, { color: c })} className={`w-5 h-5 border-2 ${b.color === c ? 'border-ink' : 'border-parch-d'}`} style={{ background: hex(c) }} />)}</div>
-        <div className="flex gap-1 flex-wrap">{EMBLEMS.map((e) => <button key={e} onClick={() => editBattalion(b.id, { emblem: e })} className={`btn !px-1.5 !py-0 text-xs capitalize ${b.emblem === e ? 'btn-gold' : ''}`}>{e}</button>)}</div>
+    <div className="flex flex-wrap items-center gap-2 text-sm">Into
+      <select className="inp !w-auto" value={target ?? ''} onChange={(e) => setUI({ selBat: e.target.value })} disabled={!s.battalions.length}>{s.battalions.length ? s.battalions.map((b) => <option key={b.id} value={b.id}>{b.name}</option>) : <option>1st Royal Battalion (new)</option>}</select>
+      <span className="flex gap-1">{QTY.map((n) => <button key={n} className={`btn !px-2 !py-0 ${qty === n ? 'btn-gold' : ''}`} onClick={() => setQty(n)}>{n}</button>)}</span>
+    </div>
+    {(['Early', 'Mid', 'Late'] as const).map((era) => <Section key={era} title={`${era} game`}>
+      {TCLASSES.filter((c) => TROOPS[c].era === era).map((c) => { const d = TROOPS[c], lock = troopLock(s, c);
+        return <div key={c} className={`flex items-center gap-2 border-b border-black/10 pb-1 ${lock ? 'opacity-60' : ''}`}>
+          <Soldier cls={c} rank={0} />
+          <div className="flex-1 min-w-0"><div className="font-bold leading-tight">{d.name} <span className="text-xs opacity-60">power {d.power}</span></div><div className="text-xs opacity-75">{d.desc}</div><Cost cost={d.cost} have={s.res} n={qty} />
+            {lock && <div className="text-xs text-blood">{lock}</div>}</div>
+          <button className="btn shrink-0" disabled={!!lock || !canAfford(s.res, d.cost, qty)} onClick={() => recruit(c, qty, target)}>Recruit</button>
+        </div>; })}
+    </Section>)}
+  </div>;
+}
+
+function Host() {
+  const s = useGame(), [name, setName] = useState('');
+  const armies = [...new Set(s.battalions.map((b) => b.army))];
+  if (!s.battalions.length) return <p className="text-sm italic">No soldiers yet. Recruit peasants from your camp to raise your first battalion.</p>;
+  return <div className="space-y-2">
+    {armies.map((a) => <Section key={a} title={a} right={<button className="btn !py-0 text-sm" onClick={() => setUI({ selArmy: a, selBat: null, panel: mobile() ? null : 'army' })}>March army</button>}>
+      {s.battalions.filter((b) => b.army === a).map((b) => { const n = batSize(s, b.id);
+        return <button key={b.id} className="w-full flex items-center gap-2 text-left border-b border-black/10 pb-1" onClick={() => { setUI({ selBat: b.id, selArmy: null }); focusOn(b.x, b.y - 20); }}>
+          <Banner color={b.color} emblem={b.emblem} scale={1.5} /><Portrait b={b} scale={1.5} />
+          <span className="flex-1 min-w-0"><b>{b.name}</b><br /><span className="text-sm">{OFFICERS[b.commander.rank].name} {b.commander.name}</span></span>
+          <span className="text-sm whitespace-nowrap">{fmt(n)} soldiers</span>
+        </button>; })}
+    </Section>)}
+    <div className="flex gap-2"><input className="inp" placeholder="New battalion name" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} /><button className="btn" onClick={() => { newBattalion(name.trim()); setName(''); }}>Raise</button></div>
+    <button className="btn w-full" onClick={() => promoteAll()}>Promote every eligible squad</button>
+  </div>;
+}
+
+function composition(s: GameState, id: string) {
+  const m = new Map<TClass, number[]>();
+  for (const q of s.squads) if (q.bat === id) { const a = m.get(q.cls) ?? [0, 0, 0, 0, 0]; a[q.rank] += q.count; m.set(q.cls, a); }
+  return [...m].sort((a, b) => TCLASSES.indexOf(a[0]) - TCLASSES.indexOf(b[0]));
+}
+
+function BattalionDetail({ bat }: { bat: Battalion }) {
+  const s = useGame(), n = batSize(s, bat.id), officer = OFFICERS[bat.commander.rank], next = OFFICERS[bat.commander.rank + 1];
+  const squads = s.squads.filter((q) => q.bat === bat.id).sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank);
+  const colors = [...COLORS, ...(has(s, 'heraldry') ? HERALD_COLORS : []), ...(unlocked(s, 'color:gold') ? [0xecc94b] : [])];
+  const emblems = [...EMBLEMS, ...(has(s, 'heraldry') ? HERALD_EMBLEMS : []), ...Object.entries(PRESTIGE_EMBLEMS).filter(([, a]) => s.achievements.includes(a)).map(([e]) => e)];
+  const armies = [...new Set([...s.battalions.map((b) => b.army), 'Royal Army'])];
+  return <div className="space-y-3">
+    <div className="flex items-center gap-2"><button className="btn !py-0" onClick={() => setUI({ selBat: null, inspect: null })}>← Host</button><span className="text-sm opacity-75 flex-1">{fmt(n)} soldiers · {squads.length} squads · {Math.ceil(squads.length / SQUADS_PER_COMPANY)} companies</span></div>
+    <div className="card p-2 flex gap-3">
+      <Banner color={bat.color} emblem={bat.emblem} scale={3} />
+      <div className="flex-1 space-y-1 text-sm min-w-0">
+        <input className="inp font-bold" value={bat.name} maxLength={60} onChange={(e) => editBattalion(bat.id, { name: e.target.value || 'Battalion' })} />
+        <label className="flex items-center gap-1">Army <input className="inp" list="armies" value={bat.army} maxLength={60} onChange={(e) => editBattalion(bat.id, { army: e.target.value || 'Royal Army' })} /></label>
+        <datalist id="armies">{armies.map((a) => <option key={a} value={a} />)}</datalist>
+        <div className="flex gap-1 flex-wrap">{colors.map((c) => <button key={c} aria-label="banner colour" onClick={() => editBattalion(bat.id, { color: c })} className={`w-6 h-6 border-2 ${bat.color === c ? 'border-ink' : 'border-transparent'}`} style={{ background: hex(c) }} />)}</div>
+        <div className="flex gap-1 flex-wrap">{emblems.map((e) => <button key={e} onClick={() => editBattalion(bat.id, { emblem: e })} className={`btn !px-1.5 !py-0 text-xs capitalize ${bat.emblem === e ? 'btn-gold' : ''}`}>{e}</button>)}</div>
       </div>
     </div>
-    <div className="flex gap-2"><button className="btn flex-1" onClick={() => setUI({ selBat: b.id, panel: window.innerWidth < 768 ? null : 'army' })}>March on map</button>
-      {s.battalions.length > 1 && <button className="btn btn-red" onClick={() => disbandBattalion(b.id)}>Disband</button>}</div>
-    {companies.map((cs, i) => <div key={i} className="panel p-2 text-sm"><b>{roman(i)} Company</b> <span className="opacity-60">({cs.reduce((a, q) => a + q.count, 0)})</span>
-      {cs.map((q, j) => <div key={q.id} className="flex items-center gap-2 mt-1"><span className="flex-1">Squad {j + 1}: {q.count} {TROOPS[q.cls].name}</span>
-        {s.battalions.length > 1 && <select className="inp !w-auto !py-0 text-xs" value={q.bat} onChange={(e) => transferSquad(q.id, e.target.value)}>{s.battalions.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>}</div>)}
-    </div>)}
-    <div className="flex gap-2"><input className="inp" placeholder="New battalion name" value={name} onChange={(e) => setName(e.target.value)} /><button className="btn" onClick={() => { newBattalion(name.trim() || `Battalion ${s.battalions.length + 1}`); setName(''); }}>Raise</button></div>
+    <Section title="Commander">
+      <div className="flex gap-3 items-center">
+        <Portrait b={bat} scale={3} />
+        <div className="flex-1 text-sm space-y-1">
+          <div className="flex items-center gap-1"><Insignia kind="officer" rank={bat.commander.rank} /><b>{officer.name}</b></div>
+          <input className="inp" value={bat.commander.name} maxLength={40} onChange={(e) => editBattalion(bat.id, { commander: { ...bat.commander, name: e.target.value } })} />
+          <div className="text-xs">Bonus: +{Math.round(officer.bonus * 100)}% experience for this battalion</div>
+          {next && <button className="btn w-full text-sm" disabled={n < next.size || !canAfford(s.res, { renown: next.renown })} onClick={() => promoteCommander(bat.id)}>Promote to {next.name} ({next.size}+ soldiers, {next.renown} renown)</button>}
+        </div>
+      </div>
+    </Section>
+    <Section title="Formation & orders">
+      <div className="flex gap-1">{(['line', 'block', 'column'] as Formation[]).map((f) => <button key={f} className={`btn flex-1 capitalize ${bat.formation === f ? 'btn-gold' : ''}`} onClick={() => editBattalion(bat.id, { formation: f })}>{f}</button>)}</div>
+      <div className="flex gap-2">
+        <button className="btn btn-gold flex-1" onClick={() => { setUI({ selBat: bat.id, panel: mobile() ? null : 'army' }); focusOn(bat.x, bat.y - 20); }}>March (tap the map)</button>
+        <button className="btn flex-1" onClick={() => promoteAll(bat.id)}>Promote eligible</button>
+      </div>
+    </Section>
+    <Section title="Composition">
+      {composition(s, bat.id).map(([c, ranks]) => <div key={c} className="flex items-center gap-2 text-sm"><Soldier cls={c} rank={ranks.findLastIndex((x) => x > 0)} scale={2} /><b className="flex-1">{TROOPS[c].name}</b>
+        <span className="flex gap-1 flex-wrap justify-end">{ranks.map((x, r) => x ? <span key={r} className="inline-flex items-center gap-0.5" title={RANKS[r].name}><Insignia kind="soldier" rank={r} scale={1.5} />{x}</span> : null)}</span></div>)}
+      {!squads.length && <p className="text-sm italic">Empty. Recruit soldiers into this battalion.</p>}
+    </Section>
+    {Array.from({ length: Math.ceil(squads.length / SQUADS_PER_COMPANY) }, (_, ci) => <Section key={ci} title={`${['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][ci] ?? ci + 1} Company`}>
+      {squads.slice(ci * SQUADS_PER_COMPANY, (ci + 1) * SQUADS_PER_COMPANY).map((q, j) => { const nr = RANKS[q.rank + 1], why = canPromote(s, q);
+        return <div key={q.id} className="text-sm border-b border-black/10 pb-1 space-y-0.5">
+          <div className="flex items-center gap-2"><Soldier cls={q.cls} rank={q.rank} scale={2} /><span className="flex-1"><b>Squad {ci * SQUADS_PER_COMPANY + j + 1}</b>: {q.count} {TROOPS[q.cls].name} · <Insignia kind="soldier" rank={q.rank} scale={1.5} /> {RANKS[q.rank].name}</span></div>
+          {nr && <div className="flex items-center gap-2"><span className="text-xs w-24">XP {Math.floor(q.xp)}/{nr.xp}</span><div className="flex-1"><Bar value={q.xp} max={nr.xp} color="bg-moss" /></div></div>}
+          <div className="flex gap-1 flex-wrap">
+            <button className="btn !py-0 text-xs" disabled={!canAfford(s.res, { gold: q.count * 2 })} onClick={() => drill(q.id)}>Drill ({q.count * 2}g)</button>
+            {nr && <button className="btn !py-0 text-xs btn-gold" disabled={!!why} title={why ?? ''} onClick={() => promote(q.id)}>Promote → {nr.name} ({promoteCost(q).renown}r){why ? `: ${why}` : ''}</button>}
+            {s.battalions.length > 1 && <select className="inp !w-auto !py-0 text-xs" value={q.bat} onChange={(e) => transferSquad(q.id, e.target.value)}>{s.battalions.map((x) => <option key={x.id} value={x.id}>{x.id === q.bat ? 'Transfer to…' : x.name}</option>)}</select>}
+          </div>
+        </div>; })}
+    </Section>)}
+    {s.battalions.length > 1 && <button className="btn btn-red w-full" onClick={() => { if (confirm('Disband this battalion? Its squads join another battalion.')) { disbandBattalion(bat.id); setUI({ selBat: null }); } }}>Disband battalion</button>}
+  </div>;
+}
+
+function Ranks() {
+  const [cls, setCls] = useState<TClass>('swordsman');
+  return <div className="space-y-2 text-sm">
+    <p>Soldiers gain experience every minute you study (+ training fields, drills and commander bonuses). Promote them with renown once they have enough experience.</p>
+    <select className="inp" value={cls} onChange={(e) => setCls(e.target.value as TClass)}>{TCLASSES.map((c) => <option key={c} value={c}>{TROOPS[c].name}</option>)}</select>
+    <div className="flex justify-between card p-2">{RANKS.map((r, i) => <div key={r.name} className="text-center text-xs"><Soldier cls={cls} rank={i} scale={3} /><div><Insignia kind="soldier" rank={i} /></div>{r.name}</div>)}</div>
+    {RANKS.map((r, i) => <div key={r.name} className="flex justify-between border-b border-black/10"><span><Insignia kind="soldier" rank={i} scale={1.5} /> {r.name}</span><span>{i ? `${r.xp} XP · ${r.renown} renown/soldier${r.req ? ` · ${r.req.label}` : ''}` : 'on recruitment'}</span></div>)}
+    <h3 className="font-bold pt-2">Officers</h3>
+    {OFFICERS.map((o, i) => <div key={o.name} className="flex justify-between border-b border-black/10"><span><Insignia kind="officer" rank={i} scale={1.5} /> {o.name}</span><span>{o.size}+ soldiers · {o.renown} renown · +{Math.round(o.bonus * 100)}% XP</span></div>)}
+  </div>;
+}
+
+/** Inspector for a single soldier clicked on the map. */
+export function SoldierCard() {
+  const s = useGame(), ui = useUI();
+  if (!ui.inspect) return null;
+  const q = s.squads.find((x) => x.id === ui.inspect!.squad); if (!q) return null;
+  const bat = s.battalions.find((b) => b.id === q.bat)!, list = s.squads.filter((x) => x.bat === q.bat).sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank);
+  const si = list.indexOf(q), nr = RANKS[q.rank + 1];
+  return <div className="fixed z-40 left-2 bottom-20 md:bottom-4 md:left-4 panel pop p-3 w-72 text-sm space-y-1">
+    <div className="flex gap-3 items-center"><Soldier cls={q.cls} rank={q.rank} scale={4} f={0} />
+      <div className="flex-1"><b className="text-base">{nameFor(q.id + ui.inspect.idx)}</b><div>{TROOPS[q.cls].name}</div><div className="flex items-center gap-1"><Insignia kind="soldier" rank={q.rank} /> {RANKS[q.rank].name}</div></div>
+      <button className="btn !px-2 !py-0 self-start" aria-label="close" onClick={() => setUI({ inspect: null })}>✕</button></div>
+    <div>Squad {si + 1}, {['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][Math.floor(si / SQUADS_PER_COMPANY)] ?? ''} Company, {bat.name}</div>
+    <div>Commander: {OFFICERS[bat.commander.rank].name} {bat.commander.name}</div>
+    {nr ? <><div>Experience {Math.floor(q.xp)} / {nr.xp}</div><Bar value={q.xp} max={nr.xp} color="bg-moss" /></> : <div>Highest rank achieved.</div>}
   </div>;
 }

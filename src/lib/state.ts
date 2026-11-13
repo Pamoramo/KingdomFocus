@@ -1,209 +1,467 @@
-import { type Res, ZERO, add, canAfford, full } from './rewards.ts';
-import { type Session, startSession, tick, checkIn, pause, endSession, sessionRewards } from './study.ts';
-import { type Habit, claim, streak, streakBonus } from './habits.ts';
-import { BUILDINGS, TROOPS, type BKind, type TClass, SQUAD_SIZE, armorCost, armorKeepReq, BANNER_COLORS } from './economy.ts';
+import { type Res, ZERO, DEFAULT_RATES, MANUAL_FACTOR, MANUAL_MAX_PER_DAY_MIN, add, sub, maxRes, canAfford, full, scale, studyReward, isZero } from './rewards.ts';
+import { type Session, type SessionCfg, DEFAULT_CFG, startSession, tick, checkIn, pause, takeBreak, endSession, uid, MIN } from './study.ts';
+import { type Habit, type Freq, progress, streak, habitReward, MILESTONES, dayKey, periodKey } from './habits.ts';
+import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
+import { nameFor } from './names.ts';
 
-export interface Building { id: string; kind: BKind; x: number; y: number; level: number }
-export interface Battalion { id: string; name: string; color: number; emblem: string; commander: string; x: number; y: number }
-export interface Squad { id: string; cls: TClass; count: number; bat: string }
+// ---------------- types ----------------
+export interface Building { id: string; kind: BKind; x: number; y: number; level: number; at: number }
+export interface Commander { name: string; rank: number; seed: string }
+export interface Battalion { id: string; name: string; army: string; color: number; emblem: string; formation: Formation; x: number; y: number; commander: Commander }
+export interface Squad { id: string; cls: TClass; count: number; xp: number; rank: number; bat: string }
+export type Source = 'timer' | 'pomodoro' | 'manual';
+export interface StudyRecord { id: string; subject: string; source: Source; startedAt: number; endedAt: number | null; verifiedSec: number; forfeitedSec: number; checkIns: number; missed: number; notes: string; reward: Res }
+export interface Completion { id: string; habitId: string; period: string; count: number; done: boolean; at: number; note?: string }
+export type LedgerKind = 'start' | 'study' | 'manual' | 'habit' | 'milestone' | 'achievement' | 'spend' | 'refund';
+export interface Ledger { kind: LedgerKind; ref: string; amt: Res; at: number }
+export interface KEvent { id: string; t: number; type: string; text: string; n?: number }
+export type Table = 'buildings' | 'battalions' | 'squads' | 'habits' | 'sessions' | 'completions';
+export interface Settings { rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean }
 export interface GameState {
-  v: 1; updatedAt: number; res: Res; lifetime: Res;
-  buildings: Building[]; battalions: Battalion[]; squads: Squad[];
-  armor: Partial<Record<TClass, number>>;
-  session: Session | null; history: Session[]; subjects: string[];
-  habits: Habit[]; achievements: string[]; requireNote: boolean; sound: boolean;
+  v: 2; owner: string | null; updatedAt: number; res: Res; lifetime: Res;
+  buildings: Building[]; battalions: Battalion[]; squads: Squad[]; techs: TechId[];
+  session: (Session & { xpMs: number; source: Source }) | null; sessions: StudyRecord[]; subjects: string[];
+  habits: Habit[]; completions: Completion[]; achievements: string[]; events: KEvent[]; stage: number;
+  settings: Settings;
+  outbox: { ledger: Ledger[]; dirty: Partial<Record<Table, string[]>>; dead: Partial<Record<Table, string[]>>; events: string[]; techs: boolean };
 }
 
-export const MAP_W = 64, MAP_H = 48, TILE = 16;
-const uid = () => Math.random().toString(36).slice(2, 10);
+export const MAP_W = 96, MAP_H = 72, TILE = 16;
+export const CAMP_X = 40, CAMP_Y = 34;
 
 export function newGame(): GameState {
+  const now = Date.now(), start: Res = { gold: 150, wood: 80, stone: 0, renown: 0 }, camp = uid();
   return {
-    v: 1, updatedAt: Date.now(), res: { gold: 200, wood: 100, stone: 0, renown: 0 }, lifetime: { ...ZERO },
-    buildings: [{ id: uid(), kind: 'keep', x: 30, y: 21, level: 1 }],
-    battalions: [{ id: 'b1', name: 'First Watch', color: BANNER_COLORS[0], emblem: 'lion', commander: 'Aldric', x: 36 * TILE, y: 30 * TILE }],
-    squads: [{ id: uid(), cls: 'militia', count: 6, bat: 'b1' }],
-    armor: {}, session: null, history: [], subjects: ['Mathematics', 'Languages', 'Science', 'Programming', 'Reading'],
-    habits: [], achievements: [], requireNote: false, sound: true,
+    v: 2, owner: null, updatedAt: now, res: { ...start }, lifetime: { ...ZERO },
+    buildings: [{ id: camp, kind: 'camp', x: CAMP_X, y: CAMP_Y, level: 1, at: now }],
+    battalions: [], squads: [], techs: [],
+    session: null, sessions: [], subjects: ['Mathematics', 'Languages', 'Science', 'History', 'Programming', 'Reading'],
+    habits: [], completions: [], achievements: [], events: [{ id: uid(), t: now, type: 'stage', text: 'A lonely camp is pitched on barren land.' }], stage: 1,
+    settings: { rates: { ...DEFAULT_RATES }, cfg: { ...DEFAULT_CFG }, sound: true, requireNote: false, theme: 'parchment', dayNight: 'auto', notify: true },
+    outbox: { ledger: [{ kind: 'start', ref: 'start', amt: start, at: now }], dirty: { buildings: [camp] }, dead: {}, events: [], techs: false },
   };
 }
 
-// ---------- store ----------
+// ---------------- store ----------------
 type L = () => void;
 let state: GameState = newGame();
 const listeners = new Set<L>();
 export const fxBus = new EventTarget();
-export type Fx = { kind: 'reward' | 'build' | 'error' | 'info' | 'achieve'; text: string; res?: Partial<Res>; x?: number; y?: number };
+export type Fx = { kind: 'reward' | 'build' | 'error' | 'info' | 'achieve' | 'stage' | 'promote'; text: string; res?: Partial<Res>; x?: number; y?: number; id?: string; big?: boolean };
 export const emit = (fx: Fx) => fxBus.dispatchEvent(new CustomEvent('fx', { detail: fx }));
-
 export const getState = () => state;
-export const subscribe = (l: L) => (listeners.add(l), () => listeners.delete(l));
-export function setState(next: GameState, touch = true) {
-  state = touch ? { ...next, updatedAt: Date.now() } : next;
-  listeners.forEach((l) => l());
-}
+export const subscribe = (l: L) => (listeners.add(l), () => { listeners.delete(l); });
+export function setState(next: GameState, touch = true) { state = touch ? { ...next, updatedAt: Date.now() } : next; listeners.forEach((l) => l()); }
+
+/** Runs a pure transition; strings are user-facing errors. */
 function update(fn: (s: GameState) => GameState | string | void): string | null {
   const r = fn(state);
   if (typeof r === 'string') { emit({ kind: 'error', text: r }); return r; }
-  if (r) setState(checkAchievements(r));
+  if (r) setState(post(r));
   return null;
 }
+/** Test hook: run actions against an explicit state. */
+export function _with(s: GameState) { state = s; }
 
-// ---------- derived ----------
-export const keepLevel = (s: GameState) => s.buildings.find((b) => b.kind === 'keep')?.level ?? 1;
-export const maxLevel = (s: GameState, k: BKind) => Math.max(0, ...s.buildings.filter((b) => b.kind === k).map((b) => b.level));
-export const armyCap = (s: GameState) => 20 + s.buildings.reduce((a, b) => a + (b.kind === 'farm' ? 40 * b.level : b.kind === 'house' ? 15 * b.level : 0), 0) + 20 * keepLevel(s);
-export const armySize = (s: GameState) => s.squads.reduce((a, q) => a + q.count, 0);
-export const levelReq = (s: GameState, k: BKind | 'keep', lvl: number) => (k === 'keep' ? keepLevel(s) : maxLevel(s, k)) >= lvl;
-export const troopUnlocked = (s: GameState, c: TClass) =>
-  Object.entries(TROOPS[c].req).every(([k, l]) => levelReq(s, k as BKind, l!));
-
-function grant(s: GameState, r: Partial<Res>): GameState {
-  const f = full(r);
-  return { ...s, res: add(s.res, f), lifetime: add(s.lifetime, f) };
+// ---------------- bookkeeping helpers ----------------
+const mark = (s: GameState, t: Table, id: string): GameState => ({ ...s, outbox: { ...s.outbox, dirty: { ...s.outbox.dirty, [t]: [...new Set([...(s.outbox.dirty[t] ?? []), id])] } } });
+const kill = (s: GameState, t: Table, id: string): GameState => ({ ...s, outbox: { ...s.outbox, dead: { ...s.outbox.dead, [t]: [...(s.outbox.dead[t] ?? []), id] } } });
+function event(s: GameState, type: string, text: string, n?: number): GameState {
+  const e = { id: uid(), t: Date.now(), type, text, n };
+  return { ...s, events: [e, ...s.events].slice(0, 1500), outbox: { ...s.outbox, events: [...s.outbox.events, e.id] } };
+}
+/** Every resource change is a ledger entry (synced idempotently by kind+ref). */
+function ledger(s: GameState, kind: LedgerKind, ref: string, amt: Res): GameState {
+  if (isZero(amt)) return s;
+  const gain = kind !== 'spend';
+  return {
+    ...s, res: add(s.res, amt), lifetime: gain ? add(s.lifetime, amt) : s.lifetime,
+    outbox: { ...s.outbox, ledger: [...s.outbox.ledger, { kind, ref, amt, at: Date.now() }] },
+  };
+}
+const spend = (s: GameState, cost: Partial<Res>, n = 1) => ledger(s, 'spend', uid(), scale(cost, -n));
+/** Study rewards are cumulative per session: one ledger row per session, only ever increased. */
+function studyLedger(s: GameState, kind: 'study' | 'manual', ref: string, total: Res, prev: Res): GameState {
+  const delta = sub(maxRes(total, prev), prev);
+  if (isZero(delta)) return s;
+  const others = s.outbox.ledger.filter((l) => !(l.kind === kind && l.ref === ref));
+  return { ...s, res: add(s.res, delta), lifetime: add(s.lifetime, delta), outbox: { ...s.outbox, ledger: [...others, { kind, ref, amt: maxRes(total, prev), at: Date.now() }] } };
 }
 
-// ---------- construction ----------
+// ---------------- derived ----------------
+export const count = (s: GameState, k: BKind) => s.buildings.filter((b) => b.kind === k).length;
+export const maxLevel = (s: GameState, k: BKind) => s.buildings.reduce((m, b) => (b.kind === k ? Math.max(m, b.level) : m), 0);
+export const has = (s: GameState, t?: TechId) => !t || s.techs.includes(t);
+export function effects(s: GameState): Required<Effects> {
+  const e = { cap: 0, gold: 0, wood: 0, stone: 0, renown: 0, xp: 0, green: 0, discount: 0 };
+  for (const b of s.buildings) { const f = BUILDINGS[b.kind].fx(b.level); for (const k of Object.keys(f) as (keyof Effects)[]) if (k !== 'green') e[k] += f[k] ?? 0; }
+  if (has(s, 'veterancy')) e.xp += 0.25;
+  e.discount = Math.min(0.3, e.discount);
+  return e;
+}
+export const armyCap = (s: GameState) => effects(s).cap;
+export const armySize = (s: GameState) => s.squads.reduce((a, q) => a + q.count, 0);
+export const batSize = (s: GameState, id: string) => s.squads.reduce((a, q) => (q.bat === id ? a + q.count : a), 0);
+export const studyMult = (s: GameState): Res => { const e = effects(s); return { gold: 1 + e.gold, wood: 1 + e.wood, stone: 1 + e.stone, renown: 1 + e.renown }; };
+export function costOf(s: GameState, kind: BKind, lvlIdx: number): Res {
+  const d = BUILDINGS[kind], c = full(d.levels[lvlIdx].cost);
+  return d.cat === 'castle' ? scale(c, 1 - effects(s).discount) : c;
+}
+export function reqMet(s: GameState, r: Req) {
+  if (r.troops) return armySize(s) >= r.troops;
+  const k = r.kind!;
+  if (r.level) return maxLevel(s, k) >= r.level;
+  return count(s, k) >= (r.count ?? 1);
+}
+export const computeStage = (s: GameState) => { let st = 1; for (let i = 1; i < STAGES.length; i++) { if (STAGES[i].reqs.every((r) => reqMet(s, r))) st = i + 1; else break; } return st; };
+/** Why a building level can't be built yet (null = ok). */
+export function lockReason(s: GameState, kind: BKind, lvlIdx: number): string | null {
+  const d = BUILDINGS[kind], l = d.levels[lvlIdx];
+  const stage = Math.max(d.stage, l.stage ?? 0), tech = l.tech ?? (lvlIdx === 0 ? d.tech : undefined);
+  if (s.stage < stage) return `Requires stage ${stage}: ${STAGES[stage - 1].name}`;
+  if (tech && !has(s, tech)) return `Requires ${TECHS[tech].name}`;
+  if (lvlIdx === 0 && d.tech && !has(s, d.tech)) return `Requires ${TECHS[d.tech].name}`;
+  return null;
+}
+export function troopLock(s: GameState, c: TClass): string | null {
+  const d = TROOPS[c];
+  for (const t of d.tech ?? []) if (!has(s, t)) return `Requires ${TECHS[t].name}`;
+  for (const [k, l] of Object.entries(d.req)) if (maxLevel(s, k as BKind) < l!) return `Requires ${BUILDINGS[k as BKind].levels[l! - 1].name}`;
+  return null;
+}
+export function rankLock(s: GameState, rank: number): string | null {
+  const r = RANKS[rank]?.req; if (!r) return null;
+  if (r.kind && !count(s, r.kind)) return `Requires ${r.label}`;
+  if (r.tech && !has(s, r.tech)) return `Requires ${r.label}`;
+  return null;
+}
+export const kingdomScore = (s: GameState) => Math.floor(s.buildings.reduce((a, b) => a + BUILDINGS[b.kind].levels.slice(0, b.level).reduce((x, l) => x + (l.cost.gold ?? 0), 0), 0) / 100 + s.squads.reduce((a, q) => a + q.count * TROOPS[q.cls].power * (1 + q.rank * 0.5), 0));
+export const kingdomLevel = (s: GameState) => 1 + Math.floor(Math.sqrt(kingdomScore(s) / 20));
+
+// ---------------- placement ----------------
+export const RIVER = (() => { // deterministic winding river: x-range per row
+  const rows: [number, number][] = [];
+  for (let y = 0; y < MAP_H; y++) { const c = 80 + Math.round(Math.sin(y / 9) * 4 + Math.sin(y / 4.3) * 1.5); rows.push([c - 1, c + 1]); }
+  return rows;
+})();
+export const isRiver = (x: number, y: number) => y >= 0 && y < MAP_H && x >= RIVER[y][0] && x <= RIVER[y][1];
+export const footprint = (k: BKind) => [BUILDINGS[k].w, BUILDINGS[k].h] as const;
 export function canPlace(s: GameState, kind: BKind, x: number, y: number, ignore?: string) {
-  const n = BUILDINGS[kind].size;
-  if (x < 1 || y < 1 || x + n > MAP_W - 1 || y + n > MAP_H - 1) return false;
+  const [w, h] = footprint(kind);
+  if (x < 1 || y < 2 || x + w > MAP_W - 1 || y + h > MAP_H - 1) return false;
+  for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) if (isRiver(x + i, y + j) && kind !== 'road') return false;
   return !s.buildings.some((b) => {
     if (b.id === ignore) return false;
-    const m = BUILDINGS[b.kind].size;
-    return x < b.x + m && x + n > b.x && y < b.y + m && y + n > b.y;
+    const [bw, bh] = footprint(b.kind);
+    return x < b.x + bw && x + w > b.x && y < b.y + bh && y + h > b.y;
   });
 }
+const center = (b: { kind: BKind; x: number; y: number }) => { const [w, h] = footprint(b.kind); return { x: (b.x + w / 2) * TILE, y: (b.y + h / 2) * TILE }; };
+
+// ---------------- construction ----------------
 export const build = (kind: BKind, x: number, y: number) => update((s) => {
-  const d = BUILDINGS[kind], lv = d.levels[0];
-  if (d.unique && s.buildings.some((b) => b.kind === kind)) return 'Only one allowed';
-  if (keepLevel(s) < lv.keep) return `Requires ${BUILDINGS.keep.levels[lv.keep - 1].name}`;
+  const d = BUILDINGS[kind];
+  if (d.unique && count(s, kind)) return `Only one ${d.name} allowed`;
+  const lock = lockReason(s, kind, 0); if (lock) return lock;
   if (!canPlace(s, kind, x, y)) return 'Cannot build there';
-  if (!canAfford(s.res, lv.cost)) return 'Not enough resources';
-  emit({ kind: 'build', text: lv.name, x: (x + d.size / 2) * TILE, y: (y + d.size / 2) * TILE });
-  return { ...s, res: add(s.res, full(lv.cost), -1), buildings: [...s.buildings, { id: uid(), kind, x, y, level: 1 }] };
+  const cost = costOf(s, kind, 0);
+  if (!canAfford(s.res, cost)) return 'Not enough resources';
+  const b: Building = { id: uid(), kind, x, y, level: 1, at: Date.now() };
+  emit({ kind: 'build', text: d.levels[0].name, ...center(b), id: b.id });
+  let o = spend({ ...s, buildings: [...s.buildings, b] }, cost);
+  if (!d.paint) o = event(o, 'build', `Built a ${d.levels[0].name}.`);
+  return mark(o, 'buildings', b.id);
 });
 export const upgrade = (id: string) => update((s) => {
   const b = s.buildings.find((q) => q.id === id); if (!b) return;
-  const d = BUILDINGS[b.kind], lv = d.levels[b.level];
-  if (!lv) return 'Max level';
-  if (keepLevel(s) < lv.keep) return `Requires ${BUILDINGS.keep.levels[lv.keep - 1].name}`;
-  if (!canAfford(s.res, lv.cost)) return 'Not enough resources';
-  emit({ kind: 'build', text: lv.name, x: (b.x + d.size / 2) * TILE, y: (b.y + d.size / 2) * TILE });
-  return { ...s, res: add(s.res, full(lv.cost), -1), buildings: s.buildings.map((q) => (q.id === id ? { ...q, level: q.level + 1 } : q)) };
+  const d = BUILDINGS[b.kind], lv = d.levels[b.level]; if (!lv) return 'Already at maximum level';
+  const lock = lockReason(s, b.kind, b.level); if (lock) return lock;
+  const cost = costOf(s, b.kind, b.level);
+  if (!canAfford(s.res, cost)) return 'Not enough resources';
+  emit({ kind: 'build', text: lv.name, ...center(b), id: b.id, big: b.kind === 'keep' || b.kind === 'palace' });
+  const o = spend({ ...s, buildings: s.buildings.map((q) => (q.id === id ? { ...q, level: q.level + 1, at: Date.now() } : q)) }, cost);
+  return mark(d.paint ? o : event(o, 'upgrade', `Upgraded to ${lv.name}.`), 'buildings', id);
+});
+/** Upgrade every painted tile of a kind (walls, roads) that is below max, as far as resources allow. */
+export const upgradeAll = (kind: BKind) => update((s) => {
+  const d = BUILDINGS[kind]; let o = s, n = 0;
+  for (const b of s.buildings) {
+    if (b.kind !== kind || !d.levels[b.level] || lockReason(o, kind, b.level)) continue;
+    const c = costOf(o, kind, b.level); if (!canAfford(o.res, c)) break;
+    o = mark(spend({ ...o, buildings: o.buildings.map((q) => (q.id === b.id ? { ...q, level: q.level + 1, at: Date.now() } : q)) }, c), 'buildings', b.id); n++;
+  }
+  if (!n) return 'Nothing could be upgraded';
+  emit({ kind: 'info', text: `Upgraded ${n} ${d.name} tiles` });
+  return event(o, 'upgrade', `Upgraded ${n} ${d.name} sections.`, n);
 });
 export const demolish = (id: string) => update((s) => {
   const b = s.buildings.find((q) => q.id === id);
-  if (!b || b.kind === 'keep') return 'Cannot demolish the keep';
-  return { ...s, buildings: s.buildings.filter((q) => q.id !== id) };
+  if (!b || b.kind === 'camp') return 'The camp cannot be removed';
+  const refund = scale(BUILDINGS[b.kind].levels.slice(0, b.level).reduce((a, l) => add(a, l.cost), { ...ZERO }), 0.5);
+  return kill(ledger({ ...s, buildings: s.buildings.filter((q) => q.id !== id) }, 'refund', uid(), refund), 'buildings', id);
 });
-export const move = (id: string, x: number, y: number) => update((s) => {
+export const moveBuilding = (id: string, x: number, y: number) => update((s) => {
   const b = s.buildings.find((q) => q.id === id); if (!b) return;
   if (!canPlace(s, b.kind, x, y, id)) return 'Cannot move there';
-  return { ...s, buildings: s.buildings.map((q) => (q.id === id ? { ...q, x, y } : q)) };
+  return mark({ ...s, buildings: s.buildings.map((q) => (q.id === id ? { ...q, x, y } : q)) }, 'buildings', id);
+});
+export const research = (t: TechId) => update((s) => {
+  const d = TECHS[t];
+  if (has(s, t)) return 'Already researched';
+  if (s.stage < d.stage) return `Requires stage ${d.stage}`;
+  const miss = d.req.find((r) => !has(s, r)); if (miss) return `Requires ${TECHS[miss].name}`;
+  if (!canAfford(s.res, d.cost)) return 'Not enough resources';
+  emit({ kind: 'achieve', text: `Researched ${d.name}` });
+  const o = spend({ ...s, techs: [...s.techs, t], outbox: { ...s.outbox, techs: true } }, d.cost);
+  return event(o, 'tech', `Scholars mastered ${d.name}.`);
 });
 
-// ---------- army ----------
-export const recruit = (cls: TClass, n: number, bat: string) => update((s) => {
-  const d = TROOPS[cls];
-  if (!troopUnlocked(s, cls)) return 'Not unlocked yet';
-  if (armySize(s) + n > armyCap(s)) return 'Army cap reached: build farms & cottages';
-  if (!canAfford(s.res, d.cost, n)) return 'Not enough resources';
-  let left = n; const squads = s.squads.map((q) => {
-    if (left && q.bat === bat && q.cls === cls && q.count < SQUAD_SIZE) {
-      const t = Math.min(left, SQUAD_SIZE - q.count); left -= t; return { ...q, count: q.count + t };
-    } return q;
+// ---------------- army ----------------
+function ensureBattalion(s: GameState): [GameState, string] {
+  if (s.battalions.length) return [s, s.battalions[0].id];
+  const b = newBat(s, '1st Royal Battalion');
+  return [mark({ ...s, battalions: [b] }, 'battalions', b.id), b.id];
+}
+function newBat(s: GameState, name: string): Battalion {
+  const i = s.battalions.length, id = uid();
+  return { id, name, army: 'Royal Army', color: COLORS[i % COLORS.length], emblem: 'lion', formation: 'block', x: (CAMP_X + 2 + (i % 4) * 7) * TILE, y: (CAMP_Y + 9 + Math.floor(i / 4) * 6) * TILE, commander: { name: nameFor(id), rank: 0, seed: id } };
+}
+export const recruit = (cls: TClass, n: number, batId?: string) => update((s0) => {
+  const d = TROOPS[cls]; const lock = troopLock(s0, cls); if (lock) return lock;
+  if (n < 1) return;
+  if (armySize(s0) + n > armyCap(s0)) return `Army capacity reached (${armySize(s0)}/${armyCap(s0)}). Build farms, huts and houses.`;
+  if (!canAfford(s0.res, d.cost, n)) return 'Not enough resources';
+  let [s, bat] = ensureBattalion(s0); if (batId && s.battalions.some((b) => b.id === batId)) bat = batId;
+  let left = n; const touched: string[] = [];
+  const squads = s.squads.map((q) => {
+    if (left && q.bat === bat && q.cls === cls && q.rank === 0 && q.count < SQUAD_SIZE) { const t = Math.min(left, SQUAD_SIZE - q.count); left -= t; touched.push(q.id); return { ...q, count: q.count + t }; }
+    return q;
   });
-  while (left > 0) { const t = Math.min(left, SQUAD_SIZE); squads.push({ id: uid(), cls, count: t, bat }); left -= t; }
-  emit({ kind: 'info', text: `Recruited ${n} ${d.name}` });
-  return { ...s, res: add(s.res, full(d.cost), -n), squads };
+  while (left > 0) { const t = Math.min(left, SQUAD_SIZE), id = uid(); squads.push({ id, cls, count: t, xp: 0, rank: 0, bat }); touched.push(id); left -= t; }
+  emit({ kind: 'info', text: `Recruited ${n} ${d.name}${n > 1 ? 's' : ''}` });
+  let o = spend({ ...s, squads }, d.cost, n);
+  o = event(o, 'recruit', `Recruited ${n} ${d.name}${n > 1 ? 's' : ''}.`, n);
+  for (const id of touched) o = mark(o, 'squads', id);
+  return o;
 });
-export const upgradeArmor = (cls: TClass) => update((s) => {
-  const t = (s.armor[cls] ?? 0) + 1;
-  if (t > 3) return 'Max armor';
-  if (keepLevel(s) < armorKeepReq(t)) return `Requires ${BUILDINGS.keep.levels[armorKeepReq(t) - 1].name}`;
-  const c = armorCost(cls, t);
-  if (!canAfford(s.res, c)) return 'Not enough resources';
-  emit({ kind: 'info', text: `${TROOPS[cls].name} armor upgraded` });
-  return { ...s, res: add(s.res, full(c), -1), armor: { ...s.armor, [cls]: t } };
+export const drill = (squadId: string) => update((s) => {
+  const q = s.squads.find((x) => x.id === squadId); if (!q) return;
+  const cost = { gold: q.count * 2 };
+  if (!canAfford(s.res, cost)) return 'Not enough gold';
+  const xp = Math.round(DRILL_XP * (1 + effects(s).xp));
+  return mark(spend({ ...s, squads: s.squads.map((x) => (x.id === squadId ? { ...x, xp: x.xp + xp } : x)) }, cost), 'squads', squadId);
+});
+export const promoteCost = (q: Squad) => ({ renown: Math.ceil(q.count * (RANKS[q.rank + 1]?.renown ?? 0)) });
+export const canPromote = (s: GameState, q: Squad) => {
+  const next = RANKS[q.rank + 1]; if (!next) return 'Highest rank';
+  if (q.xp < next.xp) return `Needs ${next.xp} XP`;
+  return rankLock(s, q.rank + 1) ?? (canAfford(s.res, promoteCost(q)) ? null : 'Not enough renown');
+};
+function promoteOne(s: GameState, id: string): GameState | string {
+  const q = s.squads.find((x) => x.id === id); if (!q) return 'Unknown squad';
+  const why = canPromote(s, q); if (why) return why;
+  return mark(spend({ ...s, squads: s.squads.map((x) => (x.id === id ? { ...x, rank: x.rank + 1 } : x)) }, promoteCost(q)), 'squads', id);
+}
+export const promote = (id: string) => update((s) => {
+  const r = promoteOne(s, id); if (typeof r === 'string') return r;
+  const q = r.squads.find((x) => x.id === id)!;
+  emit({ kind: 'promote', text: `${q.count} ${TROOPS[q.cls].name}s promoted to ${RANKS[q.rank].name}` });
+  return event(r, 'promote', `${q.count} ${TROOPS[q.cls].name}s rose to ${RANKS[q.rank].name}.`, q.count);
+});
+export const promoteAll = (batId?: string) => update((s) => {
+  let o = s, n = 0;
+  for (const q of s.squads) if ((!batId || q.bat === batId) && !canPromote(o, q)) { const r = promoteOne(o, q.id); if (typeof r !== 'string') { o = r; n += q.count; } }
+  if (!n) return 'No squads ready for promotion';
+  emit({ kind: 'promote', text: `${n} soldiers promoted` });
+  return event(o, 'promote', `${n} soldiers were promoted.`, n);
 });
 export const newBattalion = (name: string) => update((s) => {
-  if (s.battalions.length >= 12) return 'Too many battalions';
-  const i = s.battalions.length;
-  return { ...s, battalions: [...s.battalions, { id: uid(), name, color: BANNER_COLORS[i % BANNER_COLORS.length], emblem: 'cross', commander: 'Unnamed', x: (24 + (i % 4) * 6) * TILE, y: (34 + Math.floor(i / 4) * 4) * TILE }] };
+  if (s.battalions.length >= 40) return 'Too many battalions';
+  const b = newBat(s, name || `${s.battalions.length + 1}th Battalion`);
+  return mark(event({ ...s, battalions: [...s.battalions, b] }, 'command', `${b.name} was raised under ${b.commander.name}.`), 'battalions', b.id);
 });
-export const editBattalion = (id: string, p: Partial<Battalion>) => update((s) => ({ ...s, battalions: s.battalions.map((b) => (b.id === id ? { ...b, ...p } : b)) }));
+export const editBattalion = (id: string, p: Partial<Battalion>) => update((s) => mark({ ...s, battalions: s.battalions.map((b) => (b.id === id ? { ...b, ...p } : b)) }, 'battalions', id));
 export const disbandBattalion = (id: string) => update((s) => {
   if (s.battalions.length <= 1) return 'Keep at least one battalion';
   const to = s.battalions.find((b) => b.id !== id)!.id;
-  return { ...s, battalions: s.battalions.filter((b) => b.id !== id), squads: s.squads.map((q) => (q.bat === id ? { ...q, bat: to } : q)) };
+  let o: GameState = { ...s, battalions: s.battalions.filter((b) => b.id !== id), squads: s.squads.map((q) => (q.bat === id ? { ...q, bat: to } : q)) };
+  for (const q of s.squads) if (q.bat === id) o = mark(o, 'squads', q.id);
+  return kill(o, 'battalions', id);
 });
-export const transferSquad = (sid: string, bat: string) => update((s) => ({ ...s, squads: s.squads.map((q) => (q.id === sid ? { ...q, bat } : q)) }));
-export const marchTo = (id: string, x: number, y: number) => editBattalion(id, {
-  x: Math.max(TILE, Math.min((MAP_W - 1) * TILE, x)), y: Math.max(TILE, Math.min((MAP_H - 1) * TILE, y)),
+export const transferSquad = (sid: string, bat: string) => update((s) => mark({ ...s, squads: s.squads.map((q) => (q.id === sid ? { ...q, bat } : q)) }, 'squads', sid));
+const clampPos = (x: number, y: number) => ({ x: Math.max(2 * TILE, Math.min((MAP_W - 2) * TILE, x)), y: Math.max(3 * TILE, Math.min((MAP_H - 1) * TILE, y)) });
+export const marchTo = (id: string, x: number, y: number) => editBattalion(id, clampPos(x, y));
+export const marchArmy = (army: string, x: number, y: number) => update((s) => {
+  const bs = s.battalions.filter((b) => b.army === army); if (!bs.length) return;
+  const cx = bs.reduce((a, b) => a + b.x, 0) / bs.length, cy = bs.reduce((a, b) => a + b.y, 0) / bs.length;
+  let o = s;
+  for (const b of bs) o = mark({ ...o, battalions: o.battalions.map((q) => (q.id === b.id ? { ...q, ...clampPos(b.x - cx + x, b.y - cy + y) } : q)) }, 'battalions', b.id);
+  return o;
+});
+export const promoteCommander = (id: string) => update((s) => {
+  const b = s.battalions.find((q) => q.id === id); if (!b) return;
+  const next = OFFICERS[b.commander.rank + 1]; if (!next) return 'Already a General';
+  if (batSize(s, id) < next.size) return `Battalion needs ${next.size} soldiers`;
+  if (!canAfford(s.res, { renown: next.renown })) return 'Not enough renown';
+  emit({ kind: 'promote', text: `${b.commander.name} is now ${next.name}` });
+  const o = spend({ ...s, battalions: s.battalions.map((q) => (q.id === id ? { ...q, commander: { ...q.commander, rank: q.commander.rank + 1 } } : q)) }, { renown: next.renown });
+  return mark(event(o, 'command', `${b.commander.name} was promoted to ${next.name}.`), 'battalions', id);
 });
 
-// ---------- study ----------
-function settle(s: GameState, sess: Session): GameState {
-  const total = sessionRewards(sess);
-  const delta = { gold: total.gold - sess.awarded.gold, wood: total.wood - sess.awarded.wood, stone: total.stone - sess.awarded.stone, renown: total.renown - sess.awarded.renown };
-  const sess2 = { ...sess, awarded: total };
-  let out: GameState = { ...s, session: sess2.status === 'ended' ? null : sess2 };
-  if (sess2.status === 'ended') out.history = [sess2, ...s.history].slice(0, 500);
-  if (delta.gold > 0 || delta.wood > 0) { out = grant(out, delta); emit({ kind: 'reward', text: 'Study rewards', res: delta }); }
-  return out;
+// ---------------- study ----------------
+const XP_RATE = (s: GameState, bat: string) => 1 + effects(s).xp + (OFFICERS[s.battalions.find((b) => b.id === bat)?.commander.rank ?? 0]?.bonus ?? 0);
+function giveXp(s: GameState, minutes: number): GameState {
+  if (minutes <= 0 || !s.squads.length) return s;
+  let o: GameState = { ...s, squads: s.squads.map((q) => ({ ...q, xp: q.xp + minutes * XP_PER_MIN * XP_RATE(s, q.bat) })) };
+  for (const q of s.squads) o = mark(o, 'squads', q.id);
+  return o;
+}
+function record(sess: NonNullable<GameState['session']>, now: number): StudyRecord {
+  return { id: sess.id, subject: sess.subject, source: sess.source, startedAt: sess.startedAt, endedAt: sess.status === 'ended' ? (sess.endedAt ?? now) : null,
+    verifiedSec: Math.floor(sess.verifiedMs / 1000), forfeitedSec: Math.floor(sess.forfeitedMs / 1000), checkIns: sess.checkIns.filter((c) => !c.missed).length,
+    missed: sess.checkIns.filter((c) => c.missed).length, notes: sess.notes.join(' · '), reward: sess.awarded };
+}
+/** Grants whatever the verified time has earned beyond what was already awarded. */
+function settle(s: GameState, sess: NonNullable<GameState['session']>): GameState {
+  const now = Date.now();
+  const total = studyReward(sess.verifiedMs, s.settings.rates, studyMult(s));
+  const awarded = maxRes(total, sess.awarded), delta = sub(awarded, sess.awarded);
+  let o = studyLedger(s, 'study', sess.id, total, sess.awarded);
+  const xpMin = (sess.verifiedMs - sess.xpMs) / MIN;
+  o = giveXp(o, xpMin);
+  const sess2 = { ...sess, awarded, xpMs: sess.verifiedMs };
+  const rec = record(sess2, now);
+  o = mark({ ...o, sessions: [rec, ...o.sessions.filter((r) => r.id !== rec.id)] }, 'sessions', rec.id);
+  if (sess2.status === 'ended') {
+    o = { ...o, session: null };
+    const m = Math.floor(sess2.verifiedMs / MIN);
+    o = event(o, 'study', `Studied ${sess2.subject} for ${m} min, earning ${awarded.gold} gold.`, m);
+    if (m > 0) emit({ kind: 'reward', text: `Session complete: ${m} min of ${sess2.subject}`, res: awarded, big: true });
+  } else {
+    o = { ...o, session: sess2 };
+    if (!isZero(delta)) emit({ kind: 'reward', text: 'Study verified', res: delta });
+  }
+  return o;
 }
 export const studyStart = (subject: string) => update((s) => {
   if (s.session) return 'A session is already running';
   const subjects = s.subjects.includes(subject) ? s.subjects : [...s.subjects, subject];
-  return { ...s, subjects, session: startSession(subject, Date.now()) };
+  const sess = { ...startSession(subject, Date.now(), s.settings.cfg), xpMs: 0, source: (s.settings.cfg.pomodoro ? 'pomodoro' : 'timer') as Source };
+  return mark({ ...s, subjects, session: sess, sessions: [record(sess, Date.now()), ...s.sessions] }, 'sessions', sess.id);
 });
 export const studyTick = () => {
-  const s = state; if (!s.session) return;
-  const t = tick(s.session, Date.now());
-  if (t.status !== s.session.status) {
-    if (t.status === 'missed') emit({ kind: 'error', text: 'Check-in missed: timer paused. Earned rewards are kept.' });
-    setState(settle(s, t));
+  const s = state, sess = s.session; if (!sess) return;
+  const t = { ...sess, ...tick(sess, Date.now()) };
+  if (t.status !== sess.status) {
+    if (t.status === 'missed') emit({ kind: 'error', text: 'Check-in missed: timer paused. Everything already earned is kept.' });
+    setState(post(settle(s, t)));
   }
 };
-export const studyCheckIn = (note?: string) => update((s) => s.session ? settle(s, checkIn(s.session, Date.now(), note)) : undefined);
-export const studyPause = () => update((s) => s.session ? settle(s, pause(s.session, Date.now())) : undefined);
-export const studyEnd = () => update((s) => s.session ? settle(s, endSession(s.session, Date.now())) : undefined);
-export const setPref = (p: Partial<Pick<GameState, 'requireNote' | 'sound'>>) => update((s) => ({ ...s, ...p }));
+const act = (f: (x: Session, now: number) => Session) => update((s) => (s.session ? settle(s, { ...s.session, ...f(s.session, Date.now()) }) : undefined));
+export const studyCheckIn = (note?: string) => act((x, n) => checkIn(x, n, note));
+export const studyPause = () => act(pause);
+export const studyBreak = (note?: string) => act((x, n) => takeBreak(x, n, note));
+export const studyEnd = () => act(endSession);
+export const studyDiscard = () => update((s) => (s.session && s.session.verifiedMs === 0 ? kill({ ...s, session: null, sessions: s.sessions.filter((r) => r.id !== s.session!.id) }, 'sessions', s.session.id) : 'Only empty sessions can be discarded'));
 
-// ---------- habits ----------
-export const addHabit = (name: string, freq: Habit['freq'], reward: Res) =>
-  update((s) => ({ ...s, habits: [...s.habits, { id: uid(), name, freq, reward, done: [], created: Date.now(), best: 0 }] }));
-export const removeHabit = (id: string) => update((s) => ({ ...s, habits: s.habits.filter((h) => h.id !== id) }));
-export const claimHabit = (id: string) => update((s) => {
+/** Manual entry: clearly marked, earns MANUAL_FACTOR of the timed rate, capped per day. */
+export const logManual = (subject: string, minutes: number, when: number, note: string) => update((s) => {
+  minutes = Math.floor(minutes);
+  if (!(minutes > 0) || minutes > 240) return 'Enter between 1 and 240 minutes';
+  if (when > Date.now()) return 'Cannot log future sessions';
+  const day = dayKey(new Date(when));
+  const used = s.sessions.filter((r) => r.source === 'manual' && dayKey(new Date(r.startedAt)) === day).reduce((a, r) => a + r.verifiedSec / 60, 0);
+  if (used + minutes > MANUAL_MAX_PER_DAY_MIN) return `Manual logs are limited to ${MANUAL_MAX_PER_DAY_MIN} min per day`;
+  const id = uid(), reward = studyReward(minutes * MIN, s.settings.rates, studyMult(s), MANUAL_FACTOR);
+  const rec: StudyRecord = { id, subject, source: 'manual', startedAt: when - minutes * MIN, endedAt: when, verifiedSec: minutes * 60, forfeitedSec: 0, checkIns: 0, missed: 0, notes: note, reward };
+  let o = mark({ ...s, sessions: [rec, ...s.sessions], subjects: s.subjects.includes(subject) ? s.subjects : [...s.subjects, subject] }, 'sessions', id);
+  o = studyLedger(o, 'manual', id, reward, ZERO);
+  o = giveXp(o, minutes * MANUAL_FACTOR);
+  emit({ kind: 'reward', text: `Logged ${minutes} min (manual)`, res: reward });
+  return event(o, 'study', `Logged ${minutes} min of ${subject} manually.`, minutes);
+});
+export const setSettings = (p: Partial<Settings>) => update((s) => ({ ...s, settings: { ...s.settings, ...p } }));
+
+// ---------------- habits ----------------
+export const addHabit = (h: { name: string; freq: Freq; target: number; unit: string; weight: number; requireNote: boolean }) => update((s) => {
+  if (!h.name.trim()) return 'Name your habit';
+  const habit: Habit = { id: uid(), ...h, target: Math.max(1, Math.min(1000, Math.floor(h.target))), weight: Math.max(1, Math.min(5, h.weight)), log: {}, done: [], created: Date.now(), best: 0, earned: { ...ZERO } };
+  return mark({ ...s, habits: [...s.habits, habit] }, 'habits', habit.id);
+});
+export const editHabit = (id: string, p: Partial<Habit>) => update((s) => mark({ ...s, habits: s.habits.map((h) => (h.id === id ? { ...h, ...p } : h)) }, 'habits', id));
+export const removeHabit = (id: string) => update((s) => kill({ ...s, habits: s.habits.filter((h) => h.id !== id) }, 'habits', id));
+export const habitProgress = (id: string, amount = 1, note?: string) => update((s) => {
   const h = s.habits.find((q) => q.id === id); if (!h) return;
-  const now = new Date(), next = claim(h, now);
-  if (!next) return 'Already completed this period';
-  const k = streakBonus(streak(next, now) - 1);
-  const r = { gold: Math.round(h.reward.gold * k), wood: Math.round(h.reward.wood * k), stone: Math.round(h.reward.stone * k), renown: Math.round(h.reward.renown * k) };
-  emit({ kind: 'reward', text: h.name, res: r });
-  return grant({ ...s, habits: s.habits.map((q) => (q.id === id ? next : q)) }, r);
+  if (h.requireNote && !note?.trim()) return 'This habit needs a short note';
+  const now = new Date(), r = progress(h, now, amount);
+  if (!r) return 'Already completed for this period';
+  const period = periodKey(h, now), cid = `${id}:${period}`;
+  const comp: Completion = { id: cid, habitId: id, period, count: r.habit.log[period], done: r.completed, at: Date.now(), note };
+  let o = mark({ ...s, completions: [comp, ...s.completions.filter((c) => c.id !== cid)] }, 'completions', cid);
+  let habit = r.habit;
+  if (r.completed) {
+    const st = streak(habit, now), rw = habitReward(habit, st);
+    o = ledger(o, 'habit', cid, rw); habit = { ...habit, earned: add(habit.earned, rw) };
+    emit({ kind: 'reward', text: `${h.name} complete${st > 1 ? `: ${st} streak` : ''}`, res: rw });
+    o = event(o, 'habit', `Completed "${h.name}"${st > 1 ? ` (${st} streak)` : ''}.`);
+    for (const [n, bonus] of MILESTONES) if (st === n) {
+      const b = { ...ZERO, renown: bonus * habit.weight, gold: bonus * 10 * habit.weight };
+      o = ledger(o, 'milestone', `${cid}:${n}`, b); habit = { ...habit, earned: add(habit.earned, b) };
+      emit({ kind: 'achieve', text: `${n}-period streak bonus for ${h.name}!`, res: b });
+    }
+  }
+  return mark({ ...o, habits: o.habits.map((q) => (q.id === id ? habit : q)) }, 'habits', id);
 });
 
-// ---------- achievements ----------
-const studyMin = (s: GameState) => Math.floor(s.history.reduce((a, h) => a + h.verifiedMs, 0) / 60000);
-export const ACHIEVEMENTS: { id: string; name: string; desc: string; renown: number; test: (s: GameState) => boolean }[] = [
-  { id: 'first', name: 'First Steps', desc: 'Finish a study session', renown: 5, test: (s) => s.history.length > 0 },
-  { id: 'hour', name: 'Hour of Focus', desc: '60 continuous verified minutes', renown: 15, test: (s) => s.history.some((h) => h.chains.some((c) => c >= 3600000)) },
-  { id: 'marathon', name: 'Marathon Scholar', desc: '120 continuous verified minutes', renown: 40, test: (s) => s.history.some((h) => h.chains.some((c) => c >= 7200000)) },
-  { id: 'ten', name: 'Apprentice', desc: '10 hours studied', renown: 50, test: (s) => studyMin(s) >= 600 },
-  { id: 'hundred', name: 'Master Scholar', desc: '100 hours studied', renown: 300, test: (s) => studyMin(s) >= 6000 },
+// ---------------- achievements & stage ----------------
+const studyMin = (s: GameState) => s.sessions.reduce((a, r) => a + r.verifiedSec, 0) / 60;
+const studyDays = (s: GameState) => new Set(s.sessions.filter((r) => r.verifiedSec > 0).map((r) => dayKey(new Date(r.startedAt)))).size;
+export interface Ach { id: string; name: string; desc: string; renown: number; unlock?: string; test: (s: GameState) => boolean }
+export const ACHIEVEMENTS: Ach[] = [
+  { id: 'first', name: 'First Steps', desc: 'Finish a study session', renown: 5, test: (s) => s.sessions.some((r) => r.endedAt && r.verifiedSec >= 60) },
+  { id: 'hour', name: 'Hour of Focus', desc: 'A 60-minute timed session', renown: 20, test: (s) => s.sessions.some((r) => r.source !== 'manual' && r.verifiedSec >= 3600) },
+  { id: 'marathon', name: 'Marathon Scholar', desc: 'A 3-hour timed session', renown: 60, test: (s) => s.sessions.some((r) => r.source !== 'manual' && r.verifiedSec >= 10800) },
+  { id: 'scholar10', name: 'Apprentice', desc: '10 hours studied', renown: 50, unlock: 'theme:stone', test: (s) => studyMin(s) >= 600 },
+  { id: 'scholar100', name: 'Master Scholar', desc: '100 hours studied', renown: 300, unlock: 'theme:royal', test: (s) => studyMin(s) >= 6000 },
+  { id: 'scholar500', name: 'Sage of the Realm', desc: '500 hours studied', renown: 1000, unlock: 'emblem:griffin', test: (s) => studyMin(s) >= 30000 },
+  { id: 'days7', name: 'Week of Study', desc: 'Study on 7 different days', renown: 30, test: (s) => studyDays(s) >= 7 },
+  { id: 'days30', name: 'Month of Study', desc: 'Study on 30 different days', renown: 120, test: (s) => studyDays(s) >= 30 },
+  { id: 'days100', name: 'Hundred Days', desc: 'Study on 100 different days', renown: 400, unlock: 'theme:midnight', test: (s) => studyDays(s) >= 100 },
+  { id: 'pomo10', name: 'Tomato Knight', desc: 'Complete 10 pomodoros', renown: 25, test: (s) => s.sessions.filter((r) => r.source === 'pomodoro').reduce((a, r) => a + r.checkIns, 0) >= 10 },
+  { id: 'checkin50', name: 'Ever Vigilant', desc: '50 check-ins answered', renown: 40, test: (s) => s.sessions.reduce((a, r) => a + r.checkIns, 0) >= 50 },
+  { id: 'habit1', name: 'Good Habit', desc: 'Complete a habit', renown: 5, test: (s) => s.completions.some((c) => c.done) },
   { id: 'habit7', name: 'Steadfast', desc: 'Reach a 7-period habit streak', renown: 30, test: (s) => s.habits.some((h) => h.best >= 7) },
-  { id: 'hall', name: 'Lord of the Hall', desc: 'Build the Wooden Hall', renown: 10, test: (s) => keepLevel(s) >= 2 },
-  { id: 'castle', name: 'Castellan', desc: 'Raise a Castle', renown: 100, test: (s) => keepLevel(s) >= 4 },
+  { id: 'habit30', name: 'Iron Will', desc: 'Reach a 30-period habit streak', renown: 150, test: (s) => s.habits.some((h) => h.best >= 30) },
+  { id: 'habit100', name: 'Creature of Virtue', desc: '100 habit completions', renown: 120, test: (s) => s.completions.filter((c) => c.done).length >= 100 },
+  { id: 'stage2', name: 'Settler', desc: 'Reach Small Settlement', renown: 10, test: (s) => s.stage >= 2 },
+  { id: 'stage3', name: 'Village Lord', desc: 'Reach Fortified Village', renown: 30, test: (s) => s.stage >= 3 },
+  { id: 'stage4', name: 'Castellan', desc: 'Reach Medieval Fortress', renown: 100, test: (s) => s.stage >= 4 },
+  { id: 'castle', name: 'Lord of the Castle', desc: 'Reach Great Castle', renown: 300, unlock: 'emblem:crown', test: (s) => s.stage >= 5 },
+  { id: 'citadel', name: 'Sovereign', desc: 'Reach Royal Citadel', renown: 1000, unlock: 'color:gold', test: (s) => s.stage >= 6 },
   { id: 'army100', name: 'Warband', desc: 'Command 100 soldiers', renown: 25, test: (s) => armySize(s) >= 100 },
-  { id: 'army1000', name: 'Grand Host', desc: 'Command 1000 soldiers', renown: 200, test: (s) => armySize(s) >= 1000 },
+  { id: 'army500', name: 'Legion', desc: 'Command 500 soldiers', renown: 100, test: (s) => armySize(s) >= 500 },
+  { id: 'army1000', name: 'Grand Host', desc: 'Command 1,000 soldiers', renown: 250, unlock: 'emblem:dragon', test: (s) => armySize(s) >= 1000 },
+  { id: 'veteran', name: 'Hardened', desc: 'Promote a squad to Veteran', renown: 20, test: (s) => s.squads.some((q) => q.rank >= 2) },
+  { id: 'elite', name: 'The Finest', desc: 'Promote a squad to Elite', renown: 60, test: (s) => s.squads.some((q) => q.rank >= 3) },
+  { id: 'general', name: 'Warlord', desc: 'Promote a commander to General', renown: 150, test: (s) => s.battalions.some((b) => b.commander.rank >= 4) },
+  { id: 'scholarlord', name: 'Age of Learning', desc: 'Research 8 technologies', renown: 80, test: (s) => s.techs.length >= 8 },
 ];
-function checkAchievements(s: GameState): GameState {
+export const unlocked = (s: GameState, what: string) => ACHIEVEMENTS.some((a) => a.unlock === what && s.achievements.includes(a.id));
+
+/** Runs after every action: stage progression and achievements. */
+function post(s: GameState): GameState {
   let out = s;
+  const st = computeStage(out);
+  if (st > out.stage) {
+    out = event({ ...out, stage: st }, 'stage', `The realm became a ${STAGES[st - 1].name}!`);
+    emit({ kind: 'stage', text: `Stage ${st}: ${STAGES[st - 1].name}`, big: true });
+  }
   for (const a of ACHIEVEMENTS) if (!out.achievements.includes(a.id) && a.test(out)) {
-    out = grant({ ...out, achievements: [...out.achievements, a.id] }, { renown: a.renown });
+    out = ledger({ ...out, achievements: [...out.achievements, a.id] }, 'achievement', a.id, { ...ZERO, renown: a.renown });
+    out = event(out, 'achieve', `Achievement: ${a.name}.`);
     emit({ kind: 'achieve', text: `${a.name}: +${a.renown} renown` });
   }
   return out;
 }
+export const _post = post;
 export { canAfford };
