@@ -63,7 +63,7 @@ export function adoptSnapshot(s: GameState, snap: Snapshot): GameState {
   const zero = { gold: 0, wood: 0, stone: 0, renown: 0 };
   const sessions: StudyRecord[] = snap.sessions.map((r) => ({ id: r.id, subject: r.subject, source: r.source, startedAt: ms(r.started_at)!, endedAt: ms(r.ended_at), verifiedSec: r.verified_seconds, forfeitedSec: r.forfeited_seconds, checkIns: r.check_ins, missed: r.missed, notes: r.notes, reward: num(snap.session_rewards[r.id] ?? zero) }));
   const buildings: Building[] = snap.buildings.map((b) => ({ id: b.id, kind: b.kind, x: b.x, y: b.y, level: b.level, at: ms(b.built_at)! }));
-  const battalions: Battalion[] = snap.battalions.map((b) => ({ id: b.id, name: b.name, army: b.army, color: b.color, emblem: b.emblem, formation: b.formation, orders: b.orders ?? 'formation', x: b.x, y: b.y, commander: b.commander }));
+  const battalions: Battalion[] = snap.battalions.map((b) => ({ id: b.id, name: b.name, army: b.army, color: b.color, emblem: b.emblem, formation: b.formation, orders: b.orders ?? s.battalions.find((x) => x.id === b.id)?.orders ?? 'formation', x: b.x, y: b.y, commander: b.commander }));
   const squads: Squad[] = snap.squads.map((q) => ({ id: q.id, cls: q.cls, count: q.count, xp: q.xp, rank: q.rank, bat: q.battalion_id }));
   const events: KEvent[] = snap.events.map((e) => ({ id: e.id, t: ms(e.t)!, type: e.type, text: e.text, n: e.n ?? undefined }));
   const k = snap.kingdom;
