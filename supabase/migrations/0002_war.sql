@@ -135,3 +135,6 @@ begin
   );
 end $$;
 grant execute on function public.sync_kingdom(jsonb) to authenticated;
+
+-- make the API see new functions immediately
+notify pgrst, 'reload schema';
