@@ -9,7 +9,8 @@ import type { Unit, BattleResult } from './battle.ts';
 // ---------------- types ----------------
 export interface Building { id: string; kind: BKind; x: number; y: number; level: number; at: number }
 export interface Commander { name: string; rank: number; seed: string }
-export interface Battalion { id: string; name: string; army: string; color: number; emblem: string; formation: Formation; x: number; y: number; commander: Commander }
+export type Orders = 'formation' | 'patrol' | 'garrison';
+export interface Battalion { id: string; name: string; army: string; color: number; emblem: string; formation: Formation; orders?: Orders; x: number; y: number; commander: Commander }
 export interface Squad { id: string; cls: TClass; count: number; xp: number; rank: number; bat: string }
 export type Source = 'timer' | 'pomodoro' | 'manual';
 export interface StudyRecord { id: string; subject: string; source: Source; startedAt: number; endedAt: number | null; verifiedSec: number; forfeitedSec: number; checkIns: number; missed: number; notes: string; reward: Res }
@@ -108,10 +109,21 @@ export function effects(s: GameState): Required<Effects> {
 export const armyCap = (s: GameState) => effects(s).cap;
 export const armySize = (s: GameState) => s.squads.reduce((a, q) => a + q.count, 0);
 export const batSize = (s: GameState, id: string) => s.squads.reduce((a, q) => (q.bat === id ? a + q.count : a), 0);
+/** Soldiers on duty (patrol or garrison) at most this many per battalion. */
+export const DUTY_CAP = 24;
+/** Town order: guards on duty versus what the population needs. */
+export function townOrder(s: GameState) {
+  const pop = s.buildings.reduce((a, b) => a + (b.kind === 'hut' ? 3 * b.level : b.kind === 'house' ? 6 * b.level : b.kind === 'market' ? 10 * b.level : b.kind === 'farm' ? 2 : 0), 0);
+  const away = new Set([...(s.world?.campaign?.battalions ?? []), ...(s.world?.loans ?? []).map((l) => l.bat)]);
+  const guards = s.battalions.filter((b) => b.orders && b.orders !== 'formation' && !away.has(b.id)).reduce((a, b) => a + Math.min(DUTY_CAP, batSize(s, b.id)), 0);
+  const needed = 2 + Math.floor(pop / 12);
+  return { pop, guards, needed, ratio: guards / needed };
+}
 /** Study multipliers: buildings, vassal tribute (+5% gold each, max 30%), and an enemy blockade (-25% gold). */
 export const studyMult = (s: GameState): Res => {
   const e = effects(s), w = s.world, vassals = w ? w.rivals.filter((r) => r.status === 'vassal').length : 0;
-  return { gold: Math.max(0.5, 1 + e.gold + Math.min(0.3, vassals * 0.05) - (w?.threat ? 0.25 : 0)), wood: 1 + e.wood, stone: 1 + e.stone, renown: 1 + e.renown + vassals * 0.02 };
+  const safe = townOrder(s).ratio >= 1 && townOrder(s).needed > 2 ? 0.03 : 0;
+  return { gold: Math.max(0.5, 1 + e.gold + safe + Math.min(0.3, vassals * 0.05) - (w?.threat ? 0.25 : 0)), wood: 1 + e.wood, stone: 1 + e.stone, renown: 1 + e.renown + vassals * 0.02 };
 };
 export function costOf(s: GameState, kind: BKind, lvlIdx: number): Res {
   const d = BUILDINGS[kind], c = full(d.levels[lvlIdx].cost);
@@ -234,7 +246,7 @@ function ensureBattalion(s: GameState): [GameState, string] {
 }
 function newBat(s: GameState, name: string): Battalion {
   const i = s.battalions.length, id = uid();
-  return { id, name, army: 'Royal Army', color: COLORS[i % COLORS.length], emblem: 'lion', formation: 'block', x: (CAMP_X + 2 + (i % 4) * 7) * TILE, y: (CAMP_Y + 9 + Math.floor(i / 4) * 6) * TILE, commander: { name: nameFor(id), rank: 0, seed: id } };
+  return { id, name, army: 'Royal Army', color: COLORS[i % COLORS.length], emblem: 'lion', formation: 'block', orders: 'formation', x: (CAMP_X + 2 + (i % 4) * 7) * TILE, y: (CAMP_Y + 9 + Math.floor(i / 4) * 6) * TILE, commander: { name: nameFor(id), rank: 0, seed: id } };
 }
 export const recruit = (cls: TClass, n: number, batId?: string) => update((s0) => {
   const d = TROOPS[cls]; const lock = troopLock(s0, cls); if (lock) return lock;

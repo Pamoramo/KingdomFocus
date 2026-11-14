@@ -69,3 +69,22 @@ test('a campaign against the bandits: field battle, siege days from study, assau
   }
   assert.ok(S.getState().world.reports.length >= 1);
 });
+
+test('town watch: guards on duty, thieves capped, bounties', async () => {
+  const T = await import('./town.ts');
+  const s0 = S.newGame();
+  const homes = [0, 1, 2, 3].map((i) => ({ id: 'h' + i, kind: 'house' as const, x: 10 + i * 3, y: 10, level: 2, at: 0 }));
+  S._with({ ...s0, res: { gold: 1000, wood: 0, stone: 0, renown: 0 }, buildings: [...s0.buildings, ...homes] });
+  assert.ok(T.thiefCanStrike(), 'unguarded town with homes attracts thieves');
+  T.theft(); assert.equal(S.getState().res.gold, 980, 'theft takes 2%');
+  T.theft(); T.theft(); T.theft();
+  assert.equal(S.getState().world.town!.thefts, 3, 'at most three thefts a day');
+  assert.equal(T.thiefCanStrike(), false);
+  S._with({ ...S.getState(), res: { gold: 10000, wood: 0, stone: 0, renown: 0 } }); S.recruit('peasant', 0);
+  const b = { id: 'b', name: 'Watch', army: 'A', color: 0, emblem: 'lion', formation: 'block' as const, orders: 'patrol' as const, x: 0, y: 0, commander: { name: 'X', rank: 0, seed: 'b' } };
+  S._with({ ...S.getState(), battalions: [b], squads: [{ id: 'q', cls: 'spearman', count: 12, xp: 0, rank: 0, bat: 'b' }] });
+  const o = S.townOrder(S.getState());
+  assert.equal(o.guards, 12); assert.ok(o.ratio >= 1);
+  assert.ok(S.studyMult(S.getState()).gold > 1, 'safe streets bonus');
+  const g = S.getState().res.gold; T.caught(); assert.equal(S.getState().res.gold, g + 20);
+});

@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { type GameState, type Battalion, type Squad, batSize } from '../lib/state.ts';
+import { type GameState, type Battalion, type Squad, batSize, DUTY_CAP } from '../lib/state.ts';
 import { TCLASSES, OFFICERS } from '../lib/economy.ts';
 import { awayBats } from '../lib/warActions.ts';
 import { sFrame, bFrame, bannerTex, BW, BH, S } from './textures.ts';
@@ -22,6 +22,15 @@ export function layout(squads: Squad[], formation: Battalion['formation']) {
   return { pos: pos.map((p) => ({ ...p, x: p.x - w / 2, y: p.y - h })), w, h, qw, qh };
 }
 
+/** Soldiers a battalion sends on town duty (patrol or garrison), taken from its best-ordered squads. */
+export function dutySoldiers(s: GameState, bat: Battalion): { cls: string; rank: number }[] {
+  if (!bat.orders || bat.orders === 'formation') return [];
+  const squads = s.squads.filter((q) => q.bat === bat.id).sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank);
+  const out: { cls: string; rank: number }[] = [];
+  for (const q of squads) for (let i = 0; i < q.count && out.length < DUTY_CAP; i++) out.push({ cls: q.cls, rank: q.rank });
+  return out;
+}
+
 export class Army {
   views = new Map<string, View>();
   lod = false;
@@ -32,8 +41,10 @@ export class Army {
     for (const bat of s.battalions) {
       if (away.has(bat.id)) continue; // on campaign or lent to an ally: shown on the world map instead
       seen.add(bat.id);
-      const squads = s.squads.filter((q) => q.bat === bat.id && q.count > 0);
-      const sig = squads.map((q) => q.id + q.cls + q.count + q.rank).join() + bat.formation;
+      let duty = bat.orders && bat.orders !== 'formation' ? DUTY_CAP : 0; // soldiers on town duty leave the formation
+      const squads = s.squads.filter((q) => q.bat === bat.id && q.count > 0).sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank)
+        .map((q) => { const t = Math.min(duty, q.count); duty -= t; return { ...q, count: q.count - t }; }).filter((q) => q.count > 0);
+      const sig = squads.map((q) => q.id + q.cls + q.count + q.rank).join() + bat.formation + bat.orders;
       let v = this.views.get(bat.id);
       if (!v) {
         const sc = this.scene;

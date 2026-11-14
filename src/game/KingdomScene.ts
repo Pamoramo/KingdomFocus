@@ -7,6 +7,7 @@ import { World } from './world.ts';
 import { Army } from './army.ts';
 import { Ambient } from './ambient.ts';
 import { Chatter } from './chatter.ts';
+import { thiefCanStrike } from '../lib/town.ts';
 
 const WW = MAP_W * TILE, WH = MAP_H * TILE;
 
@@ -34,7 +35,7 @@ export class KingdomScene extends Phaser.Scene {
 
   create() {
     makeTextures(this);
-    this.world = new World(this); this.army = new Army(this); this.ambient = new Ambient(this); this.chatter = new Chatter(this);
+    this.world = new World(this); this.army = new Army(this); this.chatter = new Chatter(this); this.ambient = new Ambient(this, this.chatter);
     this.ghost = this.add.rectangle(0, 0, 16, 16, 0x44ff66, 0.3).setOrigin(0).setStrokeStyle(1, 0xffffff, 0.9).setDepth(40000).setVisible(false);
     this.selRect = this.add.rectangle(0, 0, 16, 16).setOrigin(0).setStrokeStyle(1, 0xffe27a, 1).setDepth(40001).setVisible(false);
     this.shade = this.add.rectangle(-WW, -WH, WW * 3, WH * 3, 0xffffff).setOrigin(0).setDepth(20000).setBlendMode(Phaser.BlendModes.MULTIPLY);
@@ -60,6 +61,7 @@ export class KingdomScene extends Phaser.Scene {
     this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; this.world.tick(this.frame); this.army.sync(getState(), this.frame); } });
     this.time.addEvent({ delay: 1100, loop: true, callback: () => this.smoke() });
     this.time.addEvent({ delay: 3200, loop: true, callback: () => this.chat() });
+    this.time.addEvent({ delay: 45000, loop: true, callback: () => { if (thiefCanStrike() && Math.random() < 0.4) this.ambient.spawnThief(); } });
     this.time.addEvent({ delay: 20000, loop: true, callback: () => this.applyNight() });
     this.sync();
   }

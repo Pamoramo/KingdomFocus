@@ -11,6 +11,7 @@ const LINES: Record<string, readonly string[]> = {
   guard: ['All quiet.', 'Halt! Who goes there?', 'Eyes on the horizon.', 'Nothing to report.', 'Long watch tonight.', 'Keep moving, citizen.'],
   archer: ['Bullseye!', 'Wind\'s from the west.', 'Steady... loose!', 'Almost had it.', 'Draw, aim, release.'],
   soldier: ['For the realm!', 'Hold the line!', 'My boots need mending.', 'Drill again?', 'Ready for orders.', 'Shields up!', 'I hear the captain is fair.', 'Polish that helm!'],
+  patrol: ['All clear on this street.', 'Keep your eyes open.', 'Nice day for a patrol.', 'Move along, nothing to see.', 'The night watch has it easy.', 'Mind your purses, folks!'],
   spar: ['Have at you!', 'Is that all?', 'Again!', 'Good parry!', 'Watch your footing!'],
 };
 const TALKS: [string, string][] = [

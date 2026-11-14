@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useGame, useUI, hex, fmt, mobile } from './hooks.ts';
 import { TROOPS, TCLASSES, RANKS, OFFICERS, SQUADS_PER_COMPANY, COLORS, HERALD_COLORS, EMBLEMS, HERALD_EMBLEMS, PRESTIGE_EMBLEMS, type TClass, type Formation } from '../lib/economy.ts';
-import { recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
+import { townOrder, DUTY_CAP, type Orders, recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
 import { nameFor } from '../lib/names.ts';
 import { hash } from '../lib/names.ts';
 import { setUI, focusOn } from '../game/ui.ts';
@@ -31,7 +31,7 @@ export function ArmyPanel() {
     <div className="text-sm flex items-center justify-between"><span>Soldiers <b>{fmt(armySize(s))}/{fmt(armyCap(s))}</b></span><span>Battalions <b>{s.battalions.length}</b></span></div>
     <Bar value={armySize(s)} max={armyCap(s)} />
     {tab === 'recruit' && <Recruit />}
-    {tab === 'host' && <Host />}
+    {tab === 'host' && <><TownWatch /><Host /></>}
     {tab === 'ranks' && <Ranks />}
   </div>;
 }
@@ -54,6 +54,16 @@ function Recruit() {
         </div>; })}
     </Section>)}
   </div>;
+}
+
+/** Town order: guards on duty versus what the population needs. */
+function TownWatch() {
+  const s = useGame(), o = townOrder(s);
+  if (o.pop < 6) return null;
+  const label = o.ratio >= 1 ? 'Safe streets: +3% study gold' : o.ratio >= 0.5 ? 'Uneasy, but thieves keep away' : 'Lawless: thieves may strike';
+  return <div className="card p-2 text-sm space-y-1"><div className="flex justify-between"><b>Town watch</b><span>{o.guards}/{o.needed} guards on duty</span></div>
+    <Bar value={o.guards} max={o.needed} color={o.ratio >= 1 ? 'bg-moss' : o.ratio >= 0.5 ? 'bg-gold' : 'bg-blood'} />
+    <div className="text-xs">{label}. Set battalions to <i>Patrol town</i> or <i>Garrison</i> in their orders.</div></div>;
 }
 
 function Host() {
@@ -109,7 +119,12 @@ function BattalionDetail({ bat }: { bat: Battalion }) {
         </div>
       </div>
     </Section>
-    <Section title="Formation & orders">
+    <Section title="Orders">
+      <div className="grid grid-cols-3 gap-1">{([['formation', 'Hold formation', 'Stand in formation where you send them.'], ['patrol', 'Patrol town', `Up to ${DUTY_CAP} soldiers walk the streets in pairs.`], ['garrison', 'Garrison', `Up to ${DUTY_CAP} soldiers guard doors, gates and towers.`]] as [Orders, string, string][]).map(([k, n, d]) =>
+        <button key={k} title={d} className={`btn text-sm !px-1 ${(bat.orders ?? 'formation') === k ? 'btn-gold' : ''}`} onClick={() => editBattalion(bat.id, { orders: k })}>{n}</button>)}</div>
+      <p className="text-xs opacity-80">{bat.orders === 'patrol' ? `Patrolling: ${Math.min(DUTY_CAP, n)} soldiers roam the town in pairs and chase down thieves.` : bat.orders === 'garrison' ? `On guard: ${Math.min(DUTY_CAP, n)} soldiers stand watch at doors, gates and towers.` : 'Soldiers on patrol or garrison duty keep thieves away.'}{bat.orders && bat.orders !== 'formation' && n > DUTY_CAP ? ` The other ${n - DUTY_CAP} stay in formation.` : ''}</p>
+    </Section>
+    <Section title="Formation">
       <div className="flex gap-1">{(['line', 'block', 'column'] as Formation[]).map((f) => <button key={f} className={`btn flex-1 capitalize ${bat.formation === f ? 'btn-gold' : ''}`} onClick={() => editBattalion(bat.id, { formation: f })}>{f}</button>)}</div>
       <div className="flex gap-2">
         <button className="btn btn-gold flex-1" onClick={() => { setUI({ selBat: bat.id, panel: mobile() ? null : 'army' }); focusOn(bat.x, bat.y - 20); }}>March (tap the map)</button>
