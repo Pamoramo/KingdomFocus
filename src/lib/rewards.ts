@@ -27,6 +27,18 @@ export function studyReward(ms: number, rates: Res = DEFAULT_RATES, mult: Mult =
   return { gold: f('gold'), wood: f('wood'), stone: f('stone'), renown: f('renown') };
 }
 
+/** Most a verified minute may pay, as enforced by the cloud database (migration 0004); manual minutes count half.
+ *  LEGACY is the ceiling of databases that have not re-run setup.sql since rewards became exponential. */
+export const REWARD_CEILING: Res = { gold: 100, wood: 50, stone: 30, renown: 12 };
+export const LEGACY_CEILING: Res = { gold: 40, wood: 15, stone: 9, renown: 4 };
+/** The most a session with this many verified seconds may be paid under a ceiling. */
+export function ceilingFor(verifiedSec: number, manual: boolean, c: Res = REWARD_CEILING): Res {
+  const m = Math.max(0, Math.floor(verifiedSec)) / 60 * (manual ? 0.5 : 1);
+  return { gold: Math.floor(m * c.gold), wood: Math.floor(m * c.wood), stone: Math.floor(m * c.stone), renown: Math.floor(m * c.renown) };
+}
+export const minRes = (a: Res, b: Res): Res => ({ gold: Math.min(a.gold, b.gold), wood: Math.min(a.wood, b.wood), stone: Math.min(a.stone, b.stone), renown: Math.min(a.renown, b.renown) });
+export const fitsCeiling = (amt: Res, verifiedSec: number, manual: boolean, c: Res = REWARD_CEILING) => { const cap = ceilingFor(verifiedSec, manual, c); return amt.gold <= cap.gold + 1 && amt.wood <= cap.wood + 1 && amt.stone <= cap.stone + 1 && amt.renown <= cap.renown + 1; };
+
 export const add = (a: Res, b: Partial<Res>, k = 1): Res => ({
   gold: a.gold + (b.gold ?? 0) * k, wood: a.wood + (b.wood ?? 0) * k, stone: a.stone + (b.stone ?? 0) * k, renown: a.renown + (b.renown ?? 0) * k,
 });

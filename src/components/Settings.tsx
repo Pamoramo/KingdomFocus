@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { supabase, signIn, magicLink, signOut, syncNow, getSyncStatus, syncStatus, getUser } from '../lib/sync.ts';
+import { supabase, signIn, magicLink, signOut, syncNow, getSyncStatus, syncStatus, getUser, getSchemaVersion, SCHEMA_WANTED } from '../lib/sync.ts';
 import { setState, newGame, setSettings, unlocked, getState } from '../lib/state.ts';
 import { DEFAULT_RATES, RES_KEYS } from '../lib/rewards.ts';
 import { useGame } from './hooks.ts';
@@ -20,6 +20,10 @@ function Account() {
   const [email, setEmail] = useState(''), [pw, setPw] = useState(''), [msg, setMsg] = useState<string | null>(null);
   return <Section title="Account & cloud save">
     <div className="text-sm">Status: <b>{status}</b></div>
+    {user && getSchemaVersion() !== null && getSchemaVersion()! < SCHEMA_WANTED && <div className="text-sm border-2 border-blood/60 bg-blood/10 p-2 space-y-1">
+      <b>Your cloud database needs an update.</b>
+      <p className="text-xs">It still has an older reward limit, so rewards from long or boosted study sessions are kept on this device until it is updated. Open your Supabase project → <b>SQL Editor</b> → paste the whole of <code>supabase/setup.sql</code> from the game's files → <b>Run</b>. It is safe to run more than once, and nothing is lost.</p>
+    </div>}
     {!supabase && <p className="text-xs">Cloud sync is not configured for this deployment (see README). Progress is saved on this device.</p>}
     {supabase && (user ? <>
       <div className="text-sm">Signed in as <b>{user.email}</b>. Your kingdom syncs automatically across devices.</div>

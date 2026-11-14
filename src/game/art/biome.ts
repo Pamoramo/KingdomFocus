@@ -2,7 +2,7 @@
 import { P, r, px, canvas, outline, rng, shade } from './px.ts';
 import type { Biome } from '../../lib/realms.ts';
 
-const GROUND: Record<Biome, { base: string; dots: string[]; alt: string }> = {
+export const GROUND: Record<Biome, { base: string; dots: string[]; alt: string }> = {
   grassland: { base: P.grass, dots: [P.grassD, P.grassL], alt: P.grassL },
   desert: { base: '#e2c88e', dots: ['#c9ac6e', '#f2dcaa', '#d8b878'], alt: '#d4b47a' },
   tundra: { base: '#e8eef4', dots: ['#d0dae6', '#ffffff', '#c4d2e2'], alt: '#b8d4ec' },

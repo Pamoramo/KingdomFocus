@@ -1,8 +1,9 @@
-import { type Res, ZERO, DEFAULT_RATES, MANUAL_FACTOR, MANUAL_MAX_PER_DAY_MIN, add, sub, maxRes, canAfford, full, scale, studyReward, isZero } from './rewards.ts';
+import { type Res, ZERO, DEFAULT_RATES, MANUAL_FACTOR, MANUAL_MAX_PER_DAY_MIN, add, sub, maxRes, canAfford, full, scale, studyReward, isZero, ceilingFor, minRes } from './rewards.ts';
 import { type Session, type SessionCfg, DEFAULT_CFG, startSession, tick, checkIn, pause, takeBreak, endSession, uid, MIN } from './study.ts';
 import { type Habit, type Freq, progress, streak, habitReward, MILESTONES, dayKey, periodKey } from './habits.ts';
 import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, SQUADS_PER_COMPANY, TCLASSES, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
 import { nameFor } from './names.ts';
+import type { Biome } from './realms.ts';
 import { type WorldState, type Engines, initWorld, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN } from './war.ts';
 import type { Unit, BattleResult } from './battle.ts';
 
@@ -51,7 +52,9 @@ type L = () => void;
 let state: GameState = newGame();
 const listeners = new Set<L>();
 export const fxBus = new EventTarget();
-export interface BattlePlay { title: string; a: Unit[]; b: Unit[]; result: BattleResult; aName: string; bName: string; aColor: number; bColor: number; engines?: Engines }
+/** Where a battle is fought: the biome, and which side (0 = left, 1 = right) holds walls of stone or a palisade. */
+export interface BattleSite { biome: Biome; walls?: { side: 0 | 1; kind: 'wall' | 'palisade' } }
+export interface BattlePlay { title: string; a: Unit[]; b: Unit[]; result: BattleResult; aName: string; bName: string; aColor: number; bColor: number; engines?: Engines; site?: BattleSite }
 export type Fx = { kind: 'reward' | 'build' | 'error' | 'info' | 'achieve' | 'stage' | 'promote' | 'battle' | 'war'; text: string; res?: Partial<Res>; x?: number; y?: number; id?: string; big?: boolean; battle?: BattlePlay };
 export const emit = (fx: Fx) => fxBus.dispatchEvent(new CustomEvent('fx', { detail: fx }));
 export const getState = () => state;
@@ -411,7 +414,8 @@ function record(sess: NonNullable<GameState['session']>, now: number): StudyReco
 /** Grants whatever the verified time has earned beyond what was already awarded. */
 function settle(s: GameState, sess: NonNullable<GameState['session']>): GameState {
   const now = Date.now();
-  const total = studyReward(sess.verifiedMs, s.settings.rates, studyMult(s));
+  // never more than the cloud database accepts per verified minute (big market/storehouse bonuses could exceed it)
+  const total = minRes(studyReward(sess.verifiedMs, s.settings.rates, studyMult(s)), ceilingFor(sess.verifiedMs / 1000, false));
   const awarded = maxRes(total, sess.awarded), delta = sub(awarded, sess.awarded);
   let o = studyLedger(s, 'study', sess.id, total, sess.awarded);
   const xpMin = (sess.verifiedMs - sess.xpMs) / MIN;
@@ -460,7 +464,7 @@ export const logManual = (subject: string, minutes: number, when: number, note: 
   const day = dayKey(new Date(when));
   const used = s.sessions.filter((r) => r.source === 'manual' && dayKey(new Date(r.startedAt)) === day).reduce((a, r) => a + r.verifiedSec / 60, 0);
   if (used + minutes > MANUAL_MAX_PER_DAY_MIN) return `Manual logs are limited to ${MANUAL_MAX_PER_DAY_MIN} min per day`;
-  const id = uid(), reward = studyReward(minutes * MIN, s.settings.rates, studyMult(s), MANUAL_FACTOR);
+  const id = uid(), reward = minRes(studyReward(minutes * MIN, s.settings.rates, studyMult(s), MANUAL_FACTOR), ceilingFor(minutes * 60, true));
   const rec: StudyRecord = { id, subject, source: 'manual', startedAt: when - minutes * MIN, endedAt: when, verifiedSec: minutes * 60, forfeitedSec: 0, checkIns: 0, missed: 0, notes: note, reward };
   let o = mark({ ...s, sessions: [rec, ...s.sessions], subjects: s.subjects.includes(subject) ? s.subjects : [...s.subjects, subject] }, 'sessions', id);
   o = studyLedger(o, 'manual', id, reward, ZERO);
@@ -478,8 +482,7 @@ export function stableUuid(key: string) {
 /** One-time compensation: credits a study session at `factor` times the normal reward. Idempotent per id. */
 export const grantCompensation = (id: string, minutes: number, factor: number, subject: string, note: string) => update((s) => {
   if (s.sessions.some((r) => r.id === id)) return s;
-  const raw = studyReward(minutes * MIN, s.settings.rates, studyMult(s), factor), cap = { gold: 100, wood: 50, stone: 30, renown: 12 }; // the server's per-minute ceiling
-  const now = Date.now(), reward = { gold: Math.min(raw.gold, minutes * cap.gold), wood: Math.min(raw.wood, minutes * cap.wood), stone: Math.min(raw.stone, minutes * cap.stone), renown: Math.min(raw.renown, minutes * cap.renown) };
+  const now = Date.now(), reward = minRes(studyReward(minutes * MIN, s.settings.rates, studyMult(s), factor), ceilingFor(minutes * 60, false));
   const rec: StudyRecord = { id, subject, source: 'timer', startedAt: now - minutes * MIN, endedAt: now, verifiedSec: minutes * 60, forfeitedSec: 0, checkIns: 0, missed: 0, notes: note, reward };
   let o = mark({ ...s, sessions: [rec, ...s.sessions] }, 'sessions', id);
   o = studyLedger(o, 'study', id, reward, ZERO);

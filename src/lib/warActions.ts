@@ -1,5 +1,6 @@
 // Player actions for diplomacy and war. Every resource change goes through the ledger.
-import { neglect, type GameState, type Squad, _internal, studyHooks, emit, getState, setState, count, maxLevel, has, armySize, canAfford, TILE, CAMP_X, CAMP_Y } from './state.ts';
+import { neglect, type GameState, type Squad, _internal, studyHooks, emit, getState, setState, count, maxLevel, has, armySize, canAfford, TILE, CAMP_X, CAMP_Y, type BattleSite } from './state.ts';
+import { biomeOf, realmLayout } from './realms.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
 import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
@@ -42,8 +43,8 @@ function report(s: GameState, title: string, win: boolean, res: BattleResult, yo
   void you; void foe;
   return { ...s, world: { ...s.world, reports: [rep, ...s.world.reports].slice(0, 25) } };
 }
-function play(title: string, a: Unit[], b: Unit[], result: BattleResult, aName: string, bName: string, aColor: number, bColor: number, engines?: Engines) {
-  emit({ kind: 'battle', text: title, battle: { title, a, b, result, aName, bName, aColor, bColor, engines } });
+function play(title: string, a: Unit[], b: Unit[], result: BattleResult, aName: string, bName: string, aColor: number, bColor: number, engines?: Engines, site?: BattleSite) {
+  emit({ kind: 'battle', text: title, battle: { title, a, b, result, aName, bName, aColor, bColor, engines, site } });
 }
 
 // ---------------- daily world turn & study hooks ----------------
@@ -235,7 +236,7 @@ export const fieldBattle = (tactic: Tactic) => update((s) => {
   else o = goHome(W(o, { ...w, campaign: null, engines: addEngines(w.engines, c.engines), supplies: w.supplies + c.supplies }), r, c.battalions, `Your host retreating from ${r.name}`);
   o = ledger(o, 'loot', uid(), res.winner === 'a' ? fieldSpoils(r) : ZERO);
   o = report(o, `Battle before ${r.name}`, res.winner === 'a', res, a, foe, res.winner === 'a' ? fieldSpoils(r) : undefined);
-  play(`Battle before ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color);
+  play(`Battle before ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color, undefined, { biome: biomeOf(s.world, r) });
   return event(o, 'war', res.winner === 'a' ? `Defeated ${r.name}'s army in the field.` : `Defeated in the field by ${r.name}; the host retreats.`);
 });
 const addEngines = (a: Engines, b: Engines): Engines => { const o = { ...a }; for (const e of ENGINE_IDS) o[e] += b[e]; return o; };
@@ -273,7 +274,7 @@ export const assault = (tactic: Tactic) => update((s) => {
     { name: `${r.name} garrison`, units: foe, commander: Math.min(4, r.level - 1), tactic: 'shieldwall', fort: wallFort(c) }, r.terrain, seed, true);
   res = capLosses(res, 'a', 0.5);
   let o = applyLosses(s, a, res.lossA);
-  play(`Assault on ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color, c.engines);
+  play(`Assault on ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color, c.engines, { biome: biomeOf(s.world, r), walls: { side: 1, kind: realmLayout(s.world, r).wallKind } });
   o = report(o, `Assault on ${r.name}`, res.winner === 'a', res, a, foe);
   if (res.winner === 'a') return conquer(o, r);
   const killed = sidePower(foe.map((u, i) => ({ ...u, count: res.lossB[i] })));
@@ -309,7 +310,7 @@ export const defend = (tactic: Tactic) => update((s) => {
   let o = applyLosses(s, a, res.lossB);
   const won = res.winner === 'b';
   const flipped: BattleResult = { ...res, winner: won ? 'a' : 'b', lossA: res.lossB, lossB: res.lossA, startA: res.startB, startB: res.startA, moraleA: res.moraleB, moraleB: res.moraleA };
-  play(`Defence of your castle`, a, foe, flipped, 'Your garrison', r.name, 0xb3242a, r.color);
+  play(`Defence of your castle`, a, foe, flipped, 'Your garrison', r.name, 0xb3242a, r.color, undefined, { biome: 'grassland', walls: count(s, 'wall') + count(s, 'gatehouse') > 0 ? { side: 0, kind: 'wall' } : count(s, 'palisade') > 0 ? { side: 0, kind: 'palisade' } : undefined });
   o = report(o, `Defence against ${r.name}`, won, flipped, a, foe, won ? defenceSpoils(r) : undefined);
   let w = { ...o.world, threat: null, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.round(x.power * (won ? 0.6 : 0.9)), relation: Math.min(100, x.relation + 10), beaten: won ? 1 : x.beaten } : x)) };
   if (won) { o = ledger(W(o, w), 'loot', uid(), defenceSpoils(r)); emit({ kind: 'achieve', text: `${r.name}'s host is broken before your walls!` }); }

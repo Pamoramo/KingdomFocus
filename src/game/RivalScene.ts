@@ -11,7 +11,7 @@ import { withoutOutline } from './art/px.ts';
 import { wallWalk } from './art/buildings.ts';
 import { bTex, tileTex, waterTex, sFrame, bannerTex, S } from './textures.ts';
 import { Chatter } from './chatter.ts';
-import { WeatherFx, weatherAt, type Weather } from './weather.ts';
+import { WeatherFx, weatherAt, biomeWeather } from './weather.ts';
 import { nightFactor } from './KingdomScene.ts';
 import { audio } from './audio.ts';
 
@@ -28,13 +28,6 @@ const FOLK: Record<Biome, string[]> = {
   highlands: ['The pass is steep today.', 'Goats everywhere!', 'You can see for miles up here.'],
 };
 /** Weather leans on the biome: deserts stay dry, the tundra snows, swamps fog over. */
-function biomeWeather(b: Biome, w: Weather): Weather {
-  if (b === 'desert') return w === 'rain' || w === 'storm' || w === 'snow' || w === 'fog' ? 'clear' : w;
-  if (b === 'tundra') return w === 'rain' || w === 'storm' || w === 'cloudy' ? 'snow' : w;
-  if (b === 'swamp') return w === 'cloudy' || w === 'clear' ? (Math.floor(Date.now() / 480000) % 2 ? 'fog' : w) : w;
-  if (b === 'forest') return w === 'snow' ? 'rain' : w;
-  return w === 'snow' && b === 'grassland' ? 'snow' : w;
-}
 
 interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; onWall?: boolean; tx?: number; ty?: number; wait?: number; ph: number }
 

@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { audio } from './audio.ts';
 import { getState } from '../lib/state.ts';
+import type { Biome } from '../lib/realms.ts';
 
 export type Weather = 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog' | 'snow';
 export const WEATHER_NAME: Record<Weather, string> = { clear: 'Clear skies', cloudy: 'Cloudy', rain: 'Rain', storm: 'Thunderstorm', fog: 'Fog', snow: 'Snow' };
@@ -16,6 +17,15 @@ export function weatherAt(t = Date.now()): Weather {
   if (roll < 0.64 + fog) return 'fog';
   if (roll < 0.93) return winter ? 'snow' : 'rain';
   return winter ? 'snow' : 'storm';
+}
+
+/** The same sky, as it falls in each biome: no rain in the desert, snow on the tundra, mist in the swamp. */
+export function biomeWeather(b: Biome, w: Weather): Weather {
+  if (b === 'desert') return w === 'rain' || w === 'storm' || w === 'snow' || w === 'fog' ? 'clear' : w;
+  if (b === 'tundra') return w === 'rain' || w === 'storm' || w === 'cloudy' ? 'snow' : w;
+  if (b === 'swamp') return w === 'cloudy' || w === 'clear' ? (Math.floor(Date.now() / 480000) % 2 ? 'fog' : w) : w;
+  if (b === 'forest') return w === 'snow' ? 'rain' : w;
+  return w === 'snow' && b === 'grassland' ? 'snow' : w;
 }
 
 /** Rain, snow, fog, drifting cloud shadows, lightning and the matching ambience. */

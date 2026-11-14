@@ -1,7 +1,7 @@
 // Pure translation between the local game state and the database sync payload/snapshot.
 import type { GameState, StudyRecord, Building, Battalion, Squad, Completion, KEvent, Table } from './state.ts';
 import type { Habit } from './habits.ts';
-import type { Res } from './rewards.ts';
+import { type Res, ceilingFor, fitsCeiling, minRes, LEGACY_CEILING } from './rewards.ts';
 import type { TechId } from './economy.ts';
 
 const iso = (ms: number | null | undefined) => (ms == null ? null : new Date(ms).toISOString());
@@ -10,8 +10,17 @@ const pick = <T extends { id: string }>(list: T[], ids: string[] = []) => { cons
 
 export interface Sent { payload: Record<string, unknown>; refs: { ledger: GameState['outbox']['ledger']; dirty: Partial<Record<Table, unknown[]>>; dead: GameState['outbox']['dead']; events: string[]; techs: boolean } }
 
-export function buildPayload(s: GameState): Sent {
-  const d = s.outbox.dirty, now = new Date().toISOString();
+/** Study rewards an old database (pre-0004 ceiling) would reject; they wait in the outbox until it is updated. */
+export function heldBack(s: GameState): Set<GameState['outbox']['ledger'][number]> {
+  const out = new Set<GameState['outbox']['ledger'][number]>();
+  for (const l of s.outbox.ledger) if (l.kind === 'study' || l.kind === 'manual') { const r = s.sessions.find((x) => x.id === l.ref); if (r && !fitsCeiling(l.amt, r.verifiedSec, l.kind === 'manual', LEGACY_CEILING)) out.add(l); }
+  return out;
+}
+/** Builds the sync payload. With `hold`, those ledger rows are left out (and stay in the outbox). */
+export function buildPayload(s: GameState, hold: Set<GameState['outbox']['ledger'][number]> = new Set()): Sent {
+  const d = s.outbox.dirty, now = new Date().toISOString(), ledgerRows = s.outbox.ledger.filter((l) => !hold.has(l));
+  // last line of defence: a study reward never exceeds what the database accepts for its verified time
+  const fit = (l: GameState['outbox']['ledger'][number]) => { if (l.kind !== 'study' && l.kind !== 'manual') return l.amt; const r = s.sessions.find((x) => x.id === l.ref); return r ? minRes(l.amt, ceilingFor(r.verifiedSec, l.kind === 'manual')) : l.amt; };
   const sessions = pick(s.sessions, d.sessions), habits = pick(s.habits, d.habits), comps = pick(s.completions, d.completions);
   const buildings = pick(s.buildings, d.buildings), bats = pick(s.battalions, d.battalions), squads = pick(s.squads, d.squads);
   const evIds = new Set(s.outbox.events), events = s.events.filter((e) => evIds.has(e.id));
@@ -19,7 +28,7 @@ export function buildPayload(s: GameState): Sent {
     sessions: sessions.map((r) => ({ id: r.id, subject: r.subject, source: r.source, started_at: iso(r.startedAt), ended_at: iso(r.endedAt), verified_seconds: r.verifiedSec, forfeited_seconds: r.forfeitedSec, check_ins: r.checkIns, missed: r.missed, notes: r.notes })),
     habits: habits.map((h) => ({ id: h.id, name: h.name, freq: h.freq, target: h.target, unit: h.unit, weight: h.weight, require_note: h.requireNote, best: h.best, earned: h.earned, archived: !!h.archived, created_at: iso(h.created), updated_at: now })),
     completions: comps.map((c) => ({ habit_id: c.habitId, period: c.period, count: c.count, done: c.done, note: c.note ?? null, at: iso(c.at) })),
-    ledger: s.outbox.ledger.map((l) => ({ kind: l.kind, ref: l.ref, ...l.amt, at: iso(l.at) })),
+    ledger: ledgerRows.map((l) => ({ kind: l.kind, ref: l.ref, ...fit(l), at: iso(l.at) })),
     buildings: buildings.map((b) => ({ id: b.id, kind: b.kind, x: b.x, y: b.y, level: b.level, built_at: iso(b.at), updated_at: now })),
     battalions: bats.map((b) => ({ id: b.id, name: b.name, army: b.army, color: b.color, emblem: b.emblem, formation: b.formation, orders: b.orders ?? 'formation', x: b.x, y: b.y, commander: b.commander, updated_at: now })),
     squads: squads.map((q) => ({ id: q.id, battalion_id: q.bat, cls: q.cls, count: q.count, xp: q.xp, rank: q.rank, updated_at: now })),
@@ -28,7 +37,7 @@ export function buildPayload(s: GameState): Sent {
     dead: s.outbox.dead,
     kingdom: { stage: s.stage, achievements: s.achievements, subjects: s.subjects, settings: s.settings, active_session: s.session, world: s.world },
   };
-  return { payload, refs: { ledger: s.outbox.ledger, dirty: { sessions, habits, completions: comps, buildings, battalions: bats, squads }, dead: s.outbox.dead, events: s.outbox.events, techs: s.outbox.techs } };
+  return { payload, refs: { ledger: ledgerRows, dirty: { sessions, habits, completions: comps, buildings, battalions: bats, squads }, dead: s.outbox.dead, events: s.outbox.events, techs: s.outbox.techs } };
 }
 
 /** Removes what was successfully sent, keeping anything that changed while the request was in flight. */

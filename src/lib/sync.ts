@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { getState, setState, subscribe, newGame, emit, grantCompensation, stableUuid, type GameState } from './state.ts';
-import { buildPayload, clearSent, outboxEmpty, adoptSnapshot, type Snapshot } from './syncCore.ts';
+import { buildPayload, clearSent, outboxEmpty, adoptSnapshot, heldBack, type Snapshot } from './syncCore.ts';
 
 import { SUPABASE_URL as URL, SUPABASE_ANON_KEY as KEY } from './config.ts';
 export const supabase: SupabaseClient | null = URL && KEY ? createClient(URL, KEY) : null;
@@ -11,6 +11,20 @@ export const syncStatus = new EventTarget();
 let status = supabase ? 'signed out' : 'local only';
 const setStatus = (s: string) => { status = s; syncStatus.dispatchEvent(new Event('change')); };
 export const getSyncStatus = () => status;
+/** Schema version of the cloud database (null until checked; 0 = older than migration 0005). */
+let schema: number | null = null;
+export const getSchemaVersion = () => schema;
+export const SCHEMA_WANTED = 5;
+/** True once the database rejected a study reward for exceeding its (old) ceiling: such rewards wait locally. */
+const LEGACY_KEY = 'kod-legacy-ceiling';
+let legacy = (() => { try { return localStorage.getItem(LEGACY_KEY) === '1'; } catch { return false; } })(), lastProbe = 0;
+const setLegacy = (v: boolean) => { legacy = v; try { v ? localStorage.setItem(LEGACY_KEY, '1') : localStorage.removeItem(LEGACY_KEY); } catch { /* storage blocked */ } };
+const CEILING_ERR = /exceeds allowed rate/;
+async function checkSchema() {
+  if (!supabase || schema !== null) return;
+  const { data, error } = await supabase.rpc('kod_schema_version');
+  schema = error ? 0 : Number(data) || 0; syncStatus.dispatchEvent(new Event('change'));
+}
 export const getUser = () => user;
 
 const saveLocal = () => { try { localStorage.setItem(LS, JSON.stringify(getState())); } catch { /* storage full or blocked */ } };
@@ -41,14 +55,25 @@ export async function syncNow() {
       }
       setState({ ...s, owner: user.id }, false); pulled = true;
     }
-    const sent = buildPayload(getState());
-    const snap = await rpc(sent.payload);
+    void checkSchema().catch(() => {});
+    // an outdated database rejects big study rewards; send everything else and keep those waiting locally
+    const probe = legacy && Date.now() - lastProbe > 10 * 60_000; // every 10 minutes, see whether the database was updated
+    let sent = buildPayload(getState(), legacy && !probe ? heldBack(getState()) : new Set()), snap: Snapshot;
+    try { snap = await rpc(sent.payload); if (probe && legacy) setLegacy(false); }
+    catch (e) {
+      if (!CEILING_ERR.test((e as Error).message)) throw e;
+      lastProbe = Date.now(); setLegacy(true);
+      sent = buildPayload(getState(), heldBack(getState())); snap = await rpc(sent.payload);
+    }
+    if (probe) lastProbe = Date.now();
     let s = clearSent(getState(), sent);
     const adopted = outboxEmpty(s);
     if (adopted) s = adoptSnapshot(s, snap);
     setState(s, false); saveLocal();
     if (adopted) compensate(user.id);
-    failures = 0; setStatus(`saved to cloud ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+    failures = 0;
+    const waiting = legacy ? heldBack(getState()).size : 0;
+    setStatus(`saved to cloud ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${waiting ? ` · ${waiting} study reward${waiting > 1 ? 's' : ''} waiting: update the database (run supabase/setup.sql)` : ''}`);
   } catch (e) {
     failures++; setStatus(`offline, will retry (${(e as Error).message.slice(0, 60)})`);
     clearTimeout(syncT); syncT = setTimeout(syncNow, Math.min(300_000, 5000 * 2 ** failures));
