@@ -141,3 +141,30 @@ export function iconCanvas(name: string, scale = 1): HTMLCanvasElement {
   m.forEach((row, y) => [...row].forEach((ch, x) => { if (ch !== '.') r(c, x * scale, y * scale, scale, scale, ICOL[ch]); }));
   return cv;
 }
+
+// ---------------- town animals ----------------
+/** Small animals for town events: pig, chicken, cat. Frame 0/1 is a two-step trot. */
+export function animal(kind: 'pig' | 'chicken' | 'cat', f: number): HTMLCanvasElement {
+  const [cv, c] = canvas(14, 12), b = f ? 1 : 0;
+  if (kind === 'pig') {
+    r(c, 2, 3 + b, 9, 6, '#f0a8b0'); r(c, 3, 2 + b, 7, 1, '#f6c0c6'); r(c, 10, 4 + b, 3, 3, '#f0a8b0'); r(c, 12, 5 + b, 1, 2, '#d07a88'); px(c, 11, 4 + b, P.out); r(c, 9, 2 + b, 2, 2, '#e08898');
+    px(c, 1, 4 + b, '#d07a88'); px(c, 0, 3 + b, '#d07a88'); r(c, 2, 8 + b, 9, 1, '#d07a88');
+    for (const [x, d] of [[3, 0], [5, 1], [8, 0], [10, 1]]) r(c, x, 9, 1, 2 + ((d + f) % 2 ? 0 : 1) - b, '#c06878');
+  } else if (kind === 'chicken') {
+    r(c, 4, 4 + b, 6, 5, '#ffffff'); r(c, 3, 5 + b, 2, 3, '#e8e8e8'); r(c, 8, 1 + b, 3, 4, '#ffffff'); px(c, 11, 3 + b, '#f0a020'); px(c, 9, 2 + b, P.out); px(c, 9, 0 + b, '#e03030'); px(c, 10, 0 + b, '#e03030'); px(c, 10, 5 + b, '#e03030');
+    r(c, 6, 9, 1, 2, '#f0a020'); r(c, 8, 9, 1, 2 - b, '#f0a020');
+  } else {
+    r(c, 2, 5 + b, 8, 4, '#5a5a5a'); r(c, 9, 2 + b, 4, 4, '#5a5a5a'); px(c, 9, 1 + b, '#5a5a5a'); px(c, 12, 1 + b, '#5a5a5a'); px(c, 11, 3 + b, '#a8e040'); r(c, 0, 3 + b, 2, 1, '#5a5a5a'); px(c, 1, 4 + b, '#5a5a5a');
+    for (const x of [3, 8]) r(c, x, 9, 1, 2 - (f && x === 3 ? 1 : 0), '#4a4a4a');
+  }
+  outline(cv); return cv;
+}
+/** The event marker: a softly glowing question mark on a parchment disc. */
+export function questionMark(): HTMLCanvasElement {
+  const [cv, c] = canvas(16, 18);
+  c.fillStyle = '#fff4d6'; c.beginPath(); c.arc(8, 8, 7.5, 0, 7); c.fill(); c.strokeStyle = '#3a2412'; c.lineWidth = 1; c.beginPath(); c.arc(8, 8, 7, 0, 7); c.stroke();
+  const m = ['.ooo.', 'o...o', '....o', '...o.', '..o..', '.....', '..o..'];
+  m.forEach((row, y) => [...row].forEach((ch, x) => { if (ch === 'o') r(c, 5 + x, 3 + y, 1, 1, '#7a3a1a'); }));
+  r(c, 7, 15, 2, 3, '#3a2412'); px(c, 8, 17, '#3a2412');
+  return cv;
+}

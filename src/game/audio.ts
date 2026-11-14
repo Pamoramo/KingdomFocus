@@ -1,6 +1,6 @@
 // Procedural audio: synthesized sound effects, generative medieval music and ambience. No audio files.
 export type Mood = 'day' | 'night' | 'war';
-export type Sfx = 'thunder' | 'click' | 'coin' | 'build' | 'recruit' | 'promote' | 'stage' | 'achieve' | 'error' | 'march' | 'clash' | 'arrows' | 'catapult' | 'horn' | 'victory' | 'defeat' | 'checkin' | 'break' | 'reward';
+export type Sfx = 'lute' | 'thunder' | 'click' | 'coin' | 'build' | 'recruit' | 'promote' | 'stage' | 'achieve' | 'error' | 'march' | 'clash' | 'arrows' | 'catapult' | 'horn' | 'victory' | 'defeat' | 'checkin' | 'break' | 'reward';
 
 const NOTE = (n: number) => 146.83 * 2 ** (n / 12); // semitones above D3
 const MODES: Record<Mood, number[]> = { day: [0, 2, 3, 5, 7, 9, 10], night: [0, 2, 3, 5, 7, 8, 10], war: [0, 1, 3, 5, 7, 8, 10] }; // dorian, aeolian, phrygian
@@ -134,6 +134,7 @@ class Engine {
     if (!this.ctx) return; const c = this.ctx, t = c.currentTime + 0.01, out = this.sfx;
     const notes = (fs: number[], gap: number, type: OscillatorType = 'square', peak = 0.08, d = 0.22) => fs.forEach((f, i) => this.osc(type, f, t + i * gap, peak, 0.005, d, out));
     switch (name) {
+      case 'lute': [0, 3, 5, 7, 5, 3, 7, 10, 12].forEach((n, i) => this.pluck(NOTE(n + 12), t + i * 0.24, 0.1, out)); break;
       case 'thunder': { const f = this.noise(t, 2.8, 0.5, out, 'lowpass', 160); f.frequency.exponentialRampToValueAtTime(60, t + 2.8); this.noise(t, 0.25, 0.25, out, 'highpass', 900); break; }
       case 'click': this.osc('square', 1400, t, 0.03, 0.002, 0.03, out); break;
       case 'coin': notes([988, 1319], 0.07, 'square', 0.06, 0.18); break;

@@ -31,3 +31,17 @@ export const caught = () => update((s) => {
   const o = ledger(s, 'loot', uid(), { ...ZERO, gold: 20, renown: 2 });
   return event({ ...o, world: { ...o.world, town: { ...t, caught: t.caught + 1 } } }, 'town', 'Guards caught a thief in the streets.');
 });
+
+export const MAX_EVENT_REWARDS = 6;
+/** A town event finished: log it and grant its small reward (at most 6 rewarded events a day). */
+export const townEvent = (title: string, res: Partial<{ gold: number; renown: number }> = {}, squadXp = 0) => update((s) => {
+  const t = s.world.town && s.world.town.day === dayStr() ? s.world.town : { day: dayStr(), thefts: 0, caught: 0 };
+  const n = t.events ?? 0, pays = n < MAX_EVENT_REWARDS && ((res.gold ?? 0) > 0 || (res.renown ?? 0) > 0 || squadXp > 0);
+  let o: GameState = { ...s, world: { ...s.world, town: { ...t, events: n + 1 } } };
+  if (pays) {
+    o = ledger(o, 'loot', uid(), { ...ZERO, gold: res.gold ?? 0, renown: res.renown ?? 0 });
+    if (squadXp && o.squads.length) { const q = o.squads[Math.floor(Math.random() * o.squads.length)]; o = _internal.mark({ ...o, squads: o.squads.map((x) => (x.id === q.id ? { ...x, xp: x.xp + squadXp } : x)) }, 'squads', q.id); }
+    emit({ kind: 'reward', text: title, res: res as Partial<{ gold: number; wood: number; stone: number; renown: number }> });
+  } else emit({ kind: 'info', text: title });
+  return event(o, 'town', title);
+});

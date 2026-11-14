@@ -33,7 +33,7 @@ export interface Threat { rival: string; power: number; since: number; allyHelp:
 export interface Missive { id: string; rival: string; kind: 'tribute_demand' | 'trade_offer' | 'aid_request' | 'alliance_offer' | 'peace_offer' | 'news'; text: string; amount?: number; day: string }
 export interface Loan { bat: string; rival: string; leftMin: number }
 export interface Report { id: string; t: number; title: string; win: boolean; lines: string[]; you: number; foe: number; lostYou: number; lostFoe: number; loot?: Partial<Res> }
-export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number } }
+export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number } }
 
 export const SIEGE_DAY_MIN = 20;          // verified study minutes per siege day
 export const SUPPLY_COST = { gold: 15, wood: 5 }; // buys 10 supplies

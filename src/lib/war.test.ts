@@ -107,3 +107,12 @@ test('neglect: two grace days, then crime and hostile letters; study clears it',
   assert.ok(w.inbox.some((m) => m.id.endsWith('-neglect') && /Study/.test(m.text)), 'a rival sends a threat');
   assert.ok(w.rivals.some((r) => (r.personality === 'aggressive' || r.personality === 'treacherous') && !r.bandits && r.relation < before[r.id] - 5), 'warlike rivals grow hostile');
 });
+
+test('town events: small rewards, at most six a day', async () => {
+  const T = await import('./town.ts');
+  S._with({ ...S.newGame(), res: { gold: 0, wood: 0, stone: 0, renown: 0 } });
+  for (let i = 0; i < 9; i++) T.townEvent('A pig escaped', { gold: 10 });
+  assert.equal(S.getState().res.gold, 60, 'six rewarded events');
+  assert.equal(S.getState().world.town!.events, 9, 'all events still logged');
+  T.townEvent('Tipsy villager'); assert.equal(S.getState().res.gold, 60);
+});

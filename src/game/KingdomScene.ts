@@ -8,6 +8,7 @@ import { Army } from './army.ts';
 import { Ambient } from './ambient.ts';
 import { Chatter } from './chatter.ts';
 import { WeatherFx, weatherAt } from './weather.ts';
+import { TownEvents } from './events.ts';
 import { thiefCanStrike, thiefChance } from '../lib/town.ts';
 
 const WW = MAP_W * TILE, WH = MAP_H * TILE;
@@ -25,7 +26,7 @@ export function nightFactor(mode: string, d = new Date()): { n: number; warm: nu
 const lerpColor = (a: number, b: number, t: number) => { const ch = (s: number) => Math.round(((a >> s) & 255) + (((b >> s) & 255) - ((a >> s) & 255)) * t); return (ch(16) << 16) | (ch(8) << 8) | ch(0); };
 
 export class KingdomScene extends Phaser.Scene {
-  private world!: World; private army!: Army; private ambient!: Ambient; private chatter!: Chatter; private weather!: WeatherFx;
+  private world!: World; private army!: Army; private ambient!: Ambient; private chatter!: Chatter; private weather!: WeatherFx; happenings!: TownEvents;
   private ghost!: Phaser.GameObjects.Rectangle; private selRect!: Phaser.GameObjects.Rectangle; private shade!: Phaser.GameObjects.Rectangle;
   private frame = 0; private unsub: (() => void)[] = [];
   private pinch: { d: number; z: number } | null = null;
@@ -62,6 +63,8 @@ export class KingdomScene extends Phaser.Scene {
     this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; this.world.tick(this.frame); this.army.sync(getState(), this.frame); } });
     this.time.addEvent({ delay: 1100, loop: true, callback: () => this.smoke() });
     this.time.addEvent({ delay: 7000, loop: true, callback: () => this.chat() });
+    this.happenings = new TownEvents(this, this.chatter);
+    this.time.addEvent({ delay: 60000, loop: true, callback: () => this.happenings.maybeSpawn(0.3) });
     this.weather = new WeatherFx(this, WW, WH);
     const doWeather = () => { const w = weatherAt(); this.weather.set(w); if (getUI().weather !== w) setUI({ weather: w }); };
     doWeather(); this.time.addEvent({ delay: 30000, loop: true, callback: doWeather });
@@ -91,7 +94,7 @@ export class KingdomScene extends Phaser.Scene {
 
   update(time: number, dt: number) {
     const s = getState(), ui = getUI(), cam = this.cameras.main;
-    this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.chatter.update(); this.weather?.update(cam);
+    this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.chatter.update(); this.weather?.update(cam); this.happenings?.update();
     if (this.night > 0.05) for (const l of this.world.lights) l.setAlpha(this.night * (0.55 + Math.random() * 0.15));
     else if (this.world.lights[0]?.alpha) for (const l of this.world.lights) l.setAlpha(0);
     const k = this.keys, sp = ((k.SHIFT.isDown ? 900 : 400) * dt) / 1000 / cam.zoom;
@@ -145,6 +148,7 @@ export class KingdomScene extends Phaser.Scene {
     const ui = getUI(), { tx, ty, wx, wy } = this.tileAt(p), s = getState();
     if (ui.placing) { this.tryPlace(p); if (BUILDINGS[ui.placing].unique) setUI({ placing: null }); return; }
     if (ui.moving) { const b = s.buildings.find((q) => q.id === ui.moving); if (b) { const { x, y } = this.placeAt(p, b.kind); moveBuilding(b.id, x, y); } setUI({ moving: null }); return; }
+    if (this.happenings.tap(wx, wy)) return;
     const hit = this.army.hit(wx, wy);
     if (hit) { setUI({ selBat: hit.bat, selArmy: null, selBuilding: null, inspect: hit.squad ? { squad: hit.squad, idx: hit.idx! } : null, panel: 'army' }); return; }
     if (ui.selArmy) { marchArmy(ui.selArmy, wx, wy + 8); this.marker(wx, wy); return; }
@@ -168,7 +172,7 @@ export class KingdomScene extends Phaser.Scene {
 
   /** Occasional chatter between villagers, guards and soldiers that are on screen. */
   private chat() {
-    const cam = this.cameras.main; if (cam.zoom < 1.3 || this.chatter.count >= 2 || Math.random() < 0.4) return;
+    const cam = this.cameras.main; if (cam.zoom < 1.3 || this.chatter.count >= 2 || this.happenings?.playing || Math.random() < 0.4) return;
     const view = cam.worldView, onScreen = (t: { x: number; y: number }) => view.contains(t.x, t.y - 10);
     const people = this.ambient.talkers().filter((p) => onScreen(p.t));
     const walkers = people.filter((p) => p.walking);

@@ -40,7 +40,7 @@ export class Chatter {
   private live: { c: Phaser.GameObjects.Container; t: Target }[] = [];
   constructor(private scene: Phaser.Scene) {}
   get count() { return this.live.length; }
-  say(t: Target, text: string, delay = 0, voice = 440) {
+  say(t: Target, text: string, delay = 0, voice = 440, life?: number) {
     this.scene.time.delayedCall(delay, () => {
       if (!t.alive()) return;
       if (getState().settings.sound) audio.babble(text.length, voice);
@@ -52,7 +52,7 @@ export class Chatter {
       const c = this.scene.add.container(t.x, t.y - t.h, [g, txt]).setDepth(30002).setAlpha(0).setScale(0.6);
       const item = { c, t }; this.live.push(item);
       this.scene.tweens.add({ targets: c, alpha: 1, scale: 1, duration: 180, ease: 'Back.Out' });
-      this.scene.tweens.add({ targets: c, alpha: 0, delay: 2200 + text.length * 40, duration: 300, onComplete: () => { c.destroy(); this.live = this.live.filter((x) => x !== item); } });
+      this.scene.tweens.add({ targets: c, alpha: 0, delay: life ?? 2200 + text.length * 40, duration: 300, onComplete: () => { c.destroy(); this.live = this.live.filter((x) => x !== item); } });
     });
   }
   update() { for (const { c, t } of this.live) if (t.alive()) c.setPosition(Math.round(t.x), Math.round(t.y - t.h)); }
