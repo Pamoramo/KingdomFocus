@@ -6,12 +6,25 @@ import { UNIT_K, dutySoldiers } from './army.ts';
 import { awayBats } from '../lib/warActions.ts';
 import { caught as catchThief, theft } from '../lib/town.ts';
 import type { Chatter } from './chatter.ts';
+import { NavGrid, follow, type Pt } from './paths.ts';
+import type { BKind } from '../lib/economy.ts';
 
 type Mode = 'walk' | 'patrol' | 'archer' | 'spar' | 'tilt';
 const RANGED = new Set(['archer', 'longbow', 'crossbow', 'royalarcher']);
-interface Duty { img: Phaser.GameObjects.Image; cls: string; rank: number; kind: 'patrol' | 'post'; x: number; y: number; tx: number; ty: number; wait: number; ph: number; leader?: Duty; chasing?: boolean; onWall?: boolean; hx: number; hy: number }
-interface Thief { img: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; state: 'run' | 'caught' | 'gone'; t: number; warned: boolean }
-interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number] }
+interface Duty { img: Phaser.GameObjects.Image; cls: string; rank: number; kind: 'patrol' | 'post'; x: number; y: number; tx: number; ty: number; wait: number; ph: number; leader?: Duty; chasing?: boolean; onWall?: boolean; hx: number; hy: number; path?: Pt[]; repath?: number }
+interface Thief { img: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; path?: Pt[]; state: 'run' | 'caught' | 'gone'; t: number; warned: boolean }
+interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number]; path?: Pt[]; dest?: Place; act?: Act }
+/** A place townsfolk go: its doorstep (or a spot in the field) and what they do there. */
+interface Place { kind: BKind; b: Building; at: Pt; cx: number }
+type Act = 'inside' | 'browse' | 'draw' | 'hammer' | 'hoe' | 'chat' | 'rest';
+/** What people say while busy at each kind of place. */
+const PLACE_LINES: Partial<Record<Act, string[]>> = {
+  browse: ['How much for the apples?', 'Two loaves, please.', 'That price is robbery!', 'Fresh fish today?', 'A fine bolt of cloth.', 'I\'ll take a dozen eggs.', 'Any honey left?'],
+  draw: ['Fresh water!', 'Heavy bucket...', 'The well runs deep.', 'Cold and clear!'],
+  hammer: ['Mind the sparks!', 'Hot iron, coming through!', 'A new horseshoe, then.', 'Strike while it\'s hot!'],
+  hoe: ['The wheat grows tall.', 'Back to the furrows.', 'Rain would help.', 'Good soil, this.'],
+  rest: ['Home at last.', 'Supper time!', 'My feet ache.'],
+};
 
 /** Villagers going about their day, sentries on patrol, archers at practice, knights training. */
 export class Ambient {
@@ -22,10 +35,18 @@ export class Ambient {
   private dutySig = '';
   private posts: { x: number; y: number }[] = [];
   private waypoints: { x: number; y: number }[] = [];
+  private places: Place[] = [];
+  /** Walkable ground: everyone walks around buildings, walls and water. */
+  readonly nav = new NavGrid();
   thief: Thief | null = null;
   constructor(private scene: Phaser.Scene, private chatter: Chatter) {}
 
-  sync(s: GameState) { this.syncBase(s); this.syncDuty(s); }
+  sync(s: GameState) {
+    if (this.nav.update(s.buildings)) { for (const a of this.actors) a.path = undefined; for (const d of this.duty) d.path = undefined; if (this.thief) this.thief.path = undefined; } // the town changed: plan new routes
+    this.syncBase(s); this.syncDuty(s);
+  }
+  /** A path for a walker, or a direct line if there is no way round (e.g. a newly walled-in spot). */
+  private route(from: Pt, to: Pt): Pt[] { return this.nav.path(from, to) ?? [to]; }
   private syncBase(s: GameState) {
     const sig = s.buildings.filter((b) => !['road', 'wall', 'palisade', 'courtyard', 'moat'].includes(b.kind)).map((b) => b.id + b.level + b.x + b.y).join();
     if (sig === this.sig) return; this.sig = sig;
@@ -33,6 +54,15 @@ export class Ambient {
     const B = s.buildings.filter((b) => !['road', 'wall', 'palisade', 'courtyard', 'moat'].includes(b.kind));
     const door = (b: Building) => { const [w, h] = footprint(b.kind); return { x: (b.x + w / 2) * TILE, y: (b.y + h) * TILE + 3 }; };
     this.doors = B.map(door);
+    // each building's doorstep, nudged onto open ground if something stands in front of it
+    this.places = B.flatMap((b): Place[] => {
+      const [w, h] = footprint(b.kind), cx = (b.x + w / 2) * TILE;
+      if (b.kind === 'farm') return [{ kind: b.kind, b, at: { x: (b.x + 0.5 + Math.random() * (w - 1)) * TILE, y: (b.y + 0.8 + Math.random() * (h - 1)) * TILE }, cx }];
+      const d = door(b), t = this.nav.nearestFree(this.nav.tileOf(d), 3); if (!t) return [];
+      const at = this.nav.free(this.nav.tileOf(d).x, this.nav.tileOf(d).y) ? d : { x: (t.x + 0.5) * TILE, y: (t.y + 0.75) * TILE };
+      return [{ kind: b.kind, b, at, cx }];
+    });
+    this.doors = this.places.filter((p) => p.kind !== 'farm').map((p) => p.at);
     const nWorkers = Math.min(70, 2 + count(s, 'hut') * 2 + count(s, 'house') * 2 + count(s, 'farm') + count(s, 'market') * 4 + count(s, 'blacksmith'));
     for (let i = 0; i < nWorkers; i++) { const d = this.doors[i % this.doors.length]; this.add(i % 3 === 2 ? 'villager' : 'worker', 0, 'walk', d.x + (i % 5) * 3, d.y); }
     let guards = 0;
@@ -107,8 +137,9 @@ export class Ambient {
     const t = this.thief; if (!t) return;
     t.t += dt;
     if (t.state === 'run') {
-      const dx = t.tx - t.x, dy = t.ty - t.y, d = Math.hypot(dx, dy), sp = (dt / 1000) * 24;
-      if (d > 1) { t.x += (dx / d) * Math.min(sp, d); t.y += (dy / d) * Math.min(sp, d); t.img.setFlipX(dx < 0); }
+      if (!t.path) t.path = this.route(t, { x: t.tx, y: t.ty }); // slips away down the alleys
+      const dir = follow(t, dt, 24); if (dir) t.img.setFlipX(dir < 0);
+      const d = t.path.length ? Math.hypot(t.tx - t.x, t.ty - t.y) : 0;
       t.img.setFrame(sFrame('villager', 0, tick % 4));
       for (const g of this.duty) if (!g.chasing && !g.onWall && Math.hypot(g.x - t.x, g.y - t.y) < 110) { g.chasing = true; if (!t.warned) { t.warned = true; this.chatter.say(this.dutyTarget(g), 'Stop, thief!', 0, 300); } }
       const catcher = this.duty.find((g) => g.chasing && Math.hypot(g.x - t.x, g.y - t.y) < 8);
@@ -118,37 +149,44 @@ export class Ambient {
       this.scene.tweens.add({ targets: t.img, alpha: 0, duration: 400, onComplete: () => t.img.destroy() });
       this.duty.forEach((g) => { g.chasing = false; }); this.thief = null; return;
     }
-    t.img.setPosition(Math.round(t.x), Math.round(t.y)).setDepth(t.y);
+    t.img.setPosition(Math.round(t.x), Math.round(t.y)).setDepth(this.depthAt(t.x, t.y));
   }
   private updateDuty(dt: number, tick: number) {
     for (const g of this.duty) {
       let f = 0, sp = 11, tx = g.tx, ty = g.ty;
-      if (g.chasing && this.thief) { tx = this.thief.x; ty = this.thief.y; sp = 30; }
-      else if (g.leader) { const L = g.leader, dir = L.img.flipX ? 1 : -1; tx = L.x + dir * 9; ty = L.y + 3; sp = 13; }
+      if (g.chasing && this.thief) { // run the thief down by the streets, re-planning as he dodges
+        if ((g.repath = (g.repath ?? 0) - dt) <= 0 || !g.path?.length) { g.path = this.route(g, this.thief); g.repath = 600; }
+        const dir = follow(g, dt, 30); if (dir) g.img.setFlipX(dir < 0);
+        g.img.setFrame(sFrame(g.cls, g.rank, (tick + g.ph) % 4)).setPosition(Math.round(g.x), Math.round(g.y)).setDepth(this.depthAt(g.x, g.y)); continue;
+      }
+      if (g.kind === 'patrol' && !g.leader) { // walk the beat from doorstep to street corner, around the buildings
+        g.repath = undefined;
+        if (g.path?.length) { const dir = follow(g, dt, 11); if (dir) g.img.setFlipX(dir < 0); f = (tick + g.ph) % 4; }
+        else if ((g.wait -= dt) < 0) { const w = this.waypoints[Math.floor(Math.random() * this.waypoints.length)]; if (w) g.path = this.nav.path(g, { x: w.x + (Math.random() - 0.5) * 10, y: w.y }) ?? undefined; g.wait = 1200 + Math.random() * 2500; }
+        g.img.setFrame(sFrame(g.cls, g.rank, f)).setPosition(Math.round(g.x), Math.round(g.y)).setDepth(this.depthAt(g.x, g.y)); continue;
+      }
+      if (g.leader) { const L = g.leader, dir = L.img.flipX ? 1 : -1; tx = L.x + dir * 9; ty = L.y + 3; sp = 13; }
       else if (g.kind === 'post') { tx = g.hx; ty = g.hy; if ((g.wait -= dt) < 0) { g.wait = 4000 + Math.random() * 5000; g.img.setFlipX(!g.img.flipX); } }
-      else if (Math.hypot(g.tx - g.x, g.ty - g.y) < 2) { if ((g.wait -= dt) < 0) { const w = this.waypoints[Math.floor(Math.random() * this.waypoints.length)]; if (w) { g.tx = w.x + (Math.random() - 0.5) * 10; g.ty = w.y; } g.wait = 1200 + Math.random() * 2500; } tx = g.x; ty = g.y; }
       const dx = tx - g.x, dy = ty - g.y, d = Math.hypot(dx, dy);
       if (d > 1.5) { const k = Math.min(1, ((dt / 1000) * sp) / d); g.x += dx * k; g.y += dy * k; if (Math.abs(dx) > 0.5) g.img.setFlipX(dx < 0); f = (tick + g.ph) % 4; }
       else if (g.kind === 'post' && (tick + g.ph) % 40 === 0) f = 2;
-      g.img.setFrame(sFrame(g.cls, g.rank, f)).setPosition(Math.round(g.x), Math.round(g.y)).setDepth(g.y);
+      g.img.setFrame(sFrame(g.cls, g.rank, f)).setPosition(Math.round(g.x), Math.round(g.y)).setDepth(this.depthAt(g.x, g.y));
     }
   }
 
   /** Speech targets: role plus a live position for each villager, guard and trainee. */
   talkers() {
     const duty = this.duty.filter((g) => !g.leader).map((g) => ({ role: g.kind === 'post' ? 'guard' : 'patrol', walking: false, t: this.dutyTarget(g) }));
-    return [...duty, ...this.actors.map((a) => ({ role: a.mode === 'walk' ? (a.cls === 'worker' ? 'worker' : 'villager') : a.mode === 'patrol' ? 'guard' : a.mode === 'archer' ? 'archer' : a.mode === 'spar' ? 'spar' : 'soldier',
-      walking: a.mode === 'walk', t: { get x() { return a.x; }, get y() { return a.y; }, h: 16, alive: () => a.img.active } }))];
+    return [...duty, ...this.actors.filter((a) => a.act !== 'inside').map((a) => ({ role: a.mode === 'walk' ? (a.cls === 'worker' ? 'worker' : 'villager') : a.mode === 'patrol' ? 'guard' : a.mode === 'archer' ? 'archer' : a.mode === 'spar' ? 'spar' : 'soldier',
+      walking: a.mode === 'walk', t: { get x() { return a.x; }, get y() { return a.y; }, h: 16, alive: () => a.img.active && a.img.visible } }))];
   }
   update(time: number, dt: number) {
     const tick = Math.floor(time / 150);
     this.updateDuty(dt, tick); this.updateThief(dt, tick);
     for (const a of this.actors) {
       let f = 0;
-      if (a.mode === 'walk') {
-        if (a.wait > 0) { a.wait -= dt; f = 0; if (a.wait <= 0 && this.doors.length) { const d = this.doors[Math.floor(Math.random() * this.doors.length)]; a.tx = d.x + (Math.random() - 0.5) * 16; a.ty = d.y + Math.random() * 6; } }
-        else { const dx = a.tx - a.x, dy = a.ty - a.y, d = Math.hypot(dx, dy), sp = (dt / 1000) * 14; if (d < 1) a.wait = 1500 + Math.random() * 5000; else { a.x += (dx / d) * Math.min(sp, d); a.y += (dy / d) * Math.min(sp, d); a.img.setFlipX(dx < 0); } f = (tick + a.ph) % 4; }
-      } else if (a.mode === 'patrol' || a.mode === 'tilt') {
+      if (a.mode === 'walk') f = this.walker(a, dt, tick);
+      else if (a.mode === 'patrol' || a.mode === 'tilt') {
         const sp = a.mode === 'tilt' ? 26 : 9, dir = a.tx >= a.x ? 1 : -1;
         if (a.wait > 0) { a.wait -= dt; f = 0; } else {
           if (a.tx === a.x || (dir > 0 && a.x >= a.b) || (dir < 0 && a.x <= a.a)) { a.tx = dir > 0 ? a.a : a.b; a.wait = a.mode === 'tilt' ? 600 : 2500; }
@@ -159,8 +197,61 @@ export class Ambient {
         if (cyc === 8 && a.wait <= 0 && a.target) { a.wait = 1000; this.shoot(a.x + 4, a.y - 12, a.target[0], a.target[1]); }
         a.wait -= dt;
       } else if (a.mode === 'spar') { const cyc = (Math.floor(time / 220) + a.ph) % 6; f = cyc < 2 ? 0 : cyc < 4 ? 4 : 5; if (cyc === 4 && Math.random() < 0.05) this.spark(a.x + (a.img.flipX ? -6 : 6), a.y - 12); }
-      a.img.setFrame(sFrame(a.cls, a.rank, f)).setPosition(Math.round(a.x), Math.round(a.y)).setDepth(a.y);
+      a.img.setFrame(sFrame(a.cls, a.rank, f)).setPosition(Math.round(a.x), Math.round(a.y)).setDepth(this.depthAt(a.x, a.y));
     }
+  }
+  // ---------------- townsfolk: walk the streets to a place, do something there, move on ----------------
+  private walker(a: Actor, dt: number, tick: number): number {
+    if (a.act) {
+      a.wait -= dt;
+      let f = 0;
+      const cyc = (tick + a.ph) % 12;
+      if (a.act === 'browse') { f = cyc < 2 ? 4 : 0; if (cyc === 6 && Math.random() < 0.01) a.img.setFlipX(!a.img.flipX); } // points at the wares, looks around
+      else if (a.act === 'draw') f = cyc % 6 < 3 ? 4 : 5; // winds the windlass
+      else if (a.act === 'hammer') { f = cyc % 4 < 2 ? 4 : 5; if (cyc % 4 === 2 && Math.random() < 0.15) this.spark(a.x + (a.img.flipX ? -6 : 6), a.y - 8); }
+      else if (a.act === 'hoe') f = cyc % 8 < 4 ? 4 : 5;
+      if (a.wait <= 0) {
+        if (a.act === 'inside') { a.img.setVisible(true); this.scene.tweens.add({ targets: a.img, alpha: 1, duration: 300 }); } // steps back out of the door
+        a.act = undefined; a.dest = undefined; this.goSomewhere(a);
+      }
+      return f;
+    }
+    if (!a.path) { if ((a.wait -= dt) > 0) return 0; this.goSomewhere(a); return 0; }
+    if (a.path.length) { const dir = follow(a, dt, 14); if (dir) a.img.setFlipX(dir < 0); return (tick + a.ph) % 4; }
+    // arrived
+    a.path = undefined; this.arrive(a); return 0;
+  }
+  /** Draw order for someone at a point: people working a field stand among its crops, in front of the field's sprite. */
+  private depthAt(x: number, y: number) {
+    for (const p of this.places) if (p.kind === 'farm') { const b = p.b, [w, h] = footprint('farm'); if (x >= b.x * TILE && x < (b.x + w) * TILE && y >= b.y * TILE && y <= (b.y + h) * TILE) return (b.y + h) * TILE + 0.5 + y / 1000; }
+    return y;
+  }
+  /** Chooses where to go next: workers to fields, forge and stores; everyone to market, well and home. */
+  private goSomewhere(a: Actor) {
+    if (!this.places.length) { a.wait = 3000; return; }
+    const worker = a.cls === 'worker', weight = (p: Place) => ({ market: 5, well: 3, house: 3, hut: 3, farm: worker ? 5 : 0.5, blacksmith: worker ? 3 : 1, storehouse: worker ? 3 : 0.5, camp: 1, keep: 0.5, greathall: 1, stable: 1, palace: 0.5 } as Partial<Record<BKind, number>>)[p.kind] ?? 0.2;
+    for (let tries = 0; tries < 4; tries++) {
+      const total = this.places.reduce((t, p) => t + weight(p), 0); let r = Math.random() * total;
+      const p = this.places.find((x) => (r -= weight(x)) <= 0) ?? this.places[0];
+      let at = p.at;
+      if (p.kind === 'farm') { const [w, h] = footprint('farm'); at = { x: (p.b.x + 0.5 + Math.random() * (w - 1)) * TILE, y: (p.b.y + 0.8 + Math.random() * (h - 1)) * TILE }; }
+      else at = { x: at.x + (Math.random() - 0.5) * (p.kind === 'market' ? 30 : 10), y: at.y + Math.random() * 3 };
+      const path = this.nav.path(a, at); if (!path) continue;
+      a.path = path; a.dest = { ...p, at }; return;
+    }
+    a.wait = 2000 + Math.random() * 3000; // nowhere reachable just now
+  }
+  /** At the place: go inside homes, haggle at the market, draw water, work the forge or the field. */
+  private arrive(a: Actor) {
+    const p = a.dest; if (!p) { a.wait = 1500; return; }
+    const worker = a.cls === 'worker', home = ['house', 'hut', 'keep', 'greathall', 'palace', 'camp', 'stable', 'storehouse'].includes(p.kind);
+    const act: Act = p.kind === 'market' ? 'browse' : p.kind === 'well' ? 'draw' : p.kind === 'blacksmith' ? (worker ? 'hammer' : 'browse') : p.kind === 'farm' ? 'hoe' : home ? (Math.random() < 0.75 ? 'inside' : 'rest') : 'rest';
+    a.act = act;
+    a.wait = { inside: 5000 + Math.random() * 9000, browse: 4000 + Math.random() * 5000, draw: 2500 + Math.random() * 1500, hammer: 4000 + Math.random() * 3000, hoe: 5000 + Math.random() * 5000, chat: 3000, rest: 2000 + Math.random() * 2500 }[act];
+    if (act !== 'hoe') a.img.setFlipX(p.cx < a.x); // face the building
+    if (act === 'inside') this.scene.tweens.add({ targets: a.img, alpha: 0, duration: 300, onComplete: () => { if (a.act === 'inside') a.img.setVisible(false); } });
+    const lines = PLACE_LINES[act];
+    if (lines && this.chatter.count < 3 && Math.random() < 0.3) this.chatter.say({ get x() { return a.x; }, get y() { return a.y; }, h: 16, alive: () => a.img.active && a.img.visible }, lines[Math.floor(Math.random() * lines.length)], 300, this.chatter.voice(worker ? 'worker' : 'villager'));
   }
   private shoot(x: number, y: number, tx: number, ty: number) {
     const ar = this.scene.add.image(x, y, 'arrow').setDepth(9000).setRotation(Math.atan2(ty - y, tx - x));
