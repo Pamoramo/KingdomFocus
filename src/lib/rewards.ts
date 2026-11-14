@@ -10,10 +10,20 @@ export const MANUAL_MAX_PER_DAY_MIN = 480;
 
 export type Mult = Res; // multipliers per resource, 1 = none
 
-/** Exact proportional reward for a duration; floors only the final resource units, never minutes. */
+/** Focus growth: each continuous minute pays 1% more than the last, up to 3x (reached after ~110 minutes). */
+export const FOCUS_GROWTH = 1.01, FOCUS_CAP = 3;
+const CAP_MIN = Math.log(FOCUS_CAP) / Math.log(FOCUS_GROWTH);
+/** Pay multiplier for the minute you are studying right now. */
+export const focusMultiplier = (min: number) => Math.min(FOCUS_CAP, FOCUS_GROWTH ** Math.max(0, min));
+/** Reward-weighted minutes: the integral of the focus multiplier over a session (always increasing). */
+export function focusMinutes(min: number) {
+  const m = Math.max(0, min), L = Math.log(FOCUS_GROWTH);
+  return m <= CAP_MIN ? (FOCUS_GROWTH ** m - 1) / L : (FOCUS_CAP - 1) / L + (m - CAP_MIN) * FOCUS_CAP;
+}
+/** Reward for a verified duration. Grows exponentially with session length; floors only the final units. */
 export function studyReward(ms: number, rates: Res = DEFAULT_RATES, mult: Mult = { gold: 1, wood: 1, stone: 1, renown: 1 }, factor = 1): Res {
-  const min = Math.max(0, ms) / 60000;
-  const f = (k: keyof Res) => Math.floor(min * rates[k] * mult[k] * factor + 1e-9);
+  const fm = focusMinutes(Math.max(0, ms) / 60000);
+  const f = (k: keyof Res) => Math.floor(fm * rates[k] * mult[k] * factor + 1e-9);
   return { gold: f('gold'), wood: f('wood'), stone: f('stone'), renown: f('renown') };
 }
 

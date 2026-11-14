@@ -109,6 +109,18 @@ export function effects(s: GameState): Required<Effects> {
 export const armyCap = (s: GameState) => effects(s).cap;
 export const armySize = (s: GameState) => s.squads.reduce((a, q) => a + q.count, 0);
 export const batSize = (s: GameState, id: string) => s.squads.reduce((a, q) => (q.bat === id ? a + q.count : a), 0);
+/** Days of rest that never cost anything. */
+export const GRACE_DAYS = 2;
+/** Whole days since the last day with verified study (or since the kingdom was founded). */
+export function idleDays(s: GameState, now = Date.now()) {
+  const day = (t: number) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  const studied = s.sessions.filter((r) => r.verifiedSec >= 300).map((r) => r.endedAt ?? r.startedAt);
+  const founded = Math.min(...s.events.map((e) => e.t), now);
+  const last = Math.max(founded, ...studied, s.session && s.session.verifiedMs > 0 ? now : 0);
+  return Math.max(0, Math.round((day(now) - day(last)) / 864e5));
+}
+/** Neglect beyond the grace period: 0 while you study regularly, then 1, 2, 3... */
+export const neglect = (s: GameState, now = Date.now()) => Math.max(0, idleDays(s, now) - GRACE_DAYS);
 /** Soldiers on duty (patrol or garrison) at most this many per battalion. */
 export const DUTY_CAP = 24;
 /** Town order: guards on duty versus what the population needs. */

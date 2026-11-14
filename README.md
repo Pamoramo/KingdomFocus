@@ -34,6 +34,14 @@ How saving works:
 - Triggers reject rewards that aren't backed by a real study session or habit completion, rewards above the allowed rate, and sessions claiming more time than actually passed.
 - Row Level Security limits every table to its owner. Studying as a guest and then signing in merges your guest progress into the account.
 
+## Study rewards & rest
+
+- Rewards grow with focus: each continuous verified minute pays 1% more than the last, up to 3x. 25 min ≈ 283 gold, 1 hour ≈ 820, 2 hours ≈ 2,300.
+- Two days without study cost nothing. After that the realm grows restless:
+  - thieves strike even moderately guarded towns, and more often;
+  - warlike neighbours grow colder each day and send threatening letters.
+  One study session calms it.
+
 ## War & diplomacy
 
 - Seven neighbours appear on the world map: a bandit lord and six kingdoms, each with a ruler, a personality, a castle level, an army and relations with you.

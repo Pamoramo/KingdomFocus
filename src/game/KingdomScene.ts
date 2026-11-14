@@ -7,7 +7,8 @@ import { World } from './world.ts';
 import { Army } from './army.ts';
 import { Ambient } from './ambient.ts';
 import { Chatter } from './chatter.ts';
-import { thiefCanStrike } from '../lib/town.ts';
+import { WeatherFx, weatherAt } from './weather.ts';
+import { thiefCanStrike, thiefChance } from '../lib/town.ts';
 
 const WW = MAP_W * TILE, WH = MAP_H * TILE;
 
@@ -24,7 +25,7 @@ export function nightFactor(mode: string, d = new Date()): { n: number; warm: nu
 const lerpColor = (a: number, b: number, t: number) => { const ch = (s: number) => Math.round(((a >> s) & 255) + (((b >> s) & 255) - ((a >> s) & 255)) * t); return (ch(16) << 16) | (ch(8) << 8) | ch(0); };
 
 export class KingdomScene extends Phaser.Scene {
-  private world!: World; private army!: Army; private ambient!: Ambient; private chatter!: Chatter;
+  private world!: World; private army!: Army; private ambient!: Ambient; private chatter!: Chatter; private weather!: WeatherFx;
   private ghost!: Phaser.GameObjects.Rectangle; private selRect!: Phaser.GameObjects.Rectangle; private shade!: Phaser.GameObjects.Rectangle;
   private frame = 0; private unsub: (() => void)[] = [];
   private pinch: { d: number; z: number } | null = null;
@@ -60,8 +61,11 @@ export class KingdomScene extends Phaser.Scene {
     this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
     this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; this.world.tick(this.frame); this.army.sync(getState(), this.frame); } });
     this.time.addEvent({ delay: 1100, loop: true, callback: () => this.smoke() });
-    this.time.addEvent({ delay: 3200, loop: true, callback: () => this.chat() });
-    this.time.addEvent({ delay: 45000, loop: true, callback: () => { if (thiefCanStrike() && Math.random() < 0.4) this.ambient.spawnThief(); } });
+    this.time.addEvent({ delay: 7000, loop: true, callback: () => this.chat() });
+    this.weather = new WeatherFx(this, WW, WH);
+    const doWeather = () => { const w = weatherAt(); this.weather.set(w); if (getUI().weather !== w) setUI({ weather: w }); };
+    doWeather(); this.time.addEvent({ delay: 30000, loop: true, callback: doWeather });
+    this.time.addEvent({ delay: 45000, loop: true, callback: () => { if (thiefCanStrike() && Math.random() < thiefChance()) this.ambient.spawnThief(); } });
     this.time.addEvent({ delay: 20000, loop: true, callback: () => this.applyNight() });
     this.sync();
   }
@@ -87,7 +91,7 @@ export class KingdomScene extends Phaser.Scene {
 
   update(time: number, dt: number) {
     const s = getState(), ui = getUI(), cam = this.cameras.main;
-    this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.chatter.update();
+    this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.chatter.update(); this.weather?.update(cam);
     if (this.night > 0.05) for (const l of this.world.lights) l.setAlpha(this.night * (0.55 + Math.random() * 0.15));
     else if (this.world.lights[0]?.alpha) for (const l of this.world.lights) l.setAlpha(0);
     const k = this.keys, sp = ((k.SHIFT.isDown ? 900 : 400) * dt) / 1000 / cam.zoom;
@@ -164,14 +168,14 @@ export class KingdomScene extends Phaser.Scene {
 
   /** Occasional chatter between villagers, guards and soldiers that are on screen. */
   private chat() {
-    const cam = this.cameras.main; if (cam.zoom < 1.3 || this.chatter.count >= 3 || Math.random() < 0.3) return;
+    const cam = this.cameras.main; if (cam.zoom < 1.3 || this.chatter.count >= 2 || Math.random() < 0.4) return;
     const view = cam.worldView, onScreen = (t: { x: number; y: number }) => view.contains(t.x, t.y - 10);
     const people = this.ambient.talkers().filter((p) => onScreen(p.t));
     const walkers = people.filter((p) => p.walking);
-    for (const a of walkers) { const b = walkers.find((x) => x !== a && Math.hypot(x.t.x - a.t.x, x.t.y - a.t.y) < 40); if (b && Math.random() < 0.5) { this.chatter.conversation(a.t, b.t); return; } }
+    for (const a of walkers) { const b = walkers.find((x) => x !== a && Math.hypot(x.t.x - a.t.x, x.t.y - a.t.y) < 40); if (b && Math.random() < 0.3) { this.chatter.conversation(a.t, b.t); return; } }
     const soldier = this.army.randomSoldier();
-    if (soldier && onScreen(soldier) && (Math.random() < 0.35 || !people.length)) { this.chatter.say(soldier, this.chatter.line('soldier')); return; }
-    if (people.length) { const p = people[Math.floor(Math.random() * people.length)]; this.chatter.say(p.t, this.chatter.line(p.role)); }
+    if (soldier && onScreen(soldier) && (Math.random() < 0.35 || !people.length)) { this.chatter.say(soldier, this.chatter.line('soldier'), 0, this.chatter.voice('soldier')); return; }
+    if (people.length) { const p = people[Math.floor(Math.random() * people.length)]; this.chatter.say(p.t, this.chatter.line(p.role), 0, this.chatter.voice(p.role)); }
   }
 
   // ---------- effects ----------

@@ -90,7 +90,7 @@ export class Ambient {
     const e = edges.sort((a, b) => Math.hypot(a.x - d.x, a.y - d.y) - Math.hypot(b.x - d.x, b.y - d.y))[0];
     const img = this.scene.add.image(d.x, d.y, 'soldiers', sFrame('villager', 0, 0)).setOrigin(0.5, 1).setScale(S * UNIT_K).setTint(0x6a5a8a);
     this.thief = { img, x: d.x, y: d.y, tx: e.x, ty: e.y, state: 'run', t: 0, warned: false };
-    this.chatter.say(this.thiefTarget(), 'Heh heh, easy pickings!');
+    this.chatter.say(this.thiefTarget(), 'Heh heh, easy pickings!', 0, 640);
     return true;
   }
   private thiefTarget() { const t = this.thief!; return { get x() { return t.x; }, get y() { return t.y; }, h: 16, alive: () => t.img.active }; }
@@ -102,9 +102,9 @@ export class Ambient {
       const dx = t.tx - t.x, dy = t.ty - t.y, d = Math.hypot(dx, dy), sp = (dt / 1000) * 24;
       if (d > 1) { t.x += (dx / d) * Math.min(sp, d); t.y += (dy / d) * Math.min(sp, d); t.img.setFlipX(dx < 0); }
       t.img.setFrame(sFrame('villager', 0, tick % 4));
-      for (const g of this.duty) if (!g.chasing && Math.hypot(g.x - t.x, g.y - t.y) < 110) { g.chasing = true; if (!t.warned) { t.warned = true; this.chatter.say(this.dutyTarget(g), 'Stop, thief!'); } }
+      for (const g of this.duty) if (!g.chasing && Math.hypot(g.x - t.x, g.y - t.y) < 110) { g.chasing = true; if (!t.warned) { t.warned = true; this.chatter.say(this.dutyTarget(g), 'Stop, thief!', 0, 300); } }
       const catcher = this.duty.find((g) => g.chasing && Math.hypot(g.x - t.x, g.y - t.y) < 8);
-      if (catcher) { t.state = 'caught'; t.t = 0; this.chatter.say(this.thiefTarget(), 'I yield! I yield!'); catchThief(); }
+      if (catcher) { t.state = 'caught'; t.t = 0; this.chatter.say(this.thiefTarget(), 'I yield! I yield!', 0, 640); catchThief(); }
       else if (d < 3 || t.t > 16000) { t.state = 'gone'; t.t = 0; theft(); }
     } else if (t.t > 2500) {
       this.scene.tweens.add({ targets: t.img, alpha: 0, duration: 400, onComplete: () => t.img.destroy() });

@@ -5,11 +5,13 @@ import { startSession, tick, checkIn, pause, takeBreak, endSession, isAwaiting, 
 import { progress, streak, type Habit, consistency } from './habits.ts';
 import * as S from './state.ts';
 
-test('rewards are strictly proportional to minutes', () => {
-  assert.deepEqual(studyReward(25 * MIN), { gold: 250, wood: 125, stone: 75, renown: 25 });
-  assert.deepEqual(studyReward(60 * MIN), { gold: 600, wood: 300, stone: 180, renown: 60 });
-  assert.deepEqual(studyReward(120 * MIN), { gold: 1200, wood: 600, stone: 360, renown: 120 });
-  let prev = -1; for (let m = 1; m <= 300; m++) { const g = studyReward(m * MIN).gold; assert.ok(g > prev); prev = g; }
+test('rewards grow exponentially with session length', () => {
+  assert.deepEqual(studyReward(25 * MIN), { gold: 283, wood: 141, stone: 85, renown: 28 });
+  assert.deepEqual(studyReward(60 * MIN), { gold: 820, wood: 410, stone: 246, renown: 82 });
+  assert.equal(studyReward(120 * MIN).gold, 2297);
+  let prev = -1, prevRate = 0;
+  for (let m = 1; m <= 300; m++) { const g = studyReward(m * MIN).gold; assert.ok(g > prev); const rate = g / m; assert.ok(rate >= prevRate - 0.2, 'longer sessions pay at least as well per minute'); prev = g; prevRate = rate; }
+  assert.ok(studyReward(120 * MIN).gold > 2 * studyReward(60 * MIN).gold, 'one long session beats two short ones');
   assert.equal(studyReward(90 * 1000).gold, 15); // seconds count, nothing rounded away
 });
 
@@ -69,11 +71,11 @@ test('study session rewards land in the ledger once, and give troop xp', () => {
     Date.now = () => t0 + 60 * MIN; S.studyEnd();
   } finally { Date.now = real; }
   const s = S.getState(), rows = s.outbox.ledger.filter((l) => l.kind === 'study');
-  assert.equal(rows.length, 1); assert.deepEqual(rows[0].amt, { gold: 600, wood: 300, stone: 180, renown: 60 });
+  assert.equal(rows.length, 1); assert.deepEqual(rows[0].amt, { gold: 820, wood: 410, stone: 246, renown: 82 });
   assert.equal(s.sessions[0].verifiedSec, 3600); assert.equal(s.session, null);
   assert.ok(s.squads[0].xp >= 60);
   assert.equal(S.logManual('Math', 60, Date.now() - 1000, ''), null);
-  assert.deepEqual(S.getState().sessions[0].reward, { gold: 300, wood: 150, stone: 90, renown: 30 });
+  assert.deepEqual(S.getState().sessions[0].reward, { gold: 410, wood: 205, stone: 123, renown: 41 });
 });
 test('promotion requires xp, building and renown', () => {
   fresh(); give({ gold: 2000, wood: 500, renown: 100 }); assert.match(S.recruit('peasant', 12) ?? '', /capacity/); S.recruit('peasant', 10);

@@ -127,6 +127,11 @@ const ICONS: Record<string, string[]> = {
   check: ['..........', '.........g', '........gg', '.......gg.', 'g.....gg..', 'gg...gg...', '.gg.gg....', '..ggg.....', '...g......', '..........'],
   hourglass: ['bbbbbbbbbb', '.wyyyyyyw.', '..wyyyyw..', '...wyyw...', '....ww....', '....ww....', '...w.yw...', '..w.yyyw..', '.wyyyyyyw.', 'bbbbbbbbbb'],
   map: ['bbbbbbbbbb', 'bwwgwwwwwb', 'bwggwwrwwb', 'bwwgwwwwwb', 'bwwwwkkwwb', 'bwggwwkwwb', 'bwgggwwwwb', 'bwwgwwwrwb', 'bwwwwwwwwb', 'bbbbbbbbbb'],
+  cloud: ['..........', '..........', '...wWW....', '..wWWWWw..', '.wWWWWWWw.', 'wWWWWWWWWw', 'wWWWWWWWWw', '.kkkkkkkk.', '..........', '..........'],
+  rain: ['...wWW....', '..wWWWWw..', '.wWWWWWWw.', 'wWWWWWWWWw', '.kkkkkkkk.', '..b..b..b.', '.b..b..b..', '..b..b..b.', '.b..b..b..', '..........'],
+  storm: ['..kkkk....', '.kkkkkkk..', 'kkkkkkkkkk', '.kkkyykkk.', '....yy....', '...yy.....', '..yyyy....', '....yy....', '...yy.....', '..y.......'],
+  snow: ['....W.....', '..W.W.W...', '...WWW....', '.WWWWWWW..', '...WWW....', '..W.W.W...', '....W.....', '......W...', '..W.....W.', '.....W....'],
+  fog: ['..........', 'kwwwwwwwk.', '..........', '.kwwwwwwwk', '..........', 'kwwwwwwwk.', '..........', '.kwwwwwwwk', '..........', '..........'],
   sun: ['....y.....', '.y..y..y..', '..yYYYy...', '.yYYYYYy..', 'yyYYYYYyyy', '.yYYYYYy..', '..yYYYy...', '.y..y..y..', '....y.....', '..........'],
   moon: ['...wWW....', '..wWW.....', '.wWW......', '.wWW......', '.wWW......', '.wWWW.....', '..wWWW....', '...wWWWWw.', '....wwww..', '..........'],
 };

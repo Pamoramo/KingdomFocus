@@ -88,3 +88,22 @@ test('town watch: guards on duty, thieves capped, bounties', async () => {
   assert.ok(S.studyMult(S.getState()).gold > 1, 'safe streets bonus');
   const g = S.getState().res.gold; T.caught(); assert.equal(S.getState().res.gold, g + 20);
 });
+
+test('neglect: two grace days, then crime and hostile letters; study clears it', async () => {
+  const T = await import('./town.ts');
+  const D = 864e5, now = Date.now(), s0 = S.newGame();
+  const homes = [0, 1, 2, 3].map((i) => ({ id: 'h' + i, kind: 'house' as const, x: 10 + i * 3, y: 10, level: 2, at: 0 }));
+  const bat = { id: 'b', name: 'Watch', army: 'A', color: 0, emblem: 'lion', formation: 'block' as const, orders: 'patrol' as const, x: 0, y: 0, commander: { name: 'X', rank: 0, seed: 'b' } };
+  const sess = (daysAgo: number) => ({ id: 's' + daysAgo, subject: 'M', source: 'timer' as const, startedAt: now - daysAgo * D - 3600e3, endedAt: now - daysAgo * D, verifiedSec: 3600, forfeitedSec: 0, checkIns: 1, missed: 0, notes: '', reward: { gold: 0, wood: 0, stone: 0, renown: 0 } });
+  const base = { ...s0, events: [{ id: 'e', t: now - 30 * D, type: 'stage', text: '' }], buildings: [...s0.buildings, ...homes], battalions: [bat], squads: [{ id: 'q', cls: 'spearman' as const, count: 5, xp: 0, rank: 0, bat: 'b' }] };
+  for (const [ago, n] of [[0, 0], [1, 0], [2, 0], [3, 1], [6, 4]] as const) assert.equal(S.neglect({ ...base, sessions: [sess(ago)] }), n, `${ago} idle days`);
+  const ratio = S.townOrder(base).ratio; assert.ok(ratio >= 0.5 && ratio < 1, 'moderately guarded town');
+  assert.equal(T.thiefCanStrike({ ...base, sessions: [sess(1)] }), false, 'no crime during grace');
+  assert.equal(T.thiefCanStrike({ ...base, sessions: [sess(4)] }), true, 'neglect breeds crime');
+  assert.ok(T.thiefChance({ ...base, sessions: [sess(5)] }) > T.thiefChance({ ...base, sessions: [sess(0)] }));
+  let w = { ...base.world, lastDay: '2026-03-01' };
+  const before = Object.fromEntries(w.rivals.map((r) => [r.id, r.relation]));
+  w = advanceDays(w, { stage: 2, myPower: 50, fort: 0, active: true, neglect: 3 }, '2026-03-02');
+  assert.ok(w.inbox.some((m) => m.id.endsWith('-neglect') && /Study/.test(m.text)), 'a rival sends a threat');
+  assert.ok(w.rivals.some((r) => (r.personality === 'aggressive' || r.personality === 'treacherous') && !r.bandits && r.relation < before[r.id] - 5), 'warlike rivals grow hostile');
+});

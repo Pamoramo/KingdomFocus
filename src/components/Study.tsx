@@ -1,9 +1,9 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useGame, useNow, clock, fmt, hm } from './hooks.ts';
-import { studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState } from '../lib/state.ts';
+import { idleDays, neglect, GRACE_DAYS, studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState } from '../lib/state.ts';
 import { pendingAt, dueAt, isAwaiting, totalMs } from '../lib/study.ts';
-import { studyReward, MANUAL_FACTOR, type Res } from '../lib/rewards.ts';
+import { studyReward, focusMultiplier, MANUAL_FACTOR, type Res } from '../lib/rewards.ts';
 import { TROOPS, BUILDINGS } from '../lib/economy.ts';
 import { setUI } from '../game/ui.ts';
 import { Icon } from './Icon.tsx';
@@ -17,7 +17,11 @@ export function StudyPanel() {
   const mult = studyMult(s), perMin = studyReward(60000, s.settings.rates, mult);
   if (!sess) return (
     <div className="space-y-3">
-      <div className="card p-2.5 text-sm">Every verified minute earns <Cost cost={perMin} plus /> {mult.gold > 1 || mult.renown > 1 ? <span className="opacity-70">(buildings bonus included)</span> : null}</div>
+      <div className="card p-2.5 text-sm space-y-1">
+        <div>The first minute earns <Cost cost={perMin} plus /> {mult.gold > 1 || mult.renown > 1 ? <span className="opacity-70">(bonuses included)</span> : null}</div>
+        <div><b>Focus grows:</b> each minute pays 1% more than the last, up to ×3. 25 min ≈ {fmt(studyReward(25 * 60000, s.settings.rates, mult).gold)} gold · 1 h ≈ {fmt(studyReward(3600000, s.settings.rates, mult).gold)} · 2 h ≈ {fmt(studyReward(7200000, s.settings.rates, mult).gold)}</div>
+        <NeglectNote />
+      </div>
       <Section title="Subject">
         <div className="flex flex-wrap gap-1">{s.subjects.map((x) => <button key={x} onClick={() => setSubj(x)} className={`btn text-sm !py-0.5 ${x === subj ? 'btn-gold' : ''}`}>{x}</button>)}</div>
         <div className="flex gap-2"><input className="inp" placeholder="Add a subject…" value={custom} maxLength={80} onChange={(e) => setCustom(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && custom.trim()) { setSubj(custom.trim()); setCustom(''); } }} />
@@ -47,6 +51,7 @@ export function StudyPanel() {
         <div className="text-sm opacity-75">{sess.subject} · <Badge src={sess.source} /> · {statusText}</div>
         <div className="text-6xl font-bold tabular-nums leading-none my-1">{clock(total)}</div>
         {sess.status === 'running' && due && <div className="text-sm">{sess.cfg.pomodoro ? 'Break in' : 'Next check-in in'} <b className="tabular-nums">{clock(Math.max(0, due - now))}</b></div>}
+        <div className="text-sm">Focus multiplier <b>×{focusMultiplier(total / 60000).toFixed(2)}</b>{focusMultiplier(total / 60000) < 3 ? ' and rising' : ' (maximum)'}</div>
         {sess.status === 'break' && sess.breakUntil && <div className="text-sm">Break ends in <b className="tabular-nums">{clock(Math.max(0, sess.breakUntil - now))}</b></div>}
       </div>
       {sess.status === 'running' && <Bar value={pend} max={sess.cfg.intervalMin * 60000} />}
@@ -66,6 +71,14 @@ export function StudyPanel() {
       <div className="text-xs opacity-80">Check-ins answered: {sess.checkIns.filter((c) => !c.missed).length} · missed: {sess.checkIns.filter((c) => c.missed).length}{sess.forfeitedMs > 0 && ` · unconfirmed time not counted: ${hm(sess.forfeitedMs / 60000)}`}</div>
     </div>
   );
+}
+
+/** Gentle reminder of the grace period, and what neglect is costing. */
+export function NeglectNote() {
+  const s = useGame(), idle = idleDays(s), n = neglect(s);
+  if (idle === 0) return <div className="text-moss">You have studied today. The realm is at peace.</div>;
+  if (!n) return <div className="opacity-80">{idle} day{idle > 1 ? 's' : ''} of rest. {GRACE_DAYS - idle + 1 > 0 ? `${GRACE_DAYS - idle + 1} more before the realm grows restless.` : ''}</div>;
+  return <div className="text-blood font-bold">{idle} days without study: thieves grow bold and rival kingdoms grow hostile. One study session calms the realm.</div>;
 }
 
 function ManualEntry({ subjects }: { subjects: string[] }) {

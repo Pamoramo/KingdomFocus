@@ -1,6 +1,6 @@
 // Procedural audio: synthesized sound effects, generative medieval music and ambience. No audio files.
 export type Mood = 'day' | 'night' | 'war';
-export type Sfx = 'click' | 'coin' | 'build' | 'recruit' | 'promote' | 'stage' | 'achieve' | 'error' | 'march' | 'clash' | 'arrows' | 'catapult' | 'horn' | 'victory' | 'defeat' | 'checkin' | 'break' | 'reward';
+export type Sfx = 'thunder' | 'click' | 'coin' | 'build' | 'recruit' | 'promote' | 'stage' | 'achieve' | 'error' | 'march' | 'clash' | 'arrows' | 'catapult' | 'horn' | 'victory' | 'defeat' | 'checkin' | 'break' | 'reward';
 
 const NOTE = (n: number) => 146.83 * 2 ** (n / 12); // semitones above D3
 const MODES: Record<Mood, number[]> = { day: [0, 2, 3, 5, 7, 9, 10], night: [0, 2, 3, 5, 7, 8, 10], war: [0, 1, 3, 5, 7, 8, 10] }; // dorian, aeolian, phrygian
@@ -12,6 +12,7 @@ class Engine {
   private master!: GainNode; private music!: GainNode; private sfx!: GainNode; private amb!: GainNode;
   private noiseBuf!: AudioBuffer; private drone: OscillatorNode[] = [];
   private mood: Mood = 'day'; private nextT = 0; private step = 0; private timer: ReturnType<typeof setInterval> | null = null;
+  private weather = 'clear'; private rain: { g: GainNode; f: BiquadFilterNode } | null = null;
   private melody = { deg: 4, rest: 0 }; private ambT = 0; private vol = { music: 0.5, sfx: 0.7, ambience: true };
 
   /** Must be called from a user gesture (browsers block audio until then). */
@@ -30,10 +31,20 @@ class Engine {
     this.noiseBuf = c.createBuffer(1, c.sampleRate, c.sampleRate); const nd = this.noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
     this.apply(); this.nextT = c.currentTime + 0.2;
     this.timer = setInterval(() => this.schedule(), 90);
-    this.startDrone();
+    this.startDrone(); this.setWeather(this.weather as never);
   }
   setVolumes(v: { music?: number; sfx?: number; ambience?: boolean }) { this.vol = { music: v.music ?? this.vol.music, sfx: v.sfx ?? this.vol.sfx, ambience: v.ambience ?? this.vol.ambience }; this.apply(); }
   private apply() { if (!this.ctx) return; const t = this.ctx.currentTime; this.music.gain.setTargetAtTime(this.vol.music * 0.55, t, 0.3); this.sfx.gain.setTargetAtTime(this.vol.sfx, t, 0.05); this.amb.gain.setTargetAtTime(this.vol.ambience ? 0.35 : 0, t, 0.3); }
+  /** Weather ambience: a looping filtered-noise bed (rain hiss, storm downpour or winter wind). */
+  setWeather(w: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog' | 'snow') {
+    this.weather = w; if (!this.ctx) return; const c = this.ctx, t = c.currentTime;
+    if (!this.rain) {
+      const src = c.createBufferSource(); src.buffer = this.noiseBuf; src.loop = true;
+      const f = c.createBiquadFilter(), g = c.createGain(); g.gain.value = 0; src.connect(f).connect(g).connect(this.amb); src.start(); this.rain = { g, f };
+    }
+    const cfg: Record<string, [number, BiquadFilterType, number]> = { clear: [0, 'lowpass', 400], cloudy: [0.05, 'lowpass', 350], fog: [0.03, 'lowpass', 300], rain: [0.22, 'bandpass', 1400], storm: [0.36, 'bandpass', 1000], snow: [0.08, 'lowpass', 500] };
+    const [vol, type, freq] = cfg[w]; this.rain.f.type = type; this.rain.f.frequency.setTargetAtTime(freq, t, 0.5); this.rain.g.gain.setTargetAtTime(vol, t, 1.2);
+  }
   setMood(m: Mood) { if (m === this.mood) return; this.mood = m; this.startDrone(); }
 
   // ---------- voices ----------
@@ -113,11 +124,17 @@ class Engine {
     } else { this.noise(t, 1.6, 0.02, this.amb, 'lowpass', 400); this.ambT = t + 2; }
   }
 
+  /** Murmured speech: a few soft blips at a voice-specific pitch (like distant chatter). */
+  babble(chars: number, base = 440) {
+    if (!this.ctx || this.vol.sfx <= 0) return; const t0 = this.ctx.currentTime + 0.02, n = Math.min(7, Math.max(2, Math.ceil(chars / 6)));
+    for (let i = 0; i < n; i++) { const f = base * (0.85 + Math.random() * 0.3) * (i === n - 1 ? 0.85 : 1); this.osc('triangle', f, t0 + i * 0.075, 0.035, 0.008, 0.05, this.sfx); }
+  }
   // ---------- sound effects ----------
   play(name: Sfx) {
     if (!this.ctx) return; const c = this.ctx, t = c.currentTime + 0.01, out = this.sfx;
     const notes = (fs: number[], gap: number, type: OscillatorType = 'square', peak = 0.08, d = 0.22) => fs.forEach((f, i) => this.osc(type, f, t + i * gap, peak, 0.005, d, out));
     switch (name) {
+      case 'thunder': { const f = this.noise(t, 2.8, 0.5, out, 'lowpass', 160); f.frequency.exponentialRampToValueAtTime(60, t + 2.8); this.noise(t, 0.25, 0.25, out, 'highpass', 900); break; }
       case 'click': this.osc('square', 1400, t, 0.03, 0.002, 0.03, out); break;
       case 'coin': notes([988, 1319], 0.07, 'square', 0.06, 0.18); break;
       case 'reward': notes([523, 659, 784, 1046, 1319], 0.09, 'square', 0.07, 0.3); break;

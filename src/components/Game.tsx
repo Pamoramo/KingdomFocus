@@ -5,10 +5,11 @@ import { KingdomScene } from '../game/KingdomScene.ts';
 import { WorldScene } from '../game/WorldScene.ts';
 import { BattleScene } from '../game/BattleScene.ts';
 import { audio, type Sfx } from '../game/audio.ts';
+import { WEATHER_NAME, type Weather } from '../game/weather.ts';
 import { worldTick } from '../lib/warActions.ts';
 import { WorldPanel, BattleReport, worldBadge } from './World.tsx';
 import { initPersistence } from '../lib/sync.ts';
-import { getState, setState, studyTick, fxBus, type Fx } from '../lib/state.ts';
+import { getState, setState, studyTick, fxBus, neglect, idleDays, type Fx } from '../lib/state.ts';
 import { isAwaiting, dueAt } from '../lib/study.ts';
 import { BUILDINGS, STAGES } from '../lib/economy.ts';
 import { useGame, useUI, fmt } from './hooks.ts';
@@ -84,11 +85,12 @@ function TopBar() {
     <div className="pointer-events-auto mx-auto lg:mx-0 wood rounded-b-md flex items-center gap-3 sm:gap-5 px-3 py-1.5">
       {(['gold', 'wood', 'stone', 'renown'] as const).map((k) => <Counter key={k} k={k} v={s.res[k]} />)}
       <span className={`w-2 h-2 rounded-full ${sync.startsWith('saved') ? 'bg-green-400' : sync.startsWith('offline') || sync.startsWith('sync error') ? 'bg-red-400' : 'bg-yellow-300'}`} title={`Cloud: ${sync}`} />
-      <Icon name={ui.night > 0.5 ? 'moon' : 'sun'} size={16} />
+      <span title={WEATHER_NAME[ui.weather as Weather] ?? 'Clear skies'} className="flex"><Icon name={ui.weather === 'clear' || !ui.weather ? (ui.night > 0.5 ? 'moon' : 'sun') : ui.weather} size={16} /></span>
     </div>
     <div className="pointer-events-auto pt-1 w-full lg:w-auto flex justify-center gap-1.5 flex-wrap">
       <StudyMini onOpen={() => setUI({ panel: 'study' })} />
       <button className="wood rounded px-2.5 py-1 flex items-center gap-1 text-sm" onClick={() => setUI({ view: ui.view === 'world' ? 'kingdom' : 'world' })}><Icon name={ui.view === 'world' ? 'realm' : 'map'} size={18} />{ui.view === 'world' ? 'Kingdom' : 'World'}</button>
+      {neglect(s) > 0 && <button className="rounded px-2.5 py-1 text-sm bg-[#6a3a1a] text-parch border-2 border-black" title="Study to calm the realm" onClick={() => setUI({ panel: 'study' })}>Restless realm · {idleDays(s)} idle days</button>}
       {s.world.threat && <button className="rounded px-2.5 py-1 text-sm bg-blood text-parch border-2 border-black pulse" onClick={() => setUI({ panel: 'world' })}>Under siege!</button>}
       {s.world.campaign && <button className="wood rounded px-2.5 py-1 text-sm" onClick={() => setUI({ panel: 'world' })}>{s.world.campaign.phase === 'field' ? 'Battle awaits' : `Siege day ${s.world.campaign.day}`}</button>}
     </div>

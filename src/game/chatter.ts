@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import { getState } from '../lib/state.ts';
 import { nightFactor } from './KingdomScene.ts';
+import { audio } from './audio.ts';
+import { neglect } from '../lib/state.ts';
 
 type Target = { x: number; y: number; h: number; alive: () => boolean };
 const pick = <T,>(a: readonly T[]) => a[Math.floor(Math.random() * a.length)];
@@ -26,6 +28,8 @@ function situational(): string[] {
   if (s.world.threat) out.push('Man the walls!', 'Enemies at the gate!', 'Hold fast, they won\'t get in!');
   if (s.world.campaign) out.push('Any word from the siege?', 'I pray our soldiers eat well.', 'Victory will be ours!');
   if (nightFactor(s.settings.dayNight).n > 0.6) out.push('Mind the dark.', 'Time for bed.', 'Look at the stars.');
+  const n = neglect(s);
+  if (n > 0) out.push('Is our lord unwell? No study in days...', 'Thieves grow bold these days.', 'The neighbours whisper we are weak.', 'I hope our lord returns to the books soon.');
   if (s.stage >= 3) out.push('Remember when this was all dust?');
   if (s.stage >= 5) out.push('What a castle!', 'Our realm is the envy of all.');
   return out;
@@ -36,9 +40,10 @@ export class Chatter {
   private live: { c: Phaser.GameObjects.Container; t: Target }[] = [];
   constructor(private scene: Phaser.Scene) {}
   get count() { return this.live.length; }
-  say(t: Target, text: string, delay = 0) {
+  say(t: Target, text: string, delay = 0, voice = 440) {
     this.scene.time.delayedCall(delay, () => {
       if (!t.alive()) return;
+      if (getState().settings.sound) audio.babble(text.length, voice);
       const txt = this.scene.add.text(0, 0, text, { fontFamily: 'monospace', fontSize: '22px', color: '#2a1d14', wordWrap: { width: 300 } }).setOrigin(0.5, 1).setScale(0.25).setResolution(2);
       const w = txt.displayWidth + 6, h = txt.displayHeight + 4, g = this.scene.add.graphics();
       g.fillStyle(0x1d1716, 1).fillRoundedRect(-w / 2 - 0.5, -h - 3.5, w + 1, h + 1, 2.5).fillTriangle(-2.5, -3, 2.5, -3, 0, 0.5);
@@ -51,6 +56,8 @@ export class Chatter {
     });
   }
   update() { for (const { c, t } of this.live) if (t.alive()) c.setPosition(Math.round(t.x), Math.round(t.y - t.h)); }
+  /** Each kind of character has its own voice pitch. */
+  voice(role: string) { return ({ worker: 360, villager: 480, guard: 300, patrol: 320, soldier: 330, archer: 420, spar: 350, thief: 640 } as Record<string, number>)[role] ?? 440; }
   line(role: string) { const sit = situational(); return sit.length && Math.random() < 0.35 ? pick(sit) : pick(LINES[role] ?? LINES.villager); }
-  conversation(a: Target, b: Target) { const [q, r] = pick(TALKS); this.say(a, q); this.say(b, r, 1600); }
+  conversation(a: Target, b: Target) { const [q, r] = pick(TALKS); this.say(a, q, 0, 470); this.say(b, r, 1700, 390); }
 }

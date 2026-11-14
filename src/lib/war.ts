@@ -71,7 +71,7 @@ export function armyOf(r: Pick<Rival, 'power' | 'level' | 'id'>, power = r.power
 }
 
 // ---------------- daily world turn ----------------
-export interface Context { stage: number; myPower: number; fort: number; active: boolean }
+export interface Context { stage: number; myPower: number; fort: number; active: boolean; neglect?: number }
 /** Processes elapsed days (max 3 at a time, so absences never snowball). */
 export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): WorldState {
   if (w.lastDay === today) return w;
@@ -88,7 +88,16 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
     r.garrison = Math.max(r.garrison, Math.round(r.power * 0.4));
     if (r.status === 'ally' && r.relation < 30) r.status = 'neutral';
   }
+  // a lord who neglects their studies looks weak: warlike neighbours grow bolder each idle day past the grace period
+  const n = ctx.neglect ?? 0;
+  if (n > 0) for (const r of out.rivals) if (!r.bandits && r.status !== 'vassal' && r.status !== 'ally' && (r.personality === 'aggressive' || r.personality === 'treacherous')) r.relation = clamp(r.relation - Math.min(12, 3 * n));
   if (!ctx.active) return out;
+  if (n > 0) {
+    const foe = out.rivals.filter((r) => !r.bandits && r.status !== 'vassal' && r.status !== 'ally').sort((a, b) => a.relation - b.relation)[0];
+    if (foe) out.inbox.push({ id: `${today}-neglect`, rival: foe.id, kind: 'news', day: today, text: n >= 3
+      ? `${foe.ruler} of ${foe.name} writes: "Your halls fall silent and your scholars idle. Study, or we will come for your lands."`
+      : `Word spreads that your studies have lapsed. ${foe.name} watches your borders with interest.` });
+  }
   // diplomatic events (only processed when the player is actually present)
   for (const r of out.rivals.filter((x) => !x.bandits && x.status !== 'vassal')) {
     const roll = R(), id = `${today}-${r.id}`;

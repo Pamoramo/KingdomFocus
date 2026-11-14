@@ -1,5 +1,5 @@
 // Player actions for diplomacy and war. Every resource change goes through the ledger.
-import { type GameState, type Squad, _internal, studyHooks, emit, getState, setState, count, maxLevel, has, armySize, canAfford, TILE, CAMP_X, CAMP_Y } from './state.ts';
+import { neglect, type GameState, type Squad, _internal, studyHooks, emit, getState, setState, count, maxLevel, has, armySize, canAfford, TILE, CAMP_X, CAMP_Y } from './state.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
 import { type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr } from './war.ts';
@@ -50,7 +50,7 @@ function play(title: string, a: Unit[], b: Unit[], result: BattleResult, aName: 
 export const worldTick = () => {
   const s = getState(), today = dayStr();
   if (s.world.lastDay === today) return;
-  const w = advanceDays(s.world, { stage: s.stage, myPower: myPower(s), fort: fortOf(s), active: true }, today);
+  const w = advanceDays(s.world, { stage: s.stage, myPower: myPower(s), fort: fortOf(s), active: true, neglect: neglect(s) }, today);
   const fresh = w.inbox.filter((m) => !s.world.inbox.some((x) => x.id === m.id));
   for (const m of fresh) emit({ kind: m.kind === 'news' ? 'war' : 'info', text: m.text });
   setState(W(s, w));

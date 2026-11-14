@@ -33,7 +33,7 @@ assert.equal(merged.buildings.length, local.buildings.length);
 assert.equal(S.armySize(merged), 6);
 assert.deepEqual(merged.habits[0].done, local.habits[0].done);
 assert.equal(merged.sessions[0].verifiedSec, 45 * 60);
-assert.deepEqual(merged.sessions[0].reward, { gold: 450, wood: 225, stone: 135, renown: 45 });
+assert.deepEqual(merged.sessions[0].reward, { gold: 567, wood: 283, stone: 170, renown: 56 });
 // war: trade + casualties sync and cannot double count
 import('../../src/lib/warActions.ts').then(async (WA) => {
   S._with({ ...merged, res: { ...merged.res } });
