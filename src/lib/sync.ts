@@ -2,7 +2,7 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 import { getState, setState, subscribe, newGame, emit, type GameState } from './state.ts';
 import { buildPayload, clearSent, outboxEmpty, adoptSnapshot, type Snapshot } from './syncCore.ts';
 
-const URL = process.env.NEXT_PUBLIC_SUPABASE_URL, KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+import { SUPABASE_URL as URL, SUPABASE_ANON_KEY as KEY } from './config.ts';
 export const supabase: SupabaseClient | null = URL && KEY ? createClient(URL, KEY) : null;
 const LS = 'kod-save-v2';
 let user: User | null = null, pulled = false, busy = false, failures = 0;

@@ -1,24 +1,25 @@
 import Phaser from 'phaser';
 import { type GameState, type Battalion, type Squad, batSize } from '../lib/state.ts';
-import { TCLASSES, FORMATIONS, SQUADS_PER_COMPANY, OFFICERS } from '../lib/economy.ts';
+import { TCLASSES, OFFICERS } from '../lib/economy.ts';
 import { awayBats } from '../lib/warActions.ts';
-import { sFrame, bFrame, bannerTex, BW, BH, HD, S } from './textures.ts';
+import { sFrame, bFrame, bannerTex, BW, BH, S } from './textures.ts';
 
 export const LOD_ZOOM = 1.25;
-const SX = 11, SY = 10, SQ_W = 4 * SX + 4, SQ_H = 3 * SY + 6;
+/** Character display scale relative to their 16x20 design size. */
+export const UNIT_K = 1;
+const SW = 16, SH = 20, SX = 11, SY = 9;
 interface Bob { b: Phaser.GameObjects.Bob; ox: number; oy: number; cls: string; rank: number; ph: number; squad: string; idx: number }
 interface View { tick: number; detail: Phaser.GameObjects.Blitter; blocks: Phaser.GameObjects.Blitter; bobs: Bob[]; banner: Phaser.GameObjects.Image; label: Phaser.GameObjects.Text; ring: Phaser.GameObjects.Ellipse; x: number; y: number; sig: string; w: number; h: number; moving: boolean }
+/** Soldiers per row inside a squad, and squads per row, for each formation. */
+const SHAPES = { line: { cols: 6, perRow: (n: number) => Math.min(n, 6) }, block: { cols: 4, perRow: (n: number) => Math.max(1, Math.ceil(Math.sqrt(n))) }, column: { cols: 2, perRow: (n: number) => (n > 8 ? 2 : 1) } } as const;
 
-/** Squad offsets inside a battalion formation; companies of 4 squads are kept together. */
+/** Soldier offsets inside a battalion. Squads stay together, ordered by class; the formation sets their shape. */
 export function layout(squads: Squad[], formation: Battalion['formation']) {
-  const perRow = FORMATIONS[formation], sorted = [...squads].sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank);
-  const pos = sorted.map((q, i) => {
-    const comp = Math.floor(i / SQUADS_PER_COMPANY), inC = i % SQUADS_PER_COMPANY;
-    const compPerRow = Math.max(1, Math.floor(perRow / 2)), cx = (comp % compPerRow) * (SQ_W * 2 + 6) + (inC % 2) * SQ_W, cy = Math.floor(comp / compPerRow) * (SQ_H * 2 + 6) + Math.floor(inC / 2) * SQ_H;
-    return { q, x: cx, y: cy };
-  });
-  const w = Math.max(SQ_W, ...pos.map((p) => p.x + SQ_W)), h = Math.max(SQ_H, ...pos.map((p) => p.y + SQ_H));
-  return { pos: pos.map((p) => ({ ...p, x: p.x - w / 2, y: p.y - h })), w, h };
+  const shape = SHAPES[formation] ?? SHAPES.block, sorted = [...squads].sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank);
+  const cols = shape.cols, rows = Math.ceil(12 / cols), qw = cols * SX + 5, qh = rows * SY + 4, per = shape.perRow(sorted.length);
+  const pos = sorted.map((q, i) => ({ q, x: (i % per) * qw, y: Math.floor(i / per) * qh, cols }));
+  const w = Math.max(qw, ...pos.map((p) => p.x + qw)), h = Math.max(qh, ...pos.map((p) => p.y + qh));
+  return { pos: pos.map((p) => ({ ...p, x: p.x - w / 2, y: p.y - h })), w, h, qw, qh };
 }
 
 export class Army {
@@ -36,7 +37,7 @@ export class Army {
       let v = this.views.get(bat.id);
       if (!v) {
         const sc = this.scene;
-        v = { detail: sc.add.blitter(0, 0, 'soldiers').setScale(S), blocks: sc.add.blitter(0, 0, 'blocks'), bobs: [], banner: sc.add.image(bat.x, bat.y, bannerTex(sc, bat.color, bat.emblem, 0)).setOrigin(0.2, 1).setScale(S),
+        v = { detail: sc.add.blitter(0, 0, 'soldiers1x'), blocks: sc.add.blitter(0, 0, 'blocks'), bobs: [], banner: sc.add.image(bat.x, bat.y, bannerTex(sc, bat.color, bat.emblem, 0)).setOrigin(0.2, 1).setScale(S),
           label: sc.add.text(bat.x, bat.y, '', { fontFamily: 'monospace', fontSize: '24px', color: '#fff4d6', stroke: '#1d1716', strokeThickness: 5 }).setOrigin(0.5, 0).setScale(0.25).setResolution(2),
           ring: sc.add.ellipse(bat.x, bat.y, 40, 14).setStrokeStyle(1, 0xffe27a).setVisible(false), x: bat.x, y: bat.y, sig: '', w: 0, h: 0, moving: false, tick: -1 };
         v.detail.setVisible(!this.lod); v.blocks.setVisible(this.lod);
@@ -44,14 +45,15 @@ export class Army {
       }
       if (v.sig !== sig) {
         v.sig = sig; v.detail.clear(); v.blocks.clear(); v.bobs = [];
-        const { pos, w, h } = layout(squads, bat.formation); v.w = w; v.h = h;
+        const { pos, w, h, qw, qh } = layout(squads, bat.formation); v.w = w; v.h = h;
+        const bx = 1, by = 1; void qw; void qh; // blitters cannot scale; LOD blocks keep their 46x32 footprint
         const items: Omit<Bob, 'b'>[] = [];
-        for (const { q, x, y } of pos) {
-          v.blocks.create(x + 2, y - 2, bFrame(q.cls, q.rank));
-          for (let k = 0; k < q.count; k++) items.push({ ox: x + (k % 4) * SX - 4, oy: y + Math.floor(k / 4) * SY - 12, cls: q.cls, rank: q.rank, ph: Math.floor(Math.random() * 4), squad: q.id, idx: k });
+        for (const { q, x, y, cols } of pos) {
+          v.blocks.create(x / bx, y / by, bFrame(q.cls, q.rank));
+          for (let k = 0; k < q.count; k++) items.push({ ox: x + (k % cols) * SX + SX / 2 - SW / 2, oy: y + Math.floor(k / cols) * SY + SY - SH, cls: q.cls, rank: q.rank, ph: Math.floor(Math.random() * 4), squad: q.id, idx: k });
         }
         items.sort((a, b) => a.oy - b.oy);
-        for (const it of items) v.bobs.push({ ...it, b: v.detail.create(it.ox * HD, it.oy * HD, sFrame(it.cls, it.rank, 0)) });
+        for (const it of items) v.bobs.push({ ...it, b: v.detail.create(it.ox, it.oy, sFrame(it.cls, it.rank, 0)) });
       }
       const n = batSize(s, bat.id);
       v.label.setText(`${bat.name} · ${OFFICERS[bat.commander.rank].name} ${bat.commander.name.split(' ')[0]} (${n})`);
@@ -96,10 +98,17 @@ export class Army {
       if (Math.abs(wx - v.x) > v.w / 2 + 8 || wy > v.y + 8 || wy < v.y - v.h - 24) continue;
       if (this.lod) return { bat: id };
       let best: Bob | null = null, bd = 99;
-      for (const bb of v.bobs) { const d = Math.hypot(wx - (v.x + bb.ox + 8), wy - (v.y + bb.oy + 12)); if (d < bd) { bd = d; best = bb; } }
+      for (const bb of v.bobs) { const d = Math.hypot(wx - (v.x + bb.ox + SW / 2), wy - (v.y + bb.oy + SH * 0.6)); if (d < bd) { bd = d; best = bb; } }
       return best && bd < 10 ? { bat: id, squad: best.squad, idx: best.idx } : { bat: id };
     }
     return null;
+  }
+  /** A random visible soldier as a speech target (none when zoomed out). */
+  randomSoldier() {
+    if (this.lod) return null;
+    const vs = [...this.views.values()].filter((v) => v.bobs.length); if (!vs.length) return null;
+    const v = vs[Math.floor(Math.random() * vs.length)], bb = v.bobs[Math.floor(Math.random() * v.bobs.length)];
+    return { get x() { return v.x + bb.ox + SW / 2; }, get y() { return v.y + bb.oy + SH; }, h: SH, alive: () => v.detail.active };
   }
   bounds(id: string) { const v = this.views.get(id); return v ? { x: v.x, y: v.y - v.h / 2 } : null; }
 }

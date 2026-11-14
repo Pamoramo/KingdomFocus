@@ -129,6 +129,9 @@ do $$ declare t text; begin
 end $$;
 -- the ledger is append-only for clients (no deletes, updates only through the sync function)
 drop policy if exists owner_all on public.ledger;
+drop policy if exists ledger_read on public.ledger;
+drop policy if exists ledger_insert on public.ledger;
+drop policy if exists ledger_update on public.ledger;
 create policy ledger_read on public.ledger for select to authenticated using (user_id = auth.uid());
 create policy ledger_insert on public.ledger for insert to authenticated with check (user_id = auth.uid());
 create policy ledger_update on public.ledger for update to authenticated using (user_id = auth.uid() and kind in ('study', 'manual'));

@@ -15,7 +15,11 @@ export function makeTextures(scene: Phaser.Scene) {
   for (let i = 0; i < 4; i++) for (const t of ['dirt', 'cracked', 'mix', 'grass', 'lush'] as const) add(`t_${t}${i}`, hdify(terrainTile(t, i * 5 + t.length), { rim: false, outline: false, grain: 7, seed: i * 31 + t.length }));
   for (const d of DECOS) for (let i = 0; i < 2; i++) add(`d_${d}${i}`, hdify(withoutOutline(() => decoration(d, i)), { seed: i + 3 }));
   if (!T.exists('soldiers')) {
-    const tex = T.addCanvas('soldiers', soldierSheet())!;
+    const sheet = soldierSheet(), tex = T.addCanvas('soldiers', sheet)!;
+    // Blitters (used for large armies) cannot scale, so they get a sheet at world resolution.
+    const [c1, x1] = canvas(sheet.width / HD, sheet.height / HD); x1.imageSmoothingEnabled = false; x1.drawImage(sheet, 0, 0, c1.width, c1.height);
+    const t1 = T.addCanvas('soldiers1x', c1)!;
+    for (const cls of SHEET_CLASSES) for (let rk = 0; rk < RANKS_N; rk++) for (let f = 0; f < FRAMES; f++) { const { x, y } = frameRect(cls, rk, f); t1.add(sFrame(cls, rk, f), 0, x, y, FW, FH); }
     for (const cls of SHEET_CLASSES) for (let rk = 0; rk < RANKS_N; rk++) for (let f = 0; f < FRAMES; f++) { const { x, y } = frameRect(cls, rk, f); tex.add(sFrame(cls, rk, f), 0, x * HD, y * HD, FW * HD, FH * HD); }
   }
   if (!T.exists('blocks')) {

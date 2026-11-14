@@ -1,13 +1,14 @@
 import Phaser from 'phaser';
 import { type GameState, type Building, footprint, TILE, count } from '../lib/state.ts';
 import { sFrame, S } from './textures.ts';
+import { UNIT_K } from './army.ts';
 
 type Mode = 'walk' | 'patrol' | 'archer' | 'spar' | 'tilt';
 interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number] }
 
 /** Villagers going about their day, sentries on patrol, archers at practice, knights training. */
 export class Ambient {
-  private actors: Actor[] = [];
+  actors: Actor[] = [];
   private sig = '';
   private doors: { x: number; y: number }[] = [];
   constructor(private scene: Phaser.Scene) {}
@@ -37,11 +38,16 @@ export class Ambient {
     }
   }
   private add(cls: string, rank: number, mode: Mode, x: number, y: number): Actor {
-    const img = this.scene.add.image(x, y, 'soldiers', sFrame(cls, rank, 0)).setOrigin(0.5, 1).setScale(S);
+    const img = this.scene.add.image(x, y, 'soldiers', sFrame(cls, rank, 0)).setOrigin(0.5, 1).setScale(S * UNIT_K);
     const a: Actor = { img, cls, rank, mode, x, y, tx: x, ty: y, wait: Math.random() * 3000, a: x, b: x, ph: Math.floor(Math.random() * 8) };
     this.actors.push(a); return a;
   }
 
+  /** Speech targets: role plus a live position for each villager, guard and trainee. */
+  talkers() {
+    return this.actors.map((a) => ({ role: a.mode === 'walk' ? (a.cls === 'worker' ? 'worker' : 'villager') : a.mode === 'patrol' ? 'guard' : a.mode === 'archer' ? 'archer' : a.mode === 'spar' ? 'spar' : 'soldier',
+      walking: a.mode === 'walk', t: { get x() { return a.x; }, get y() { return a.y; }, h: 16, alive: () => a.img.active } }));
+  }
   update(time: number, dt: number) {
     const tick = Math.floor(time / 150);
     for (const a of this.actors) {

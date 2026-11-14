@@ -122,7 +122,7 @@ export class World {
   private construct(v: BView, w: number, h: number, rise: boolean) {
     const sc = this.scene, img = v.img, H = img.height, W = img.displayWidth, x = img.x, y = img.y;
     const scaff = sc.add.image(x, y, scaffoldTex(sc, v.b.kind)).setOrigin(0, 1).setDepth(img.depth + 1).setScale(S);
-    const workers = [0, 1].map((i) => sc.add.image(x + (i ? W - 4 : 4), y + 2, 'soldiers', sFrame('worker', 0, 4)).setOrigin(0.5, 1).setDepth(img.depth + 2).setFlipX(!!i).setScale(S));
+    const workers = [0, 1].map((i) => sc.add.image(x + (i ? W - 4 : 4), y + 2, 'soldiers', sFrame('worker', 0, 4)).setOrigin(0.5, 1).setDepth(img.depth + 2).setFlipX(!!i).setScale(S * 0.75));
     v.building = 1;
     const prog = { p: rise ? 0 : 0.6 };
     sc.tweens.add({ targets: prog, p: 1, duration: 2400, ease: 'Sine.InOut',
