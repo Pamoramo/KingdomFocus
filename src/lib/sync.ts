@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
-import { getState, setState, subscribe, newGame, emit, type GameState } from './state.ts';
+import { getState, setState, subscribe, newGame, emit, grantCompensation, stableUuid, type GameState } from './state.ts';
 import { buildPayload, clearSent, outboxEmpty, adoptSnapshot, type Snapshot } from './syncCore.ts';
 
 import { SUPABASE_URL as URL, SUPABASE_ANON_KEY as KEY } from './config.ts';
@@ -44,13 +44,29 @@ export async function syncNow() {
     const sent = buildPayload(getState());
     const snap = await rpc(sent.payload);
     let s = clearSent(getState(), sent);
-    if (outboxEmpty(s)) s = adoptSnapshot(s, snap);
+    const adopted = outboxEmpty(s);
+    if (adopted) s = adoptSnapshot(s, snap);
     setState(s, false); saveLocal();
+    if (adopted) compensate(user.id);
     failures = 0; setStatus(`saved to cloud ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
   } catch (e) {
     failures++; setStatus(`offline, will retry (${(e as Error).message.slice(0, 60)})`);
     clearTimeout(syncT); syncT = setTimeout(syncNow, Math.min(300_000, 5000 * 2 ** failures));
   } finally { busy = false; }
+}
+
+/** One-time grants for players affected by an outage, applied once the account's cloud save is loaded.
+ *  The session id is derived from the account, so every device grants the same row and the server keeps one. */
+const COMPENSATIONS = [
+  { key: 'lan-loading-2026-11', before: Date.parse('2026-11-15T00:00:00Z'), minutes: 60, factor: 3, note: 'could not check in while the game would not load on other devices' },
+];
+function compensate(uid: string) {
+  const s = getState();
+  for (const c of COMPENSATIONS) {
+    if (Date.now() > c.before + 30 * 86400_000) continue; // offer expires after a month
+    if (!s.sessions.some((r) => r.startedAt < c.before)) continue; // only kingdoms that existed at the time
+    grantCompensation(stableUuid(`${c.key}:${uid}`), c.minutes, c.factor, s.subjects[0] ?? 'Study', c.note);
+  }
 }
 
 let started = false;

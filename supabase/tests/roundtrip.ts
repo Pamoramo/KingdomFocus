@@ -18,6 +18,7 @@ Date.now = real;
 S.build('hut', 30, 30); S.build('hut', 33, 30); S.recruit('peasant', 6);
 S.addHabit({ name: 'Read', freq: 'daily', target: 2, unit: 'chapters', weight: 2, requireNote: false });
 S.habitProgress(S.getState().habits[0].id, 2);
+S.grantCompensation(S.stableUuid('lan-loading-2026-11:11111111-1111-1111-1111-111111111111'), 60, 3, 'History', 'roundtrip'); // passes the server's reward ceiling
 const local = S.getState();
 
 const sent = buildPayload(local);
@@ -32,8 +33,9 @@ const merged = adoptSnapshot(cleared, snap);
 assert.equal(merged.buildings.length, local.buildings.length);
 assert.equal(S.armySize(merged), 6);
 assert.deepEqual(merged.habits[0].done, local.habits[0].done);
-assert.equal(merged.sessions[0].verifiedSec, 45 * 60);
-assert.deepEqual(merged.sessions[0].reward, { gold: 567, wood: 283, stone: 170, renown: 56 });
+const timed = merged.sessions.find((r) => r.verifiedSec === 45 * 60)!;
+assert.equal(merged.sessions.length, 2);
+assert.deepEqual(timed.reward, { gold: 567, wood: 283, stone: 170, renown: 56 });
 // war: trade + casualties sync and cannot double count
 import('../../src/lib/warActions.ts').then(async (WA) => {
   S._with({ ...merged, res: { ...merged.res } });

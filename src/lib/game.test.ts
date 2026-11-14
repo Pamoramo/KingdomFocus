@@ -84,3 +84,20 @@ test('promotion requires xp, building and renown', () => {
   S._with({ ...S.getState(), squads: S.getState().squads.map((x) => ({ ...x, xp: 100 })) });
   assert.match(S.promote(q.id) ?? '', /Barracks/);
 });
+
+test('compensation grants an hour at 3x once, within the server ceiling', () => {
+  S.setState(S.newGame(), false);
+  const id = S.stableUuid('lan-loading-2026-11:user-a');
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(id, S.stableUuid('lan-loading-2026-11:user-a'));
+  assert.notEqual(id, S.stableUuid('lan-loading-2026-11:user-b'));
+  const before = S.getState().res.gold;
+  S.grantCompensation(id, 60, 3, 'Mathematics', 'test'); S.grantCompensation(id, 60, 3, 'Mathematics', 'test');
+  const s = S.getState(), rec = s.sessions.filter((r) => r.id === id);
+  assert.equal(rec.length, 1, 'granted once');
+  assert.equal(rec[0].verifiedSec, 3600);
+  assert.equal(rec[0].reward.gold, studyReward(60 * MIN, undefined, undefined, 3).gold);
+  assert.equal(s.res.gold - before, rec[0].reward.gold);
+  assert.equal(s.outbox.ledger.filter((l) => l.ref === id).length, 1);
+  for (const [k, c] of Object.entries({ gold: 100, wood: 50, stone: 30, renown: 12 })) assert.ok(rec[0].reward[k as keyof Res] <= 60 * c);
+});

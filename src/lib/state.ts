@@ -416,6 +416,25 @@ export const logManual = (subject: string, minutes: number, when: number, note: 
   emit({ kind: 'reward', text: `Logged ${minutes} min (manual)`, res: reward });
   return event(o, 'study', `Logged ${minutes} min of ${subject} manually.`, minutes);
 });
+/** Deterministic UUID (v4-shaped) from a string, so a one-time grant has the same id on every device. */
+export function stableUuid(key: string) {
+  let h = '';
+  for (let i = 0; h.length < 32; i++) { let x = 2166136261 ^ i; for (const c of key) x = Math.imul(x ^ c.charCodeAt(0), 16777619); h += (x >>> 0).toString(16).padStart(8, '0'); }
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+/** One-time compensation: credits a study session at `factor` times the normal reward. Idempotent per id. */
+export const grantCompensation = (id: string, minutes: number, factor: number, subject: string, note: string) => update((s) => {
+  if (s.sessions.some((r) => r.id === id)) return s;
+  const raw = studyReward(minutes * MIN, s.settings.rates, studyMult(s), factor), cap = { gold: 100, wood: 50, stone: 30, renown: 12 }; // the server's per-minute ceiling
+  const now = Date.now(), reward = { gold: Math.min(raw.gold, minutes * cap.gold), wood: Math.min(raw.wood, minutes * cap.wood), stone: Math.min(raw.stone, minutes * cap.stone), renown: Math.min(raw.renown, minutes * cap.renown) };
+  const rec: StudyRecord = { id, subject, source: 'timer', startedAt: now - minutes * MIN, endedAt: now, verifiedSec: minutes * 60, forfeitedSec: 0, checkIns: 0, missed: 0, notes: note, reward };
+  let o = mark({ ...s, sessions: [rec, ...s.sessions] }, 'sessions', id);
+  o = studyLedger(o, 'study', id, reward, ZERO);
+  o = giveXp(o, minutes);
+  o = studyHooks.reduce((acc, h) => h(acc, minutes), o);
+  emit({ kind: 'reward', text: `Royal compensation: ${minutes} min at ${factor}x`, res: reward });
+  return event(o, 'study', `The crown credits ${minutes} min of study at ${factor}x reward: ${note}`, minutes);
+});
 export const setSettings = (p: Partial<Settings>) => update((s) => ({ ...s, settings: { ...s.settings, ...p } }));
 
 // ---------------- habits ----------------
