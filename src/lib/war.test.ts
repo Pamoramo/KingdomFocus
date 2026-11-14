@@ -97,9 +97,9 @@ test('town watch: guards on duty, thieves capped, bounties', async () => {
   const homes = [0, 1, 2, 3].map((i) => ({ id: 'h' + i, kind: 'house' as const, x: 10 + i * 3, y: 10, level: 2, at: 0 }));
   S._with({ ...s0, res: { gold: 1000, wood: 0, stone: 0, renown: 0 }, buildings: [...s0.buildings, ...homes] });
   assert.ok(T.thiefCanStrike(), 'unguarded town with homes attracts thieves');
-  T.theft(); assert.equal(S.getState().res.gold, 980, 'theft takes 2%');
+  T.theft(); assert.equal(S.getState().res.gold, 990, 'theft takes 1%');
   T.theft(); T.theft(); T.theft();
-  assert.equal(S.getState().world.town!.thefts, 3, 'at most three thefts a day');
+  assert.equal(S.getState().world.town!.thefts, 1, 'at most one theft a day');
   assert.equal(T.thiefCanStrike(), false);
   S._with({ ...S.getState(), res: { gold: 10000, wood: 0, stone: 0, renown: 0 } }); S.recruit('peasant', 0);
   const b = { id: 'b', name: 'Watch', army: 'A', color: 0, emblem: 'lion', formation: 'block' as const, orders: 'patrol' as const, x: 0, y: 0, commander: { name: 'X', rank: 0, seed: 'b' } };
@@ -136,4 +136,54 @@ test('town events: small rewards, at most six a day', async () => {
   assert.equal(S.getState().res.gold, 60, 'six rewarded events');
   assert.equal(S.getState().world.town!.events, 9, 'all events still logged');
   T.townEvent('Tipsy villager'); assert.equal(S.getState().res.gold, 60);
+});
+
+test('recruits for a battalion at the siege march there before they fight', () => {
+  const s0 = S.newGame(); S._with({ ...s0, res: { gold: 99999, wood: 9999, stone: 9999, renown: 999 }, buildings: [...s0.buildings, { id: 'f', kind: 'farm', x: 10, y: 10, level: 3, at: 0 }, { id: 'b', kind: 'barracks', x: 20, y: 10, level: 2, at: 0 }] });
+  S.recruit('militia', 30);
+  const bat = S.getState().battalions[0].id, size = () => S.batSize(S.getState(), bat);
+  assert.equal(WA.startCampaign('bandits', [bat], { ram: 0, tower: 0, mangonel: 0, ballista: 0, trebuchet: 0 }, 40), null);
+  S.recruit('militia', 12, bat);
+  let s = S.getState();
+  assert.equal(size(), 30, 'not teleported to the siege');
+  const j = s.world.journeys!.find((x) => x.kind === 'reinforce')!;
+  assert.ok(j && j.arrive > Date.now() + 60_000, 'they march the road');
+  assert.ok(WA.awayBats(s).has(j.bats![0]), 'the column is away from home');
+  assert.equal(S.batSize(s, j.bats![0]), 12);
+  WA.journeysTick(Date.now() + 3_600_000);
+  s = S.getState();
+  assert.equal(size(), 42, 'joined their battalion at the siege');
+  assert.ok(!s.battalions.some((b) => b.id === j.bats![0]), 'the column folds into it');
+  // a whole battalion can be sent too, and arrives later
+  S.newBattalion('Second Battalion'); const home = S.getState().battalions.find((b) => b.name === 'Second Battalion')!;
+  S.recruit('militia', 12, home.id);
+  assert.equal(S.batSize(S.getState(), home.id), 12, 'a battalion at home gets its recruits at once');
+  assert.equal(WA.reinforce(home.id), null);
+  assert.ok(!S.getState().world.campaign!.battalions.includes(home.id));
+  WA.journeysTick(Date.now() + 3_600_000);
+  assert.ok(S.getState().world.campaign!.battalions.includes(home.id), 'battalion joined the host');
+});
+
+test('bandit outposts: appear daily up to a cap, can be raided for a small purse', async () => {
+  const W = await import('./war.ts');
+  let w = W.refreshOutposts(initWorld(77), 1, '2026-05-01');
+  assert.equal(w.outposts!.length, 2, 'two to start');
+  assert.equal(W.refreshOutposts(w, 1, '2026-05-01'), w, 'once a day');
+  for (const d of ['02', '03', '04', '05']) w = W.refreshOutposts(w, 1, `2026-05-${d}`);
+  assert.equal(w.outposts!.length, W.outpostCap(1), 'capped');
+  for (const o of w.outposts!) { assert.ok(o.x > 0.05 && o.x < 0.95 && o.y > 0.05 && o.y < 0.95); assert.ok(o.loot.gold > 0 && o.loot.gold < 500, 'a small purse'); }
+  assert.equal(new Set(w.outposts!.map((o) => o.name)).size, w.outposts!.length, 'distinct names');
+  const s0 = S.newGame(); S._with({ ...s0, world: w, res: { gold: 99999, wood: 9999, stone: 9999, renown: 999 }, buildings: [...s0.buildings, { id: 'f', kind: 'farm', x: 10, y: 10, level: 3, at: 0 }, { id: 'b', kind: 'barracks', x: 20, y: 10, level: 3, at: 0 }] });
+  S.recruit('swordsman', 0); S.recruit('spearman', 40);
+  const bat = S.getState().battalions[0].id, op = w.outposts![0], gold = S.getState().res.gold;
+  assert.equal(WA.raidOutpost(op.id, bat), null);
+  assert.match(WA.raidOutpost(op.id, bat) ?? '', /already|away/);
+  assert.ok(WA.awayBats(S.getState()).has(bat));
+  WA.journeysTick(Date.now() + 3_600_000);
+  const s = S.getState(), rep = s.world.reports[0];
+  assert.match(rep.title, /Raid on/);
+  if (rep.win) { assert.ok(!s.world.outposts!.some((o) => o.id === op.id), 'camp cleared'); assert.equal(s.res.gold, gold + op.loot.gold); }
+  assert.ok(s.world.journeys!.some((j) => j.kind === 'return' && j.home && j.to), 'survivors march home');
+  WA.journeysTick(Date.now() + 7_200_000);
+  assert.ok(!WA.awayBats(S.getState()).has(bat), 'home again');
 });

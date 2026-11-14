@@ -38,9 +38,29 @@ export function WorldPanel() {
   </div>;
 }
 
+/** Small bandit camps along the roads: easy fights with a small purse, and practice for green troops. */
+function Outposts() {
+  const s = useGame(), ui = useUI(), list = s.world.outposts ?? [], away = WA.awayBats(s), home = s.battalions.filter((b) => !away.has(b.id) && s.squads.some((q) => q.bat === b.id));
+  const [bat, setBat] = useState(''), pick = home.some((b) => b.id === bat) ? bat : home[0]?.id ?? '';
+  const raiding = new Set((s.world.journeys ?? []).filter((j) => j.kind === 'raid').map((j) => (j.data as { outpost?: string })?.outpost));
+  if (!list.length) return null;
+  return <Section title="Bandit outposts">
+    <p className="text-xs opacity-75">Outlaw camps along the roads. Clear them for a small purse; new ones spring up over time.</p>
+    {list.map((o) => { const p = sidePower(WA.unitsOf(s.squads.filter((q) => q.bat === pick)));
+      return <div key={o.id} className={`border-b border-black/10 pb-1.5 space-y-1 text-sm ${ui.selRival === o.id ? 'bg-gold/20 -mx-1 px-1' : ''}`}>
+        <div className="flex items-center gap-2"><b className="flex-1">{o.name}</b><span className="text-xs">{pick ? `${strengthText(Math.max(1, p), o.power)} (≈${o.power})` : `strength ≈${o.power}`}</span></div>
+        <div className="flex items-center gap-2 text-xs">Spoils: <Cost cost={o.loot} plus /></div>
+        {raiding.has(o.id) ? <div className="text-xs italic">Your soldiers are on their way.</div> : <div className="flex gap-1">
+          <select className="inp !py-0 text-xs" value={pick} onChange={(e) => setBat(e.target.value)}>{home.length ? home.map((b) => <option key={b.id} value={b.id}>{b.name} (strength {fmt(sidePower(WA.unitsOf(s.squads.filter((q) => q.bat === b.id))))})</option>) : <option value="">No battalion at home</option>}</select>
+          <button className="btn btn-red !py-0 text-xs" disabled={!pick} onClick={() => WA.raidOutpost(o.id, pick)}>Raid</button></div>}
+      </div>; })}
+  </Section>;
+}
+
 function Realms() {
   const s = useGame(), mine = WA.myPower(s);
   return <div className="space-y-2">
+    <Outposts />
     <p className="text-sm">Your army's strength: <b>{fmt(mine)}</b>. Trade, gifts and sending troops build trust. At 60 relations a kingdom will ally with you.</p>
     {s.world.rivals.map((r) => <button key={r.id} className="card p-2 w-full text-left flex gap-2 items-center" onClick={() => setUI({ selRival: r.id })}>
       <Banner color={r.color} emblem={r.emblem} scale={1.5} />
@@ -116,6 +136,19 @@ function TacticPicker({ units, terrain, commander, onPick, label }: { units: Ret
   </div>;
 }
 
+/** Send another battalion from home to the siege; it marches the whole road. */
+function Reinforce() {
+  const s = useGame(), away = WA.awayBats(s), home = s.battalions.filter((b) => !away.has(b.id) && s.squads.some((q) => q.bat === b.id)), [bat, setBat] = useState('');
+  const coming = (s.world.journeys ?? []).filter((j) => j.kind === 'reinforce');
+  const pick = home.some((b) => b.id === bat) ? bat : home[0]?.id ?? '';
+  return <Section title="Reinforcements">
+    <p className="text-xs opacity-75">New recruits for a battalion at the siege, and any battalion you send, have to march there before they can fight.</p>
+    {coming.map((j) => <div key={j.id} className="text-xs">• {j.label}</div>)}
+    {home.length > 0 && <div className="flex gap-1"><select className="inp !py-0 text-sm" value={pick} onChange={(e) => setBat(e.target.value)}>{home.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
+      <button className="btn" disabled={!pick} onClick={() => WA.reinforce(pick)}>Send to the siege</button></div>}
+  </Section>;
+}
+
 function CampaignTab() {
   const s = useGame(), w = s.world, c = w.campaign;
   if (!c) return <PlanCampaign />;
@@ -147,6 +180,7 @@ function CampaignTab() {
         <div className="flex gap-2"><button className="btn flex-1" onClick={WA.demandSurrender}>Demand surrender ({Math.round(surrenderChance(c) * 100)}%)</button><button className="btn btn-red flex-1" onClick={() => confirm('Lift the siege and bring everyone home?') && WA.liftSiege()}>Lift siege</button></div>
       </Section>
     </>}
+    <Reinforce />
     <Spoils r={r} phase={c.phase} />
     <Section title="Campaign log">{[...c.log].reverse().slice(0, 12).map((l, i) => <div key={i} className="text-xs">{l}</div>)}</Section>
   </div>;

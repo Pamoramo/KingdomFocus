@@ -4,7 +4,7 @@ import { type Habit, type Freq, progress, streak, habitReward, MILESTONES, dayKe
 import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, SQUADS_PER_COMPANY, TCLASSES, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
 import { nameFor } from './names.ts';
 import type { Biome } from './realms.ts';
-import { type WorldState, type Engines, initWorld, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN } from './war.ts';
+import { type WorldState, type Engines, initWorld, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, travelMs, type Journey } from './war.ts';
 import type { Unit, BattleResult } from './battle.ts';
 
 // ---------------- types ----------------
@@ -269,14 +269,32 @@ export const recruit = (cls: TClass, n: number, batId?: string) => update((s0) =
   if (armySize(s0) + n > armyCap(s0)) return `Army capacity reached (${armySize(s0)}/${armyCap(s0)}). Build farms, huts and houses.`;
   if (!canAfford(s0.res, d.cost, n)) return 'Not enough resources';
   let [s, bat] = ensureBattalion(s0); if (batId && s.battalions.some((b) => b.id === batId)) bat = batId;
+  // soldiers can't appear at a distant siege: recruits for a battalion that is away muster at home, and those meant for the siege march there
+  let join: string | null = null;
+  const away = awayFromHome(s), c = s.world?.campaign, target = c ? s.world.rivals.find((r) => r.id === c.target) : undefined;
+  if (away.has(bat)) {
+    if (s.battalions.length >= 40) return 'Too many battalions';
+    const src = s.battalions.find((b) => b.id === bat)!;
+    if (c && target && c.battalions.includes(bat)) {
+      const nb: Battalion = { ...newBat(s, `${src.name.slice(0, 44)} reinforcements`), army: src.army, color: src.color, emblem: src.emblem };
+      s = mark({ ...s, battalions: [...s.battalions, nb] }, 'battalions', nb.id); join = bat; bat = nb.id;
+    } else {
+      const home = s.battalions.find((b) => !away.has(b.id));
+      if (home) bat = home.id; else { const nb = newBat(s, 'Home Guard'); s = mark({ ...s, battalions: [...s.battalions, nb] }, 'battalions', nb.id); bat = nb.id; }
+    }
+  }
   let left = n; const touched: string[] = [];
   const squads = s.squads.map((q) => {
     if (left && q.bat === bat && q.cls === cls && q.rank === 0 && q.count < SQUAD_SIZE) { const t = Math.min(left, SQUAD_SIZE - q.count); left -= t; touched.push(q.id); return { ...q, count: q.count + t }; }
     return q;
   });
   while (left > 0) { const t = Math.min(left, SQUAD_SIZE), id = uid(); squads.push({ id, cls, count: t, xp: 0, rank: 0, bat }); touched.push(id); left -= t; }
-  emit({ kind: 'info', text: `Recruited ${n} ${d.name}${n > 1 ? 's' : ''}` });
   let o = spend({ ...s, squads }, d.cost, n);
+  if (join && target) { // they set off along the road to the siege
+    const now = Date.now(), ms = travelMs('army', target), j: Journey = { id: uid(), kind: 'reinforce', rival: target.id, depart: now, arrive: now + ms, label: `Reinforcements marching to ${target.name}`, bats: [bat], data: { join } };
+    o = { ...o, world: { ...o.world, journeys: [...(o.world.journeys ?? []), j] } };
+    emit({ kind: 'info', text: `Recruited ${n} ${d.name}${n > 1 ? 's' : ''}. They march to the siege of ${target.name} (${Math.max(1, Math.round(ms / 60000))} min).` });
+  } else emit({ kind: 'info', text: `Recruited ${n} ${d.name}${n > 1 ? 's' : ''}` });
   o = event(o, 'recruit', `Recruited ${n} ${d.name}${n > 1 ? 's' : ''}.`, n);
   for (const id of touched) o = mark(o, 'squads', id);
   return o;

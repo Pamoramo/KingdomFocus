@@ -33,10 +33,13 @@ export interface Threat { rival: string; power: number; since: number; allyHelp:
 export interface Missive { id: string; rival: string; kind: 'tribute_demand' | 'trade_offer' | 'aid_request' | 'alliance_offer' | 'peace_offer' | 'news'; text: string; amount?: number; day: string }
 export interface Loan { bat: string; rival: string; leftMin: number }
 export interface Report { id: string; t: number; title: string; win: boolean; lines: string[]; you: number; foe: number; lostYou: number; lostFoe: number; loot?: Partial<Res> }
-export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'return';
+export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'return' | 'reinforce' | 'raid';
 /** Someone on the road between your kingdom and another. Effects apply when they arrive. */
-export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown> }
-export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[] }
+/** `to` is set for places that are not a realm (bandit outposts); otherwise the journey runs to the rival's castle. */
+export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown>; to?: { x: number; y: number } }
+/** A small bandit camp on the road: easy prey with a small purse. */
+export interface Outpost { id: string; name: string; x: number; y: number; power: number; loot: Res; biome: 'grassland' | 'forest' | 'highlands' | 'swamp' }
+export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string }
 
 export const SIEGE_DAY_MIN = 20;          // verified study minutes per siege day
 export const SUPPLY_COST = { gold: 15, wood: 5 }; // buys 10 supplies
@@ -201,4 +204,28 @@ export const conquestSpoils = (r: Pick<Rival, 'level'>): Res => ({ gold: 300 * l
 export const defenceSpoils = (r: Pick<Rival, 'level'>): Res => ({ gold: 150 * lv(r), wood: 0, stone: 0, renown: 30 * lv(r) });
 /** Lasting tribute from each vassal, applied to every study session. */
 export const VASSAL_GOLD = 0.05, VASSAL_GOLD_MAX = 0.3, VASSAL_RENOWN = 0.02;
+
+// ---------------- bandit outposts ----------------
+const OUTPOST_NAMES = ['Cutthroat Camp', 'Wolf Hollow', 'Raven Rock', 'Smugglers\' Ford', 'Black Thicket', 'Gallows Hill', 'Rat\'s Nest', 'Old Mill Hideout', 'Crooked Bridge', 'Poacher\'s Den', 'Thieves\' Copse', 'Broken Tower'];
+/** How many outposts a realm at this stage has to deal with. */
+export const outpostCap = (stage: number) => 2 + Math.min(2, Math.floor(stage / 2));
+/** A new outpost along the road to a random realm; small, and stronger (with a fatter purse) as your kingdom grows. */
+export function newOutpost(w: Pick<WorldState, 'rivals' | 'outposts' | 'seed'>, stage: number, salt: number): Outpost {
+  const R = rng(hash(`${w.seed}:${salt}`)), rv = w.rivals[Math.floor(R() * w.rivals.length)] ?? { x: 0.8, y: 0.3 };
+  const t = 0.35 + R() * 0.3, nx = -(rv.y - 0.5), ny = rv.x - 0.5, j = (R() - 0.5) * 0.25;
+  const x = Math.min(0.92, Math.max(0.08, 0.5 + (rv.x - 0.5) * t + nx * j)), y = Math.min(0.9, Math.max(0.1, 0.5 + (rv.y - 0.5) * t + ny * j));
+  const lvl = Math.max(1, stage), power = Math.round((10 + R() * 14) * (1 + lvl * 0.6));
+  const loot: Res = { gold: Math.round((40 + R() * 50) * lvl), wood: Math.round(R() * 30 * lvl), stone: Math.round(R() * 18 * lvl), renown: 3 + Math.floor(R() * 3) + lvl };
+  const used = new Set((w.outposts ?? []).map((o) => o.name)), name = OUTPOST_NAMES.find((n, i) => !used.has(n) && i >= Math.floor(R() * OUTPOST_NAMES.length)) ?? OUTPOST_NAMES.find((n) => !used.has(n)) ?? 'Bandit Camp';
+  const biomes = ['grassland', 'forest', 'highlands', 'swamp'] as const;
+  return { id: `op-${salt}-${Math.floor(R() * 1e6)}`, name, x, y, power, loot, biome: biomes[Math.floor(R() * biomes.length)] };
+}
+/** Once a day bandits set up a new camp, until there are outpostCap of them. */
+export function refreshOutposts(w: WorldState, stage: number, today = dayStr()): WorldState {
+  if (w.outpostDay === today) return w;
+  let outposts = [...(w.outposts ?? [])];
+  const add = w.outposts ? 1 : 2; // a new world starts with two
+  for (let i = 0; i < add && outposts.length < outpostCap(stage); i++) outposts = [...outposts, newOutpost({ ...w, outposts }, stage, hash(today) + i + outposts.length * 7)];
+  return { ...w, outposts, outpostDay: today };
+}
 

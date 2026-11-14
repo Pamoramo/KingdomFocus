@@ -9,7 +9,7 @@ import { Ambient } from './ambient.ts';
 import { Chatter } from './chatter.ts';
 import { WeatherFx, weatherAt } from './weather.ts';
 import { TownEvents } from './events.ts';
-import { thiefCanStrike, thiefChance } from '../lib/town.ts';
+import { thiefCanStrike, thiefChance, THIEF_CHECK_MS } from '../lib/town.ts';
 
 const WW = MAP_W * TILE, WH = MAP_H * TILE;
 
@@ -68,7 +68,7 @@ export class KingdomScene extends Phaser.Scene {
     this.weather = new WeatherFx(this, WW, WH);
     const doWeather = () => { const w = weatherAt(); this.weather.set(w); if (getUI().weather !== w) setUI({ weather: w }); };
     doWeather(); this.time.addEvent({ delay: 30000, loop: true, callback: doWeather });
-    this.time.addEvent({ delay: 45000, loop: true, callback: () => { if (thiefCanStrike() && Math.random() < thiefChance()) this.ambient.spawnThief(); } });
+    this.time.addEvent({ delay: THIEF_CHECK_MS, loop: true, callback: () => { if (thiefCanStrike() && Math.random() < thiefChance()) this.ambient.spawnThief(); } });
     this.time.addEvent({ delay: 20000, loop: true, callback: () => this.applyNight() });
     this.sync();
   }

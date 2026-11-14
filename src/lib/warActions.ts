@@ -3,7 +3,7 @@ import { neglect, type GameState, type Squad, _internal, studyHooks, emit, getSt
 import { biomeOf, realmLayout } from './realms.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
-import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
+import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
 import { RANKS } from './economy.ts';
 
@@ -49,7 +49,9 @@ function play(title: string, a: Unit[], b: Unit[], result: BattleResult, aName: 
 
 // ---------------- daily world turn & study hooks ----------------
 export const worldTick = () => {
-  const s = getState(), today = dayStr();
+  const s0 = getState(), today = dayStr();
+  if (s0.world.outpostDay !== today) setState(W(s0, refreshOutposts(s0.world, s0.stage, today))); // bandits pitch a new camp each day
+  const s = getState();
   if (s.world.lastDay === today) return;
   const w = advanceDays(s.world, { stage: s.stage, myPower: myPower(s), fort: fortOf(s), active: true, neglect: neglect(s) }, today);
   const fresh = w.inbox.filter((m) => !s.world.inbox.some((x) => x.id === m.id));
@@ -142,6 +144,66 @@ export const offerPeace = (id: string, gold: number) => update((s) => {
 });
 
 /** Applies the effects of everyone who has reached their destination. */
+/** Travel time to a point on the map (bandit outposts), at an army's pace. */
+const travelTo = (p: { x: number; y: number }) => travelMs('army', p);
+function sendTo(s: GameState, kind: JourneyKind, p: { x: number; y: number }, label: string, extra: Partial<Journey> = {}): GameState {
+  const now = Date.now(), j: Journey = { id: uid(), kind, rival: '', depart: now, arrive: now + travelTo(p), label, to: { x: p.x, y: p.y }, ...extra };
+  return W(s, { ...s.world, journeys: [...(s.world.journeys ?? []), j] });
+}
+/** Spoils of an outpost, paid if the raid succeeds. */
+export const outpostLoot = (o: Outpost) => o.loot;
+/** Sends a battalion from home to clear a bandit outpost; the fight happens when it arrives. */
+export const raidOutpost = (id: string, batId: string) => update((s) => {
+  const op = s.world.outposts?.find((o) => o.id === id); if (!op) return 'That camp is gone';
+  if ((s.world.journeys ?? []).some((j) => j.kind === 'raid' && (j.data as { outpost?: string })?.outpost === id)) return 'Soldiers are already on their way there';
+  if (awayBats(s).has(batId)) return 'That battalion is away';
+  const b = s.battalions.find((x) => x.id === batId); if (!b || !s.squads.some((q) => q.bat === batId)) return 'That battalion has no soldiers';
+  emit({ kind: 'info', text: `${b.name} marches on ${op.name} (${Math.round(travelTo(op) / 60000) || 1} min).` });
+  return event(sendTo(s, 'raid', op, `${b.name} raiding ${op.name}`, { bats: [batId], data: { outpost: id } }), 'war', `${b.name} set out to clear the bandits of ${op.name}.`);
+});
+/** Sends a battalion from home to join the siege; it arrives after the march. */
+export const reinforce = (batId: string) => update((s) => {
+  const c = s.world.campaign; if (!c) return 'No campaign under way';
+  if (awayBats(s).has(batId)) return 'That battalion is away';
+  const r = rival(s, c.target)!, b = s.battalions.find((x) => x.id === batId); if (!b || !s.squads.some((q) => q.bat === batId)) return 'That battalion has no soldiers';
+  emit({ kind: 'info', text: `${b.name} marches to join the siege of ${r.name}.` });
+  return send(s, 'reinforce', r, `${b.name} marching to ${r.name}`, { bats: [batId], data: {} }, travelMs('army', r));
+});
+/** Reinforcements reach the siege: fresh recruits fold into the battalion they were raised for, whole battalions join the host. */
+function reinforcementsArrive(o: GameState, j: Journey, r: Rival | undefined): GameState {
+  const c = o.world.campaign, bat = j.bats![0], join = (j.data as { join?: string })?.join;
+  if (!r || !c || c.target !== r.id) return r ? send(o, 'return', r, `${o.battalions.find((b) => b.id === bat)?.name ?? 'Reinforcements'} returning from ${r.name}`, { home: true, bats: [bat] }, travelMs('army', r)) : o;
+  const n = o.squads.filter((q) => q.bat === bat).reduce((a, q) => a + q.count, 0);
+  if (join && c.battalions.includes(join) && o.battalions.some((b) => b.id === join)) {
+    let out: GameState = { ...o, squads: o.squads.map((q) => (q.bat === bat ? { ...q, bat: join } : q)), battalions: o.battalions.filter((b) => b.id !== bat) };
+    for (const q of o.squads) if (q.bat === bat) out = mark(out, 'squads', q.id);
+    o = kill(out, 'battalions', bat);
+  } else o = W(o, { ...o.world, campaign: { ...c, battalions: [...c.battalions, bat] } });
+  const c2 = o.world.campaign!;
+  emit({ kind: 'war', text: `${n} reinforcements reach the siege of ${r.name}.` });
+  return W(o, { ...o.world, campaign: { ...c2, morale: Math.min(100, c2.morale + 5), log: [...c2.log, `${n} fresh soldiers join the host.`] } });
+}
+/** The raiders reach the outpost and fight; win or lose, the survivors march home. */
+function raidArrives(o: GameState, j: Journey): GameState {
+  const id = (j.data as { outpost?: string })?.outpost, op = o.world.outposts?.find((x) => x.id === id), bat = j.bats![0], to = j.to ?? { x: 0.5, y: 0.5 };
+  const home = (g: GameState, label: string) => sendTo(g, 'return', to, label, { home: true, bats: [bat] });
+  const b = o.battalions.find((x) => x.id === bat);
+  if (!op || !b) { emit({ kind: 'info', text: 'The bandits had already fled their camp.' }); return home(o, `${b?.name ?? 'Your soldiers'} returning`); }
+  const mine = unitsOf(o.squads.filter((q) => q.bat === bat)), foe = armyOf({ id: op.id, level: 1, power: op.power }), seed = Date.now() % 100000;
+  if (!mine.length) return W(o, { ...o.world });
+  let res = simulate({ name: b.name, units: mine, commander: b.commander.rank, tactic: 'assault' }, { name: op.name, units: foe, commander: 0, tactic: 'assault' }, op.biome === 'forest' ? 'forest' : op.biome === 'highlands' ? 'hills' : op.biome === 'swamp' ? 'marsh' : 'plains', seed);
+  res = capLosses(res, 'a', 0.4);
+  o = applyLosses(o, mine, res.lossA);
+  const won = res.winner === 'a';
+  o = report(o, `Raid on ${op.name}`, won, res, mine, foe, won ? op.loot : undefined);
+  play(`Raid on ${op.name}`, mine, foe, res, b.name, op.name, b.color, 0x2a2a2a, undefined, { biome: op.biome });
+  if (won) {
+    o = ledger(W(o, { ...o.world, outposts: (o.world.outposts ?? []).filter((x) => x.id !== op.id) }), 'loot', uid(), { ...ZERO, ...op.loot });
+    emit({ kind: 'reward', text: `${op.name} is cleared!`, res: op.loot });
+    o = event(o, 'war', `${b.name} cleared the bandit camp at ${op.name}.`);
+  } else { emit({ kind: 'error', text: `The bandits of ${op.name} drove off your soldiers.` }); o = event(o, 'war', `${b.name} was beaten back from ${op.name}.`); }
+  return o.squads.some((q) => q.bat === bat) ? home(o, `${b.name} returning from ${op.name}`) : o;
+}
 export const journeysTick = (now = Date.now()) => {
   const s0 = getState(), due = (s0.world.journeys ?? []).filter((j) => j.arrive <= now), march = s0.world.campaign?.phase === 'march' && (s0.world.campaign.arrive ?? 0) <= now;
   if (!due.length && !march) return;
@@ -150,6 +212,8 @@ export const journeysTick = (now = Date.now()) => {
     if (march && o.world.campaign) { const c = o.world.campaign, r = rival(o, c.target)!; o = W(o, { ...o.world, campaign: { ...c, phase: c.next ?? 'field', log: [...c.log, `Your host arrives before ${r.name}.`] } }); emit({ kind: 'war', text: `Your host has arrived before ${r.name}!` }); }
     for (const j of due) {
       const r = rival(o, j.rival)!, d = (j.data ?? {}) as Record<string, never>;
+      if (j.kind === 'raid') { o = raidArrives(o, j); continue; }
+      if (j.kind === 'reinforce') { o = reinforcementsArrive(o, j, r); continue; }
       if (j.kind === 'caravan') {
         o = W(o, shiftRelations(o.world, r.id, d.rel, false));
         o = send(o, 'return', r, `Caravan returning from ${r.name}`, { home: true, data: { res: { [d.want]: d.got } } }, travelMs('caravan', r));

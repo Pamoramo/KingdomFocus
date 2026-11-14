@@ -20,6 +20,7 @@ export class WorldScene extends Phaser.Scene {
   private drag: { x: number; y: number; sx: number; sy: number; moved: boolean } | null = null;
   private pinch: { d: number; z: number } | null = null;
   private sig = ''; private unsub: (() => void)[] = []; private frame = 0;
+  private camps = new Map<string, Phaser.GameObjects.GameObject[]>();
   private travellers = new Map<string, { parts: Phaser.GameObjects.Image[]; label: Phaser.GameObjects.Text; j: Journey }>();
   constructor() { super('world'); }
 
@@ -49,6 +50,7 @@ export class WorldScene extends Phaser.Scene {
   }
   private tap(p: Phaser.Input.Pointer) {
     const wp = this.cameras.main.getWorldPoint(p.x, p.y);
+    for (const o of getState().world.outposts ?? []) if (Math.hypot(wp.x - o.x * WW, wp.y - (o.y * WH - 12)) < 30) { setUI({ selRival: o.id, panel: 'world' }); return; }
     for (const [id, v] of this.sites) if (Math.hypot(wp.x - v.icon.x, wp.y - (v.icon.y - 20)) < 40) { if (id === 'home') setUI({ view: 'kingdom' }); else setUI({ selRival: id, panel: 'world' }); return; }
   }
   private place(id: string, x: number, y: number, level: number, color: number, emblem: string, name: string) {
@@ -73,9 +75,25 @@ export class WorldScene extends Phaser.Scene {
       this.place(r.id, r.x * WW, r.y * WH, r.bandits ? 1 : r.level, r.status === 'vassal' ? 0xb3242a : r.color, r.emblem, r.name + tag);
       this.sites.get(r.id)!.label.setColor(r.status === 'war' ? '#ff9a8a' : r.status === 'ally' ? '#a8f0a0' : r.status === 'vassal' ? '#ffe27a' : '#fff4d6');
     }
+    this.outposts(s);
     const sig = JSON.stringify([w.campaign?.target, w.campaign?.phase, w.campaign?.engines, w.threat?.rival, w.loans.map((l) => l.rival)]);
     if (sig !== this.sig) { this.sig = sig; this.armies(s); }
     this.highlight(); this.syncJourneys();
+  }
+  /** Bandit camps: a couple of ragged tents, a campfire and a black flag. */
+  private outposts(s: GameState) {
+    const list = s.world.outposts ?? [], ids = new Set(list.map((o) => o.id));
+    for (const [id, parts] of this.camps) if (!ids.has(id)) { parts.forEach((p) => p.destroy()); this.camps.delete(id); }
+    for (const o of list) if (!this.camps.has(o.id)) {
+      const x = o.x * WW, y = o.y * WH, parts: Phaser.GameObjects.GameObject[] = [];
+      parts.push(this.add.image(x, y, 'camp_icon').setOrigin(0.5, 1).setScale(0.32).setTint(0x9a8a7a).setDepth(y));
+      const fire = this.add.image(x + 10, y - 2, 'glow').setBlendMode(Phaser.BlendModes.ADD).setScale(0.12).setTint(0xffa040).setDepth(y + 1); parts.push(fire);
+      this.tweens.add({ targets: fire, alpha: 0.5, duration: 200, yoyo: true, repeat: -1 });
+      parts.push(this.add.image(x - 14, y - 6, bannerTex(this, 0x2a2622, 'sword', 0)).setOrigin(0.2, 1).setScale(S * 1.1).setDepth(y + 2));
+      for (let i = 0; i < 2; i++) parts.push(this.add.image(x - 4 + i * 12, y + 6, 'soldiers', sFrame(i ? 'archer' : 'militia', 0, 0)).setOrigin(0.5, 1).setScale(S * 1.1).setTint(0xb8a898).setFlipX(i === 1).setDepth(y + 6));
+      parts.push(this.add.text(x, y + 8, o.name, { fontFamily: 'monospace', fontSize: '20px', color: '#e8c8a8', stroke: '#1d1716', strokeThickness: 5 }).setOrigin(0.5, 0).setScale(0.5).setDepth(6000));
+      this.camps.set(o.id, parts);
+    }
   }
   private soldiers(x: number, y: number, cls: string, n: number, flip = false, tint?: number) {
     for (let i = 0; i < n; i++) { const im = this.add.image(x + (i % 4) * 11 - 16, y + Math.floor(i / 4) * 9, 'soldiers', sFrame(cls, 1, 0)).setOrigin(0.5, 1).setScale(S).setFlipX(flip).setDepth(y + i); if (tint) im.setTint(tint); this.units.push(im);
@@ -116,7 +134,7 @@ export class WorldScene extends Phaser.Scene {
     let k = 0;
     for (const { parts, label, j } of this.travellers.values()) {
       const lift = (k++ % 3) * 13;
-      const r = w.rivals.find((x) => x.id === j.rival); if (!r) continue;
+      const r = j.to ?? w.rivals.find((x) => x.id === j.rival); if (!r) continue;
       const far = { x: r.x * WW, y: r.y * WH }, [a, b] = j.home ? [far, home] : [home, far];
       const t = Math.min(1, Math.max(0, (now - j.depart) / Math.max(1, j.arrive - j.depart))), x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t + Math.sin(t * 9) * 6;
       const flip = b.x < a.x, f = Math.floor(time / 160) % 4;

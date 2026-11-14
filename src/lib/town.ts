@@ -5,7 +5,7 @@ import { uid } from './study.ts';
 import { ZERO } from './rewards.ts';
 
 const { update, ledger, spend, event } = _internal;
-export const MAX_THEFTS_PER_DAY = 3;
+export const MAX_THEFTS_PER_DAY = 1;
 const town = (s: GameState) => { const t = s.world.town, d = dayStr(); return t && t.day === d ? t : { day: d, thefts: 0, caught: 0 }; };
 /** Whether a thief may appear now: poorly guarded town, has homes, under the daily cap. */
 export function thiefCanStrike(s = getState()) {
@@ -13,13 +13,14 @@ export function thiefCanStrike(s = getState()) {
   // a neglected realm breeds crime: thieves dare even moderately guarded towns, and come more often
   return o.pop >= 6 && o.ratio < (n > 0 ? 1 : 0.5) && town(s).thefts + town(s).caught < maxThefts(s) && !s.world.threat;
 }
-export const maxThefts = (s: GameState) => MAX_THEFTS_PER_DAY + Math.min(2, neglect(s));
-/** Chance per check (every 45s) that a thief appears. */
-export const thiefChance = (s = getState()) => Math.min(0.85, 0.4 + neglect(s) * 0.15);
-/** A thief escaped: a small loss (at most 2% of gold, capped at 60). */
+export const maxThefts = (s: GameState) => MAX_THEFTS_PER_DAY + Math.min(2, Math.ceil(neglect(s) / 2));
+/** Chance per check (every 90s) that a thief appears. */
+export const THIEF_CHECK_MS = 90_000;
+export const thiefChance = (s = getState()) => Math.min(0.45, 0.12 + neglect(s) * 0.08);
+/** A thief escaped: a small loss (1% of gold, at most 40). */
 export const theft = () => update((s) => {
   const t = town(s); if (t.thefts >= maxThefts(s)) return;
-  const gold = Math.min(60, Math.floor(s.res.gold * 0.02));
+  const gold = Math.min(40, Math.floor(s.res.gold * 0.01));
   emit({ kind: 'error', text: gold ? `A thief escaped with ${gold} gold. Set a battalion to patrol the town.` : 'A thief ran off empty-handed. Patrols would stop them.' });
   const o = gold ? spend(s, { gold }) : s;
   return event({ ...o, world: { ...o.world, town: { ...t, thefts: t.thefts + 1 } } }, 'town', gold ? `A thief stole ${gold} gold.` : 'A thief was seen in town.');
