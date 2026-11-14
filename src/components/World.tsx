@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { useGame, useUI, fmt, hex } from './hooks.ts';
+import { useGame, useUI, useNow, clock, fmt, hex, mobile } from './hooks.ts';
+import { BIOME_NAME, biomeOf } from '../lib/realms.ts';
 import { setUI } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res } from '../lib/rewards.ts';
@@ -24,9 +25,11 @@ export function WorldPanel() {
   const [tab, setTab] = useState<'realms' | 'campaign' | 'works' | 'reports'>(w.campaign || w.threat ? 'campaign' : 'realms');
   const sel = w.rivals.find((r) => r.id === ui.selRival);
   return <div className="space-y-3">
-    <button className="btn w-full" onClick={() => setUI({ view: ui.view === 'world' ? 'kingdom' : 'world' })}>{ui.view === 'world' ? 'Return to your kingdom' : 'Open the world map'}</button>
+    <div className="flex gap-2"><button className="btn flex-1" onClick={() => setUI({ view: ui.view === 'world' ? 'kingdom' : 'world' })}>{ui.view === 'world' ? 'Return to your kingdom' : 'Open the world map'}</button>
+      {w.campaign && <button className="btn btn-gold flex-1" onClick={() => setUI({ view: 'rival', visit: w.campaign!.target, panel: mobile() ? null : 'world' })}>Watch the siege</button>}</div>
     {w.threat && <Defense />}
     {w.inbox.length > 0 && <Inbox />}
+    <OnTheRoad />
     <Tabs value={tab} onChange={setTab} items={[['realms', 'Realms'], ['campaign', w.campaign ? `Siege · day ${w.campaign.day}` : 'War'], ['works', 'Siege works'], ['reports', 'Reports']]} />
     {tab === 'realms' && (sel ? <RivalDetail r={sel} /> : <Realms />)}
     {tab === 'campaign' && <CampaignTab />}
@@ -55,7 +58,8 @@ function RivalDetail({ r }: { r: Rival }) {
     <button className="btn !py-0" onClick={() => setUI({ selRival: null })}>← All realms</button>
     <div className="card p-2 flex gap-3"><Banner color={r.color} emblem={r.emblem} scale={3} />
       <div className="text-sm flex-1"><h3 className="font-title text-3xl leading-none">{r.name}</h3><div>Ruled by {r.ruler}</div><div className="opacity-80">{r.bandits ? 'Outlaws who raid the borderlands. They will not parley.' : PERSONALITY_TEXT[r.personality]}</div>
-        <div>{STATUS[r.status]} · {strengthText(mine, r.power)} (≈{fmt(r.power)}) · walls {r.wallMax} · terrain {r.terrain}</div>
+        <div>{STATUS[r.status]} · {strengthText(mine, r.power)} (≈{fmt(r.power)}) · walls {r.wallMax} · {BIOME_NAME[biomeOf(s.world, r)]}</div>
+        <button className="btn btn-gold !py-0.5 mt-1" onClick={() => setUI({ view: 'rival', visit: r.id, panel: mobile() ? null : 'world' })}>Visit {r.name}</button>
         {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}</div></div>
     {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +5% gold from every study session.</p> : <>
       {!r.bandits && r.status !== 'war' && <Section title="Trade">
@@ -103,7 +107,7 @@ function CampaignTab() {
   const cmd = Math.max(0, ...s.battalions.filter((b) => c.battalions.includes(b.id)).map((b) => b.commander.rank));
   return <div className="space-y-2">
     <div className="card p-2 text-sm"><b>Campaign against {r.name}</b> · {soldiers} soldiers{c.allies.length ? ` · ${c.allies.length} allied host${c.allies.length > 1 ? 's' : ''}` : ''}</div>
-    {c.phase === 'field' ? <Section title={`${r.name}'s army takes the field`}>
+    {c.phase === 'march' ? <Section title="On the march"><p className="text-sm">Your host is marching on {r.name}. When it arrives you will face their army in the field. Follow it on the world map.</p></Section> : c.phase === 'field' ? <Section title={`${r.name}'s army takes the field`}>
       <p className="text-sm">Before you can besiege the castle you must defeat their field army (≈{fmt(r.power * 0.6)} strength vs your {fmt(sidePower(units))}). Choose your battle plan.</p>
       <TacticPicker units={units} terrain={r.terrain} commander={cmd} onPick={WA.fieldBattle} label="Give battle" />
     </Section> : <>
@@ -177,6 +181,16 @@ function Defense() {
       <button className="btn flex-1" onClick={() => confirm('Pay tribute to end the siege?') && WA.payTribute()}>Pay tribute</button></div>
     <p className="text-xs opacity-75">Losing never destroys buildings: the enemy takes part of your stores and leaves.</p>
   </div>;
+}
+
+/** Envoys, caravans and troops currently travelling, with time to arrival. */
+function OnTheRoad() {
+  const s = useGame(), now = useNow(1000), c = s.world.campaign;
+  const list = [...(s.world.journeys ?? []).map((j) => ({ id: j.id, label: j.label, arrive: j.arrive, depart: j.depart })), ...(c?.phase === 'march' ? [{ id: 'march', label: `Your host marching on ${s.world.rivals.find((r) => r.id === c.target)?.name}`, arrive: c.arrive ?? 0, depart: c.started }] : [])];
+  if (!list.length) return null;
+  return <Section title="On the road">{list.map((j) => { const left = Math.max(0, j.arrive - now);
+    return <div key={j.id} className="text-sm"><div className="flex justify-between gap-2"><span>{j.label}</span><span className="tabular-nums whitespace-nowrap">{left ? clock(left) : 'arriving'}</span></div><Bar value={now - j.depart} max={j.arrive - j.depart} color="bg-moss" /></div>; })}
+    <p className="text-xs opacity-70">Watch them travel on the world map.</p></Section>;
 }
 
 function Inbox() {

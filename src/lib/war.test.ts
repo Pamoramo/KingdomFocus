@@ -47,7 +47,15 @@ test('trade improves relations; actions go through the ledger', () => {
   const k = S.getState().world.rivals.find((r) => !r.bandits)!, before = k.relation;
   assert.ok(tradeQuote(k, 'gold', 300, 'stone').got > 0);
   assert.equal(WA.trade(k.id, 'gold', 300, 'stone'), null);
-  const s = S.getState(); assert.ok(s.world.rivals.find((r) => r.id === k.id)!.relation > before);
+  assert.equal(S.getState().world.rivals.find((r) => r.id === k.id)!.relation, before, 'nothing happens until the caravan arrives');
+  assert.equal(S.getState().world.journeys!.length, 1);
+  WA.journeysTick(Date.now() + 600_000); // caravan arrives, turns for home
+  assert.ok(S.getState().world.rivals.find((r) => r.id === k.id)!.relation > before);
+  const stone0 = S.getState().res.stone;
+  WA.journeysTick(Date.now() + 1_200_000); // and returns with the goods
+  assert.ok(S.getState().res.stone > stone0, 'goods arrive when the caravan returns');
+  assert.equal(S.getState().world.journeys!.length, 0);
+  const s = S.getState();
   const sum = s.outbox.ledger.filter((l) => l.kind !== 'start').reduce((a, l) => add(a, l.amt), { gold: 0, wood: 0, stone: 0, renown: 0 });
   assert.deepEqual(add(sum, { gold: 5000, wood: 2000, stone: 500, renown: 100 }), s.res);
   assert.match(WA.proposeAlliance(k.id) ?? '', /trust/);
@@ -59,6 +67,9 @@ test('a campaign against the bandits: field battle, siege days from study, assau
   const bat = S.getState().battalions[0].id;
   assert.equal(WA.startCampaign('bandits', [bat], { ram: 0, tower: 0, mangonel: 0, ballista: 0, trebuchet: 0 }, 40), null);
   assert.ok(WA.awayBats(S.getState()).has(bat));
+  assert.equal(S.getState().world.campaign!.phase, 'march');
+  assert.match(WA.fieldBattle('assault') ?? '', /No field battle/, 'cannot fight before arriving');
+  WA.journeysTick(Date.now() + 3_600_000);
   WA.fieldBattle('assault');
   const c = S.getState().world.campaign;
   if (c) { // won the field: study advances the siege
@@ -68,6 +79,16 @@ test('a campaign against the bandits: field battle, siege days from study, assau
     assert.ok(S.getState().world.campaign!.day >= 2, 'study minutes became siege days');
   }
   assert.ok(S.getState().world.reports.length >= 1);
+});
+
+test('declaring war and alliances need a messenger to arrive', () => {
+  S._with({ ...S.newGame(), res: { gold: 9999, wood: 0, stone: 0, renown: 0 } });
+  const k = S.getState().world.rivals.find((r) => !r.bandits)!;
+  assert.equal(WA.declareWar(k.id), null);
+  assert.equal(S.getState().world.rivals.find((r) => r.id === k.id)!.status, 'neutral', 'herald still riding');
+  assert.match(WA.declareWar(k.id) ?? '', /already/);
+  WA.journeysTick(Date.now() + 600_000);
+  assert.equal(S.getState().world.rivals.find((r) => r.id === k.id)!.status, 'war');
 });
 
 test('town watch: guards on duty, thieves capped, bounties', async () => {

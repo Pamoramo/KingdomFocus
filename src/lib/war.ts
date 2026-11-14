@@ -25,7 +25,7 @@ export const NO_ENGINES: Engines = { ram: 0, tower: 0, mangonel: 0, ballista: 0,
 
 export type Stance = 'bombard' | 'blockade' | 'sap';
 export interface Campaign {
-  target: string; battalions: string[]; engines: Engines; supplies: number; phase: 'field' | 'siege';
+  target: string; battalions: string[]; engines: Engines; supplies: number; phase: 'march' | 'field' | 'siege'; arrive?: number; next?: 'field' | 'siege';
   day: number; progressMin: number; wallHp: number; wallMax: number; garrison: number; garrisonMorale: number; morale: number;
   stance: Stance; allies: string[]; log: string[]; started: number;
 }
@@ -33,7 +33,10 @@ export interface Threat { rival: string; power: number; since: number; allyHelp:
 export interface Missive { id: string; rival: string; kind: 'tribute_demand' | 'trade_offer' | 'aid_request' | 'alliance_offer' | 'peace_offer' | 'news'; text: string; amount?: number; day: string }
 export interface Loan { bat: string; rival: string; leftMin: number }
 export interface Report { id: string; t: number; title: string; win: boolean; lines: string[]; you: number; foe: number; lostYou: number; lostFoe: number; loot?: Partial<Res> }
-export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number } }
+export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'return';
+/** Someone on the road between your kingdom and another. Effects apply when they arrive. */
+export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown> }
+export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[] }
 
 export const SIEGE_DAY_MIN = 20;          // verified study minutes per siege day
 export const SUPPLY_COST = { gold: 15, wood: 5 }; // buys 10 supplies
@@ -149,8 +152,13 @@ export function shiftRelations(w: WorldState, id: string, delta: number, ripple 
 export const setStatus = (w: WorldState, id: string, status: RStatus): WorldState => ({ ...w, rivals: w.rivals.map((r) => (r.id === id ? { ...r, status } : r)) });
 
 // ---------------- campaigns ----------------
-export function newCampaign(r: Rival, battalions: string[], engines: Engines, supplies: number, allies: string[]): Campaign {
-  return { target: r.id, battalions, engines, supplies, phase: r.power * 0.6 > 10 ? 'field' : 'siege', day: 0, progressMin: 0, wallHp: r.wallMax, wallMax: r.wallMax, garrison: r.garrison,
+/** Travel time from your kingdom: envoys ride fast, caravans trundle, armies march slowly. */
+export function travelMs(kind: JourneyKind, r: Pick<Rival, 'x' | 'y'>) {
+  const d = Math.hypot(r.x - 0.5, r.y - 0.5);
+  return Math.round((kind === 'envoy' ? 40 + d * 300 : kind === 'caravan' || kind === 'gift' ? 60 + d * 420 : 90 + d * 560) * 1000);
+}
+export function newCampaign(r: Rival, battalions: string[], engines: Engines, supplies: number, allies: string[], now = Date.now()): Campaign {
+  return { target: r.id, battalions, engines, supplies, phase: 'march', arrive: now + travelMs('army', r), next: r.power * 0.6 > 10 ? 'field' : 'siege', day: 0, progressMin: 0, wallHp: r.wallMax, wallMax: r.wallMax, garrison: r.garrison,
     garrisonMorale: 100, morale: 100, stance: 'bombard', allies, log: [`Your host marches on ${r.name}.`], started: Date.now() };
 }
 export const bombardPerDay = (e: Engines) => ENGINE_IDS.reduce((a, k) => a + e[k] * ENGINES[k].bombard, 0);

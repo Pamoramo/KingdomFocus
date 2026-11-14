@@ -1,0 +1,230 @@
+import Phaser from 'phaser';
+import { getState, subscribe, TILE, type GameState } from '../lib/state.ts';
+import { realmLayout, RW, RH, type RealmLayout, type Biome } from '../lib/realms.ts';
+import { armyOf, ENGINE_IDS, type Rival } from '../lib/war.ts';
+import { BUILDINGS, CONNECTS, type BKind } from '../lib/economy.ts';
+import { campaignSquads } from '../lib/warActions.ts';
+import { biomeTile, plant, rubble, BIOME_PLANTS, BIOME_DENSITY } from './art/biome.ts';
+import { engineArt, siegeCamp } from './art/war.ts';
+import { hdify, HD } from './art/hd.ts';
+import { withoutOutline } from './art/px.ts';
+import { bTex, tileTex, sFrame, bannerTex, S } from './textures.ts';
+import { Chatter } from './chatter.ts';
+import { WeatherFx, weatherAt, type Weather } from './weather.ts';
+import { nightFactor } from './KingdomScene.ts';
+import { audio } from './audio.ts';
+
+const WW = RW * TILE, WH = RH * TILE;
+const hashXY = (x: number, y: number) => { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) >>> 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return (h ^ (h >>> 16)) >>> 0; };
+const pick = <T,>(a: readonly T[]) => a[Math.floor(Math.random() * a.length)];
+const VOICE = { you: 330, foe: 280, folk: 470 };
+const FOLK: Record<Biome, string[]> = {
+  grassland: ['Fine weather for the fields.', 'The cows are restless today.', 'Fresh bread at the bakery!'],
+  desert: ['Water... I need water.', 'Mind the scorpions!', 'The sand gets everywhere.', 'Another scorching day.'],
+  tundra: ['Brr! Another cold day.', 'Pass the furs, will you?', 'The lake froze again.', 'My beard has icicles.'],
+  forest: ['Watch for wolves tonight.', 'The woodcutters are busy.', 'I love the smell of pine.'],
+  swamp: ['Ugh, my boots are soaked.', 'Did that log just move?', 'The mist never lifts here.'],
+  highlands: ['The pass is steep today.', 'Goats everywhere!', 'You can see for miles up here.'],
+};
+/** Weather leans on the biome: deserts stay dry, the tundra snows, swamps fog over. */
+function biomeWeather(b: Biome, w: Weather): Weather {
+  if (b === 'desert') return w === 'rain' || w === 'storm' || w === 'snow' || w === 'fog' ? 'clear' : w;
+  if (b === 'tundra') return w === 'rain' || w === 'storm' || w === 'cloudy' ? 'snow' : w;
+  if (b === 'swamp') return w === 'cloudy' || w === 'clear' ? (Math.floor(Date.now() / 480000) % 2 ? 'fog' : w) : w;
+  if (b === 'forest') return w === 'snow' ? 'rain' : w;
+  return w === 'snow' && b === 'grassland' ? 'snow' : w;
+}
+
+interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; tx?: number; ty?: number; wait?: number; ph: number }
+
+/** A rival kingdom up close: its biome, castle and town, and your siege camp when you march on it. */
+export class RivalScene extends Phaser.Scene {
+  private r!: Rival; private L!: RealmLayout; private frame = 0;
+  private bImgs: { img: Phaser.GameObjects.Image; kind: BKind; level: number }[] = [];
+  private wallImgs: { img: Phaser.GameObjects.Image; x: number; y: number }[] = [];
+  private figs: Fig[] = []; private siegeObjs: Phaser.GameObjects.GameObject[] = []; private siegeSig = '';
+  private chatter!: Chatter; private weather!: WeatherFx; private shade!: Phaser.GameObjects.Rectangle;
+  private doors: { x: number; y: number }[] = []; private unsub: (() => void)[] = [];
+  private drag: { x: number; y: number; sx: number; sy: number } | null = null; private pinch: { d: number; z: number } | null = null;
+  constructor() { super('rival'); }
+  init(data: { id: string }) { this.r = getState().world.rivals.find((x) => x.id === data.id)!; this.figs = []; this.bImgs = []; this.wallImgs = []; this.siegeObjs = []; this.siegeSig = ''; }
+
+  create() {
+    const s = getState(); this.L = realmLayout(s.world, this.r);
+    this.makeTextures(); this.drawGround(); this.placeBuildings(); this.spawnFolk();
+    this.chatter = new Chatter(this);
+    this.weather = new WeatherFx(this, WW, WH);
+    this.shade = this.add.rectangle(-WW, -WH, WW * 3, WH * 3, 0xffffff).setOrigin(0).setDepth(20000).setBlendMode(Phaser.BlendModes.MULTIPLY);
+    const cam = this.cameras.main;
+    cam.setBounds(-WW * 0.1, -WH * 0.1, WW * 1.2, WH * 1.2).setRoundPixels(true).setBackgroundColor('#2b2118');
+    cam.setZoom(Phaser.Math.Clamp(this.scale.width / 640, 0.6, 2.6)); cam.centerOn((this.L.gate.x + 1) * TILE, (this.L.box.y1 + 6) * TILE);
+    this.input.addPointer(2);
+    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => { const ps = [this.input.pointer1, this.input.pointer2].filter((q) => q.isDown); if (ps.length === 2) { this.pinch = { d: Phaser.Math.Distance.Between(ps[0].x, ps[0].y, ps[1].x, ps[1].y), z: cam.zoom }; this.drag = null; } else this.drag = { x: p.x, y: p.y, sx: cam.scrollX, sy: cam.scrollY }; });
+    this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
+      if (this.pinch) { const a = this.input.pointer1, b = this.input.pointer2; if (a.isDown && b.isDown) cam.setZoom(Phaser.Math.Clamp(this.pinch.z * Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y) / this.pinch.d, 0.5, 5)); return; }
+      if (this.drag && p.isDown) cam.setScroll(this.drag.sx - (p.x - this.drag.x) / cam.zoom, this.drag.sy - (p.y - this.drag.y) / cam.zoom);
+    });
+    this.input.on('pointerup', () => { if (!this.input.pointer1.isDown && !this.input.pointer2.isDown) this.pinch = null; this.drag = null; });
+    this.input.on('wheel', (_p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.88 : 1.14), 0.5, 5)));
+    this.unsub.push(subscribe(() => this.syncSiege(getState())));
+    this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
+    this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; for (const b of this.bImgs) b.img.setTexture(bTex(this, b.kind, b.level, this.frame % 2).key); } });
+    this.time.addEvent({ delay: 6500, loop: true, callback: () => this.chat() });
+    this.time.addEvent({ delay: 4200, loop: true, callback: () => this.volley() });
+    const wx = () => this.weather.set(biomeWeather(this.L.biome, weatherAt())); wx(); this.time.addEvent({ delay: 30000, loop: true, callback: wx });
+    this.applyNight(); this.time.addEvent({ delay: 20000, loop: true, callback: () => this.applyNight() });
+    this.syncSiege(s);
+  }
+
+  private makeTextures() {
+    const T = this.textures, b = this.L.biome;
+    for (let v = 0; v < 4; v++) { const k = `bt_${b}${v}`; if (!T.exists(k)) T.addCanvas(k, hdify(biomeTile(b, v), { rim: false, outline: false, grain: 6, seed: v })); }
+    BIOME_PLANTS[b].forEach((p, i) => { for (const sd of [0, 1]) { const k = `bp_${p}${sd}`; if (!T.exists(k)) T.addCanvas(k, hdify(withoutOutline(() => plant(p, sd + i * 3)), { seed: sd })); } });
+    for (let i = 0; i < 3; i++) if (!T.exists(`rubble${i}`)) T.addCanvas(`rubble${i}`, hdify(withoutOutline(() => rubble(i * 7 + 1))));
+    if (!T.exists('camp_icon')) T.addCanvas('camp_icon', hdify(withoutOutline(() => siegeCamp())));
+    for (const e of ENGINE_IDS) for (const f of [0, 1]) if (!T.exists(`eng_${e}${f}`)) T.addCanvas(`eng_${e}${f}`, hdify(withoutOutline(() => engineArt(e, f))));
+  }
+  private occupied() {
+    const o = new Set<string>();
+    for (const b of this.L.buildings) { const d = BUILDINGS[b.kind]; for (let i = 0; i < d.w; i++) for (let j = 0; j < d.h; j++) o.add(`${b.x + i},${b.y + j}`); }
+    for (const w of this.L.walls) o.add(`${w.x},${w.y}`);
+    return o;
+  }
+  private drawGround() {
+    const b = this.L.biome, rt = this.add.renderTexture(0, 0, WW * HD, WH * HD).setOrigin(0).setDepth(-10).setScale(S), occ = this.occupied();
+    const plants = BIOME_PLANTS[b], dens = BIOME_DENSITY[b], gx = this.L.gate.x, campTop = this.L.box.y1 + 2;
+    rt.beginDraw();
+    const deco: [string, number, number][] = [];
+    for (let y = 0; y < RH; y++) for (let x = 0; x < RW; x++) {
+      const h = hashXY(x + this.r.x * 1000, y + this.r.y * 1000);
+      rt.batchDraw(`bt_${b}${h % 7 === 0 ? 3 : h % 3}`, x * TILE * HD, y * TILE * HD);
+      const inside = x > this.L.box.x0 && x < this.L.box.x1 && y > this.L.box.y0 && y < this.L.box.y1, approach = Math.abs(x - gx) < 12 && y >= campTop;
+      if (!occ.has(`${x},${y}`) && !inside && !approach && ((h >>> 9) % 1000) / 1000 < dens * (x < 2 || x > RW - 3 || y > RH - 3 ? 4 : 1)) deco.push([`bp_${plants[(h >>> 4) % plants.length]}${h % 2}`, x, y]);
+    }
+    for (const [k, x, y] of deco.sort((a, c) => a[2] - c[2])) rt.batchDraw(k, x * TILE * HD, (y * TILE - 8) * HD);
+    rt.endDraw();
+    // the road from the gate down through the siege approach
+    for (let y = this.L.box.y1 + 1; y < RH; y++) for (const x of [gx, gx + 1]) this.add.image(x * TILE, (y + 1) * TILE, tileTex(this, 'road', 1, 1 | 4 | (x === gx ? 2 : 8))).setOrigin(0, 1).setScale(S).setDepth(-6);
+  }
+  private placeBuildings() {
+    const L = this.L, wallSet = new Set(L.walls.map((w) => `${w.x},${w.y}`)), conn = new Map<string, BKind>();
+    for (const b of L.buildings) if (CONNECTS.includes(b.kind)) { const d = BUILDINGS[b.kind]; for (let i = 0; i < d.w; i++) for (let j = 0; j < d.h; j++) conn.set(`${b.x + i},${b.y + j}`, b.kind); }
+    const ok = (x: number, y: number) => wallSet.has(`${x},${y}`) || conn.has(`${x},${y}`);
+    for (const w of L.walls) {
+      const mask = (ok(w.x, w.y - 1) ? 1 : 0) | (ok(w.x + 1, w.y) ? 2 : 0) | (ok(w.x, w.y + 1) ? 4 : 0) | (ok(w.x - 1, w.y) ? 8 : 0);
+      const img = this.add.image(w.x * TILE, (w.y + 1) * TILE, tileTex(this, L.wallKind, L.wallLevel, mask)).setOrigin(0, 1).setScale(S).setDepth((w.y + 1) * TILE);
+      this.wallImgs.push({ img, x: w.x, y: w.y });
+    }
+    for (const b of L.buildings) {
+      const d = BUILDINGS[b.kind], by = (b.y + d.h) * TILE;
+      const img = this.add.image(b.x * TILE, by, bTex(this, b.kind, b.level, 0).key).setOrigin(0, 1).setScale(S).setDepth(by);
+      if (L.biome === 'tundra') img.setTint(0xeef4ff); if (L.biome === 'desert') img.setTint(0xfff2dc);
+      this.bImgs.push({ img, kind: b.kind, level: b.level });
+      this.doors.push({ x: (b.x + d.w / 2) * TILE, y: by + 4 });
+    }
+    // the rival's banners over the keep and gate
+    for (const [x, y] of [[(L.gate.x + 1) * TILE - 18, (L.box.y1 + 1) * TILE - 4], [(L.gate.x + 1) * TILE + 18, (L.box.y1 + 1) * TILE - 4]]) this.add.image(x, y, bannerTex(this, this.r.color, this.r.emblem, 0)).setOrigin(0.2, 1).setScale(S).setDepth(y + 1);
+  }
+  private fig(cls: string, rank: number, x: number, y: number, side: Fig['side'], flip = false) {
+    const img = this.add.image(x, y, 'soldiers', sFrame(cls, rank, 0)).setOrigin(0.5, 1).setScale(S).setFlipX(flip).setDepth(y);
+    if (side === 'foe') img.setTint(0xffe4dc);
+    const f: Fig = { img, x, y, cls, rank, side, ph: Math.floor(Math.random() * 6) }; this.figs.push(f); return f;
+  }
+  private spawnFolk() {
+    const n = Math.min(26, 6 + this.L.buildings.length);
+    for (let i = 0; i < n; i++) { const d = this.doors[i % this.doors.length]; const f = this.fig(i % 3 ? 'villager' : 'worker', 0, d.x, d.y, 'folk'); f.wait = Math.random() * 4000; }
+    // sentries on the gate wall
+    for (let i = 0; i < 4; i++) this.fig(this.r.level >= 3 ? 'crossbow' : 'archer', Math.min(3, this.r.level - 1), (this.L.box.x0 + 3 + i * 4) * TILE, (this.L.box.y1 + 1) * TILE - 9, 'foe', i % 2 === 0);
+  }
+
+  /** Your camp, engines and troops, the enemy army in the field, and the state of the walls. */
+  private syncSiege(s: GameState) {
+    const c = s.world.campaign?.target === this.r.id && s.world.campaign.phase !== 'march' ? s.world.campaign : null, r = s.world.rivals.find((x) => x.id === this.r.id) ?? this.r;
+    const sig = c ? `${c.phase}|${Math.round((c.wallHp / c.wallMax) * 20)}|${JSON.stringify(c.engines)}|${campaignSquads(s).map((q) => q.count).join()}` : 'peace';
+    if (sig === this.siegeSig) return; this.siegeSig = sig;
+    this.siegeObjs.forEach((o) => o.destroy()); this.siegeObjs = [];
+    this.figs = this.figs.filter((f) => { if (f.side === 'you' || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); return false; } return true; });
+    // walls: cracks and breaches follow the siege damage
+    const ratio = c ? c.wallHp / c.wallMax : 1, N = this.wallImgs.length;
+    const byGate = [...this.wallImgs].sort((a, b) => Math.hypot(a.x - this.L.gate.x, a.y - this.L.box.y1) - Math.hypot(b.x - this.L.gate.x, b.y - this.L.box.y1));
+    const cracked = Math.round((1 - ratio) * N * 0.6), breach = ratio < 0.4 ? Math.round(((0.4 - ratio) / 0.4) * 8) + 1 : 0;
+    byGate.forEach((w, i) => { w.img.setVisible(i >= breach).setTint(i < cracked + breach ? 0x9a8c84 : 0xffffff); if (i < breach) this.siegeObjs.push(this.add.image(w.img.x, w.img.y, `rubble${i % 3}`).setOrigin(0, 1).setScale(S).setDepth(w.img.depth)); });
+    if (!c) return;
+    const gx = (this.L.gate.x + 1) * TILE, front = (this.L.box.y1 + 1) * TILE;
+    // camp
+    for (const [dx, dy] of [[-150, 210], [120, 220], [-40, 250], [60, 270]]) this.siegeObjs.push(this.add.image(gx + dx, front + dy, 'camp_icon').setOrigin(0.5, 1).setScale(S * 1.2).setDepth(front + dy));
+    const myBat = s.battalions.find((b) => c.battalions.includes(b.id));
+    this.siegeObjs.push(this.add.image(gx - 20, front + 200, bannerTex(this, myBat?.color ?? 0xb3242a, myBat?.emblem ?? 'lion', 0)).setOrigin(0.2, 1).setScale(S * 1.3).setDepth(front + 200));
+    // your soldiers in blocks (one figure per soldier, up to 140)
+    const men = campaignSquads(s).flatMap((q) => Array.from({ length: q.count }, () => ({ cls: q.cls, rank: q.rank }))).slice(0, 140);
+    men.forEach((m, i) => { const blk = Math.floor(i / 24), k = i % 24; const bx = gx - 170 + (blk % 4) * 95, by = front + 120 + Math.floor(blk / 4) * 70 + (c.phase === 'field' ? 40 : 0); this.fig(m.cls, m.rank, bx + (k % 6) * 12 + (Math.floor(k / 6) % 2) * 3, by + Math.floor(k / 6) * 10, 'you', Math.random() < 0.15); });
+    if (c.phase === 'field') {
+      const foe = armyOf(r, r.power * 0.6).flatMap((u) => Array.from({ length: u.count }, () => ({ cls: u.cls, rank: u.rank }))).slice(0, 90);
+      foe.forEach((m, i) => this.fig(m.cls, m.rank, gx - 150 + (i % 18) * 17, front + 26 + Math.floor(i / 18) * 11, 'foe', i % 2 === 0));
+      return;
+    }
+    // engines in the siege line, rams at the gate, towers at the wall
+    let ex = gx - 160;
+    for (const e of ENGINE_IDS) for (let i = 0; i < Math.min(3, c.engines[e]); i++) {
+      if (e === 'ram') { const ram = this.add.image(gx + i * 6, front + 22, `eng_ram0`).setOrigin(0.5, 1).setScale(S).setDepth(front + 22); this.tweens.add({ targets: ram, y: ram.y - 6, duration: 700, yoyo: true, repeat: -1, ease: 'Quad.In' }); this.siegeObjs.push(ram); continue; }
+      if (e === 'tower') { this.siegeObjs.push(this.add.image((this.L.box.x0 + 4 + i * 6) * TILE, front + 14, 'eng_tower0').setOrigin(0.5, 1).setScale(S * 1.2).setDepth(front + 14)); continue; }
+      const img = this.add.image(ex, front + 80, `eng_${e}0`).setOrigin(0.5, 1).setScale(S).setDepth(front + 80); img.setData('engine', e); this.siegeObjs.push(img); ex += 46;
+    }
+  }
+  /** Engines fire at the walls; archers on the walls shoot at your camp. */
+  private volley() {
+    const c = getState().world.campaign; if (!c || c.target !== this.r.id || c.phase !== 'siege') return;
+    const engines = this.siegeObjs.filter((o) => (o as Phaser.GameObjects.Image).getData?.('engine') && ['trebuchet', 'mangonel'].includes((o as Phaser.GameObjects.Image).getData('engine'))) as Phaser.GameObjects.Image[];
+    const walls = this.wallImgs.filter((w) => w.img.visible && w.y === this.L.box.y1);
+    if (c.stance === 'bombard' && engines.length && walls.length) {
+      const e = pick(engines), w = pick(walls), kind = e.getData('engine'); e.setTexture(`eng_${kind}1`); this.time.delayedCall(500, () => e.setTexture(`eng_${kind}0`));
+      const stone = this.add.circle(e.x, e.y - 20, 2.5, 0x7e8894).setDepth(30000), tx = w.img.x + 8, ty = w.img.y - 14, o = { t: 0 }, x0 = e.x, y0 = e.y - 20;
+      this.tweens.add({ targets: o, t: 1, duration: 1100, onUpdate: () => stone.setPosition(x0 + (tx - x0) * o.t, y0 + (ty - y0) * o.t - Math.sin(o.t * Math.PI) * 90), onComplete: () => {
+        stone.destroy(); const p = this.add.particles(tx, ty, 'px', { speed: { min: 15, max: 50 }, lifespan: 600, quantity: 14, scale: { start: 1.6, end: 0 }, tint: [0x9a948c, 0xc8bca8], emitting: false }).setDepth(30000); p.explode(14); this.time.delayedCall(800, () => p.destroy());
+        this.cameras.main.shake(100, 0.002); if (getState().settings.sound) audio.play('catapult');
+      } });
+    }
+    const archers = this.figs.filter((f) => f.side === 'foe' && f.y < (this.L.box.y1 + 2) * TILE), mine = this.figs.filter((f) => f.side === 'you');
+    for (const a of archers.slice(0, 3)) { if (!mine.length || Math.random() < 0.4) continue; const t = pick(mine); a.img.setFrame(sFrame(a.cls, a.rank, 5));
+      const ar = this.add.rectangle(a.x, a.y - 12, 5, 1, 0xe8e0c8).setDepth(30000).setRotation(Math.atan2(t.y - a.y, t.x - a.x)); this.tweens.add({ targets: ar, x: t.x, y: t.y - 8, duration: 600, onComplete: () => { ar.destroy(); a.img.setFrame(sFrame(a.cls, a.rank, 0)); } }); }
+  }
+  /** Separate chatter for this realm: townsfolk, your besiegers and the defenders. */
+  private chat() {
+    const cam = this.cameras.main; if (cam.zoom < 1 || this.chatter.count >= 2) return;
+    const s = getState(), c = s.world.campaign?.target === this.r.id ? s.world.campaign : null, view = cam.worldView;
+    const vis = (side: Fig['side']) => this.figs.filter((f) => f.side === side && view.contains(f.x, f.y - 8));
+    const target = (f: Fig) => ({ get x() { return f.x; }, get y() { return f.y; }, h: 16, alive: () => f.img.active });
+    if (c) {
+      const you = vis('you'), foe = vis('foe'), soldiers = c.battalions.length ? campaignSquads(s).reduce((a, q) => a + q.count, 0) : 0, days = Math.max(1, Math.floor(c.supplies / Math.max(1, Math.ceil(soldiers / 10))));
+      const yours = c.phase === 'field' ? ['Steady, lads. Here they come.', 'Look at them, shaking in their boots!', 'For our lord and the realm!', 'Hold the line until the horn!']
+        : [`Day ${c.day} of this cursed siege.`, c.supplies < soldiers / 5 ? 'My belly rumbles... where is the supply train?' : 'At least the stew is warm.', c.wallHp / c.wallMax < 0.4 ? 'The wall is crumbling! Soon now!' : 'Those walls won\'t hold forever.', c.morale < 50 ? 'I miss home...' : 'Our lord studies so we may eat!', `${days} days of rations left, they say.`, 'Load the trebuchet!', 'Keep your head down, archers on the wall!'];
+      const theirs = c.phase === 'field' ? ['Turn back while you can!', 'Our lord will crush you!'] : c.wallHp / c.wallMax < 0.4 ? ['Hold! Hold the breach!', 'We need more stones for the wall!', 'Is it true the bread has run out?'] : ['You\'ll never take this keep!', 'Go home, dogs!', 'Our walls have stood a hundred years!', 'Waste your stones, we have plenty!'];
+      if (you.length && (Math.random() < 0.6 || !foe.length)) this.chatter.say(target(pick(you)), pick(yours), 0, VOICE.you);
+      else if (foe.length) this.chatter.say(target(pick(foe)), pick(theirs), 0, VOICE.foe);
+      return;
+    }
+    const folk = vis('folk'); if (!folk.length) return;
+    const lines = [...FOLK[this.L.biome], `Long live ${this.r.ruler}!`, ...(this.r.status === 'war' ? ['They say war is coming...', 'Lock your doors tonight.'] : this.r.status === 'ally' ? ['Our allies grow strong, I hear.'] : this.r.status === 'vassal' ? ['We pay tribute now... sigh.'] : [])];
+    this.chatter.say(target(pick(folk)), pick(lines), 0, VOICE.folk);
+  }
+  private applyNight() {
+    const { n } = nightFactor(getState().settings.dayNight);
+    const ch = (s: number) => Math.round(255 + ((s >> 0) - 255) * n * 0.85); void ch;
+    const mix = (a: number, b: number, t: number) => { const c = (sh: number) => Math.round(((a >> sh) & 255) + (((b >> sh) & 255) - ((a >> sh) & 255)) * t); return (c(16) << 16) | (c(8) << 8) | c(0); };
+    this.shade.setFillStyle(mix(0xffffff, 0x3a4a8a, n * 0.85)).setVisible(n > 0.01);
+  }
+  update(time: number, dt: number) {
+    this.chatter.update(); this.weather?.update(this.cameras.main);
+    const tick = Math.floor(time / 150);
+    for (const f of this.figs) {
+      let fr = 0;
+      if (f.side === 'folk') {
+        if ((f.wait ?? 0) > 0) f.wait! -= dt;
+        else { if (f.tx == null || Math.hypot(f.tx - f.x, (f.ty ?? 0) - f.y) < 1) { const d = pick(this.doors); f.tx = d.x + (Math.random() - 0.5) * 14; f.ty = d.y + Math.random() * 6; f.wait = 1500 + Math.random() * 4000; }
+          else { const dx = f.tx - f.x, dy = f.ty! - f.y, d = Math.hypot(dx, dy), k = Math.min(1, ((dt / 1000) * 14) / d); f.x += dx * k; f.y += dy * k; f.img.setFlipX(dx < 0); fr = (tick + f.ph) % 4; } }
+      } else if ((tick + f.ph) % 30 === 0) fr = 2;
+      if (f.side !== 'foe' || f.img.frame.name.endsWith('|0') || f.img.frame.name.endsWith('|2')) f.img.setFrame(sFrame(f.cls, f.rank, fr));
+      f.img.setPosition(Math.round(f.x), Math.round(f.y)).setDepth(f.y);
+    }
+  }
+}

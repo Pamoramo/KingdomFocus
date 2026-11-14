@@ -2,7 +2,7 @@
 import { neglect, type GameState, type Squad, _internal, studyHooks, emit, getState, setState, count, maxLevel, has, armySize, canAfford, TILE, CAMP_X, CAMP_Y } from './state.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
-import { type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr } from './war.ts';
+import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr } from './war.ts';
 import { uid } from './study.ts';
 import { RANKS } from './economy.ts';
 
@@ -11,7 +11,7 @@ const W = (s: GameState, w: WorldState): GameState => ({ ...s, world: w });
 const rival = (s: GameState, id: string) => s.world.rivals.find((r) => r.id === id);
 
 // ---------------- army helpers ----------------
-export const awayBats = (s: GameState) => new Set([...(s.world.campaign?.battalions ?? []), ...s.world.loans.map((l) => l.bat)]);
+export const awayBats = (s: GameState) => new Set([...(s.world.campaign?.battalions ?? []), ...s.world.loans.map((l) => l.bat), ...(s.world.journeys ?? []).flatMap((j) => j.bats ?? [])]);
 export const homeSquads = (s: GameState) => { const away = awayBats(s); return s.squads.filter((q) => !away.has(q.bat)); };
 export const unitsOf = (squads: Squad[]): Unit[] => squads.map((q) => ({ cls: q.cls, count: q.count, rank: q.rank, ref: q.id }));
 export const campaignSquads = (s: GameState) => s.squads.filter((q) => s.world.campaign?.battalions.includes(q.bat));
@@ -71,29 +71,35 @@ studyHooks.push((s, minutes) => {
   // loaned battalions come home after enough study
   const back = w.loans.filter((l) => l.leftMin - minutes <= 0);
   w = { ...w, loans: w.loans.map((l) => ({ ...l, leftMin: l.leftMin - minutes })).filter((l) => l.leftMin > 0) };
-  for (const l of back) { emit({ kind: 'info', text: `${s.battalions.find((b) => b.id === l.bat)?.name ?? 'A battalion'} returns from aiding ${rival(s, l.rival)?.name}.` }); }
-  return W(o, w);
+  o = W(o, w);
+  for (const l of back) { const r = rival(o, l.rival); if (!r) continue; const nm = o.battalions.find((b) => b.id === l.bat)?.name ?? 'Your troops'; o = goHome(o, r, [l.bat], `${nm} returning from ${r.name}`); emit({ kind: 'info', text: `${nm} set out for home from ${r.name}.` }); }
+  return o;
 });
 
 // ---------------- diplomacy ----------------
+/** Puts a traveller on the road; effects apply on arrival (see journeysTick). */
+function send(s: GameState, kind: JourneyKind, r: Rival, label: string, extra: Partial<Journey> = {}, ms?: number): GameState {
+  const now = Date.now(), j: Journey = { id: uid(), kind, rival: r.id, depart: now, arrive: now + (ms ?? travelMs(kind, r)), label, ...extra };
+  return W(s, { ...s.world, journeys: [...(s.world.journeys ?? []), j] });
+}
+const mins = (ms: number) => (ms < 90000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)} min`);
 export const trade = (id: string, give: keyof Res, amount: number, want: keyof Res) => update((s) => {
   const r = rival(s, id); if (!r) return; const why = canTrade(r); if (why) return why;
   amount = Math.floor(amount); if (amount <= 0 || give === want) return 'Choose an amount and two different goods';
   if (!canAfford(s.res, { [give]: amount })) return 'Not enough to trade';
   const q = tradeQuote(r, give, amount, want), today = dayStr();
   let o = spend(s, { [give]: amount });
-  o = ledger(o, 'trade', uid(), { ...ZERO, [want]: q.got });
-  let w = shiftRelations(o.world, id, q.rel, false);
-  w = { ...w, rivals: w.rivals.map((x) => (x.id === id ? { ...x, trades: x.lastTradeDay === today ? x.trades + 1 : 1, lastTradeDay: today } : x)) };
-  emit({ kind: 'info', text: `Traded with ${r.name}: +${q.got} ${want}, relations +${q.rel}` });
-  return event(W(o, w), 'diplomacy', `Traded ${amount} ${give} with ${r.name} for ${q.got} ${want}.`);
+  o = W(o, { ...o.world, rivals: o.world.rivals.map((x) => (x.id === id ? { ...x, trades: x.lastTradeDay === today ? x.trades + 1 : 1, lastTradeDay: today } : x)) });
+  o = send(o, 'caravan', r, `Caravan to ${r.name}`, { data: { give, amount, want, got: q.got, rel: q.rel } });
+  emit({ kind: 'info', text: `A caravan sets out for ${r.name} with ${amount} ${give}. Arrives in ${mins(travelMs('caravan', r))}.` });
+  return event(o, 'diplomacy', `Sent a caravan with ${amount} ${give} to ${r.name}.`);
 });
 export const gift = (id: string, gold: number) => update((s) => {
   const r = rival(s, id); if (!r || r.bandits) return 'They will not accept';
   if (!canAfford(s.res, { gold })) return 'Not enough gold';
   const rel = giftRelation(r, gold); if (rel < 1) return `Too small a gift for a level ${r.level} kingdom`;
-  emit({ kind: 'info', text: `${r.name} welcomes your gift (+${rel} relations)` });
-  return event(W(spend(s, { gold }), shiftRelations(s.world, id, rel)), 'diplomacy', `Sent a gift of ${gold} gold to ${r.name}.`);
+  emit({ kind: 'info', text: `Your gift is on its way to ${r.name}. Arrives in ${mins(travelMs('gift', r))}.` });
+  return event(send(spend(s, { gold }), 'gift', r, `Gift for ${r.name}`, { data: { gold, rel } }), 'diplomacy', `Sent a gift of ${gold} gold to ${r.name}.`);
 });
 export const sendAid = (id: string, batId: string) => update((s) => {
   const r = rival(s, id); if (!r || r.bandits) return 'Not possible';
@@ -102,26 +108,26 @@ export const sendAid = (id: string, batId: string) => update((s) => {
   if (awayBats(s).has(batId)) return 'That battalion is already away';
   const sq = s.squads.filter((q) => q.bat === batId), p = sidePower(unitsOf(sq)); if (!sq.length) return 'That battalion has no soldiers';
   const rel = Math.min(25, 4 + Math.round((p / Math.max(50, r.power)) * 80));
-  let o = W(s, { ...shiftRelations(s.world, id, rel), loans: [...s.world.loans, { bat: batId, rival: id, leftMin: 60 }] });
-  o = { ...o, squads: o.squads.map((q) => (q.bat === batId ? { ...q, xp: q.xp + 30 } : q)) }; for (const q of sq) o = mark(o, 'squads', q.id);
+  let o = send(s, 'aid', r, `${s.battalions.find((b) => b.id === batId)?.name ?? 'Troops'} marching to ${r.name}`, { bats: [batId], data: { rel } });
   o = { ...o, world: { ...o.world, inbox: o.world.inbox.filter((m) => !(m.rival === id && m.kind === 'aid_request')) } };
-  emit({ kind: 'info', text: `Your troops march to aid ${r.name} (+${rel} relations). They return after 60 minutes of study.` });
+  emit({ kind: 'info', text: `Your troops march to aid ${r.name}. They arrive in ${mins(travelMs('aid', r))}.` });
   return event(o, 'diplomacy', `Sent troops to aid ${r.name}.`);
 });
+const pendingEnvoy = (s: GameState, id: string) => (s.world.journeys ?? []).some((j) => j.kind === 'envoy' && j.rival === id && !j.home);
 export const proposeAlliance = (id: string) => update((s) => {
   const r = rival(s, id); if (!r || r.bandits) return 'Not possible';
   if (r.status === 'war') return 'Make peace first';
   if (r.relation < 60) return `${r.ruler} does not trust you enough yet (relations ${r.relation}/60)`;
-  emit({ kind: 'achieve', text: `Alliance sealed with ${r.name}!` });
-  return event(W(s, shiftRelations(setStatus(s.world, id, 'ally'), id, 10)), 'diplomacy', `Formed an alliance with ${r.name}.`);
+  if (pendingEnvoy(s, id)) return 'An envoy is already on the way';
+  emit({ kind: 'info', text: `An envoy rides to ${r.name} with your offer of alliance.` });
+  return send(s, 'envoy', r, `Envoy to ${r.name}: alliance`, { data: { act: 'alliance' } });
 });
-export const breakAlliance = (id: string) => update((s) => { const r = rival(s, id); if (!r) return; return event(W(s, shiftRelations(setStatus(s.world, id, 'neutral'), id, -30)), 'diplomacy', `Ended the alliance with ${r.name}.`); });
+export const breakAlliance = (id: string) => update((s) => { const r = rival(s, id); if (!r) return; return send(s, 'envoy', r, `Envoy to ${r.name}: end alliance`, { data: { act: 'break' } }); });
 export const declareWar = (id: string) => update((s) => {
   const r = rival(s, id); if (!r) return; if (r.status === 'war') return 'Already at war'; if (r.status === 'vassal') return 'They are your vassal';
-  let w = shiftRelations(setStatus(s.world, id, 'war'), id, -Math.max(40, r.relation + 60));
-  if (r.status === 'ally') w = { ...w, rivals: w.rivals.map((x) => (x.id === id ? x : { ...x, relation: Math.max(-100, x.relation - 15) })) }; // betrayal is noticed
-  emit({ kind: 'war', text: `War declared on ${r.name}!` });
-  return event(W(s, w), 'war', `Declared war on ${r.name}.`);
+  if (pendingEnvoy(s, id)) return 'A herald is already on the way';
+  emit({ kind: 'war', text: `A herald rides to ${r.name} with your declaration of war.` });
+  return send(s, 'envoy', r, `Herald to ${r.name}: war`, { data: { act: 'war' } });
 });
 export const offerPeace = (id: string, gold: number) => update((s) => {
   const r = rival(s, id); if (!r || r.status !== 'war') return 'Not at war';
@@ -129,12 +135,49 @@ export const offerPeace = (id: string, gold: number) => update((s) => {
   const need = r.beaten ? 0 : 100 * r.level;
   if (gold < need) return `${r.name} wants ${need} gold to make peace`;
   if (!canAfford(s.res, { gold })) return 'Not enough gold';
-  let o = gold ? spend(s, { gold }) : s;
-  const w = setStatus(s.world, id, 'neutral');
-  o = W(o, { ...w, rivals: w.rivals.map((x) => (x.id === id ? { ...x, relation: Math.max(x.relation, -25), beaten: 0 } : x)), threat: s.world.threat?.rival === id ? null : s.world.threat });
-  emit({ kind: 'info', text: `Peace with ${r.name}.` });
-  return event(o, 'diplomacy', `Made peace with ${r.name}.`);
+  if (pendingEnvoy(s, id)) return 'An envoy is already on the way';
+  emit({ kind: 'info', text: `An envoy rides to ${r.name} to offer peace.` });
+  return send(gold ? spend(s, { gold }) : s, 'envoy', r, `Envoy to ${r.name}: peace`, { data: { act: 'peace' } });
 });
+
+/** Applies the effects of everyone who has reached their destination. */
+export const journeysTick = (now = Date.now()) => {
+  const s0 = getState(), due = (s0.world.journeys ?? []).filter((j) => j.arrive <= now), march = s0.world.campaign?.phase === 'march' && (s0.world.campaign.arrive ?? 0) <= now;
+  if (!due.length && !march) return;
+  update((s) => {
+    let o: GameState = W(s, { ...s.world, journeys: (s.world.journeys ?? []).filter((j) => j.arrive > now) });
+    if (march && o.world.campaign) { const c = o.world.campaign, r = rival(o, c.target)!; o = W(o, { ...o.world, campaign: { ...c, phase: c.next ?? 'field', log: [...c.log, `Your host arrives before ${r.name}.`] } }); emit({ kind: 'war', text: `Your host has arrived before ${r.name}!` }); }
+    for (const j of due) {
+      const r = rival(o, j.rival)!, d = (j.data ?? {}) as Record<string, never>;
+      if (j.kind === 'caravan') {
+        o = W(o, shiftRelations(o.world, r.id, d.rel, false));
+        o = send(o, 'return', r, `Caravan returning from ${r.name}`, { home: true, data: { res: { [d.want]: d.got } } }, travelMs('caravan', r));
+        emit({ kind: 'info', text: `Your caravan reached ${r.name} (+${d.rel} relations) and heads home with ${d.got} ${d.want}.` });
+      } else if (j.kind === 'gift') { o = W(o, shiftRelations(o.world, r.id, d.rel)); emit({ kind: 'info', text: `${r.name} welcomes your gift (+${d.rel} relations).` }); }
+      else if (j.kind === 'aid') {
+        const bat = j.bats![0];
+        o = W(o, { ...shiftRelations(o.world, r.id, d.rel), loans: [...o.world.loans, { bat, rival: r.id, leftMin: 60 }] });
+        o = { ...o, squads: o.squads.map((q) => (q.bat === bat ? { ...q, xp: q.xp + 30 } : q)) }; for (const q of o.squads) if (q.bat === bat) o = mark(o, 'squads', q.id);
+        emit({ kind: 'info', text: `Your troops reached ${r.name} (+${d.rel} relations). They return after 60 minutes of study.` });
+      } else if (j.kind === 'envoy') {
+        if (d.act === 'alliance') { if (r.relation >= 60 && r.status === 'neutral') { o = W(o, shiftRelations(setStatus(o.world, r.id, 'ally'), r.id, 10)); emit({ kind: 'achieve', text: `${r.ruler} accepts! Alliance sealed with ${r.name}.` }); o = event(o, 'diplomacy', `Formed an alliance with ${r.name}.`); } else emit({ kind: 'info', text: `${r.ruler} declined your alliance.` }); }
+        if (d.act === 'break') { o = W(o, shiftRelations(setStatus(o.world, r.id, 'neutral'), r.id, -30)); o = event(o, 'diplomacy', `Ended the alliance with ${r.name}.`); }
+        if (d.act === 'war' && r.status !== 'war') {
+          let w = shiftRelations(setStatus(o.world, r.id, 'war'), r.id, -Math.max(40, r.relation + 60));
+          if (r.status === 'ally') w = { ...w, rivals: w.rivals.map((x) => (x.id === r.id ? x : { ...x, relation: Math.max(-100, x.relation - 15) })) };
+          o = event(W(o, w), 'war', `Declared war on ${r.name}.`); emit({ kind: 'war', text: `Your herald has delivered the declaration. You are at war with ${r.name}!` });
+        }
+        if (d.act === 'peace' && r.status === 'war') { const w = setStatus(o.world, r.id, 'neutral'); o = W(o, { ...w, rivals: w.rivals.map((x) => (x.id === r.id ? { ...x, relation: Math.max(x.relation, -25), beaten: 0 } : x)), threat: o.world.threat?.rival === r.id ? null : o.world.threat }); o = event(o, 'diplomacy', `Made peace with ${r.name}.`); emit({ kind: 'info', text: `${r.name} accepts peace.` }); }
+      } else if (j.kind === 'return') {
+        if (d.res) { o = ledger(o, 'trade', uid(), { ...ZERO, ...(d.res as Partial<Res>) }); emit({ kind: 'reward', text: `Your caravan is home from ${r.name}`, res: d.res as Partial<Res> }); }
+        else emit({ kind: 'info', text: `${j.label.replace(' returning', '')} are home.` });
+      }
+    }
+    return o;
+  });
+};
+/** Sends battalions home along the road (used after a campaign or a loan ends). */
+const goHome = (s: GameState, r: Rival, bats: string[], label: string) => (bats.length ? send(s, 'return', r, label, { home: true, bats }, travelMs('army', r)) : s);
 export const answerMissive = (mid: string, accept: boolean) => update((s) => {
   const m = s.world.inbox.find((x) => x.id === mid); if (!m) return;
   const r = rival(s, m.rival)!; let o: GameState = { ...s, world: { ...s.world, inbox: s.world.inbox.filter((x) => x.id !== mid) } };
@@ -189,7 +232,7 @@ export const fieldBattle = (tactic: Tactic) => update((s) => {
   const killed = sidePower(foe.map((u, i) => ({ ...u, count: res.lossB[i] })));
   const w = { ...o.world, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.max(10, Math.round(x.power - killed * 1.4)), beaten: res.winner === 'a' ? 1 : x.beaten } : x)) };
   if (res.winner === 'a') o = W(o, { ...w, campaign: { ...c, phase: 'siege', log: [...c.log, `Victory in the field! The siege of ${r.name} begins.`] } });
-  else o = W(o, { ...w, campaign: null, engines: addEngines(w.engines, c.engines), supplies: w.supplies + c.supplies });
+  else o = goHome(W(o, { ...w, campaign: null, engines: addEngines(w.engines, c.engines), supplies: w.supplies + c.supplies }), r, c.battalions, `Your host retreating from ${r.name}`);
   o = ledger(o, 'loot', uid(), res.winner === 'a' ? { ...ZERO, renown: 10 * r.level } : ZERO);
   o = report(o, `Battle before ${r.name}`, res.winner === 'a', res, a, foe);
   play(`Battle before ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color);
@@ -203,7 +246,7 @@ export const sendSupplies = (n: number) => update((s) => {
 });
 export const liftSiege = () => update((s) => {
   const c = s.world.campaign; if (!c) return; const r = rival(s, c.target)!;
-  return event(W(s, { ...s.world, campaign: null, engines: addEngines(s.world.engines, c.engines), supplies: s.world.supplies + c.supplies }), 'war', `Lifted the siege of ${r.name}.`);
+  return event(goHome(W(s, { ...s.world, campaign: null, engines: addEngines(s.world.engines, c.engines), supplies: s.world.supplies + c.supplies }), r, c.battalions, `Your host returning from ${r.name}`), 'war', `Lifted the siege of ${r.name}.`);
 });
 function conquer(s: GameState, r: Rival): GameState {
   const loot: Res = { gold: 300 * r.level ** 2, wood: 0, stone: 80 * r.level ** 2, renown: 60 * r.level };
@@ -211,7 +254,7 @@ function conquer(s: GameState, r: Rival): GameState {
   let o = ledger(s, 'loot', uid(), loot);
   const w = { ...o.world, campaign: null, engines: addEngines(o.world.engines, c.engines), supplies: o.world.supplies + c.supplies, conquests: o.world.conquests + 1,
     rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, status: 'vassal' as const, power: Math.round(x.power * 0.3), garrison: 0, relation: 20 } : r.friends.includes(x.id) ? { ...x, relation: Math.max(-100, x.relation - 20) } : x)) };
-  o = W(o, w);
+  o = goHome(W(o, w), r, c.battalions, `Your victorious host returning from ${r.name}`);
   emit({ kind: 'stage', text: `${r.name} has fallen! It is now your vassal.`, res: loot, big: true });
   return event(o, 'war', `Conquered ${r.name}. Its lord swears fealty to you.`);
 }
@@ -232,7 +275,7 @@ export const assault = (tactic: Tactic) => update((s) => {
   const killed = sidePower(foe.map((u, i) => ({ ...u, count: res.lossB[i] })));
   const left = campaignSquads(o).length;
   o = W(o, { ...o.world, campaign: left ? { ...c, garrison: Math.max(0, Math.round(c.garrison - killed)), morale: Math.max(0, c.morale - 20), log: [...c.log, 'The assault was thrown back from the walls.'] } : null });
-  if (!left) o = W(o, { ...o.world, engines: addEngines(o.world.engines, c.engines) });
+  if (!left) o = goHome(W(o, { ...o.world, engines: addEngines(o.world.engines, c.engines) }), r, c.battalions, `Survivors returning from ${r.name}`);
   return event(o, 'war', `The assault on ${r.name} failed.`);
 });
 export const demandSurrender = () => update((s) => {

@@ -51,6 +51,12 @@ How saving works:
 - During a siege, every 20 verified study minutes is one siege day. Farms produce supplies while you study, and each siege day the army eats them.
 - Your own castle can only be besieged once you reach stage 4 and are at odds with someone, or when a kingdom truly hates you. Losing costs part of your stores, never your buildings.
 
+## Other kingdoms & travel
+
+- Visit any kingdom from the War panel. Each has its own biome (grassland, desert, tundra, forest, swamp or highlands) and a castle and town built to its level and its ruler's character.
+- During a campaign, "Watch the siege" shows your camp, engines firing, walls cracking and falling to rubble, and defenders shooting back, with their own chatter.
+- Envoys, caravans, gifts, troops and armies take a few real minutes to travel, depending on distance. Their effects apply when they arrive, and you can follow them on the world map.
+
 ## Deploy (Vercel)
 
 1. Push this repo to GitHub and import it in Vercel. The framework is detected automatically.

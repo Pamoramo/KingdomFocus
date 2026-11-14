@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import { getState, subscribe, maxLevel, type GameState } from '../lib/state.ts';
 import { getUI, setUI, subUI } from './ui.ts';
 import { worldMap, castleIcon, siegeCamp, engineArt, MAP_PW, MAP_PH } from './art/war.ts';
+import { wagon } from './art/biome.ts';
+import type { Journey } from '../lib/war.ts';
 import { hdify } from './art/hd.ts';
 import { withoutOutline, hex } from './art/px.ts';
 import { bannerTex, sFrame, S } from './textures.ts';
@@ -18,6 +20,7 @@ export class WorldScene extends Phaser.Scene {
   private drag: { x: number; y: number; sx: number; sy: number; moved: boolean } | null = null;
   private pinch: { d: number; z: number } | null = null;
   private sig = ''; private unsub: (() => void)[] = []; private frame = 0;
+  private travellers = new Map<string, { parts: Phaser.GameObjects.Image[]; label: Phaser.GameObjects.Text; j: Journey }>();
   constructor() { super('world'); }
 
   create() {
@@ -25,6 +28,7 @@ export class WorldScene extends Phaser.Scene {
     const key = `worldmap_${w.seed}`;
     if (!T.exists(key)) T.addCanvas(key, hdify(worldMap(w.seed, [HOME, ...w.rivals.map((r) => ({ x: r.x, y: r.y }))]), { rim: false, outline: false, grain: 3 }));
     this.add.image(0, 0, key).setOrigin(0).setScale(K / 2);
+    for (const f of [0, 1]) if (!T.exists(`wagon${f}`)) T.addCanvas(`wagon${f}`, hdify(withoutOutline(() => wagon(f))));
     if (!T.exists('camp_icon')) T.addCanvas('camp_icon', hdify(withoutOutline(() => siegeCamp())));
     for (const e of ENGINE_IDS) if (!T.exists(`eng_${e}`)) T.addCanvas(`eng_${e}`, hdify(withoutOutline(() => engineArt(e))));
     // drifting clouds
@@ -45,7 +49,7 @@ export class WorldScene extends Phaser.Scene {
   }
   private tap(p: Phaser.Input.Pointer) {
     const wp = this.cameras.main.getWorldPoint(p.x, p.y);
-    for (const [id, v] of this.sites) if (Math.hypot(wp.x - v.icon.x, wp.y - (v.icon.y - 20)) < 40) { setUI({ selRival: id === 'home' ? null : id, panel: 'world' }); return; }
+    for (const [id, v] of this.sites) if (Math.hypot(wp.x - v.icon.x, wp.y - (v.icon.y - 20)) < 40) { if (id === 'home') setUI({ view: 'kingdom' }); else setUI({ selRival: id, panel: 'world' }); return; }
   }
   private place(id: string, x: number, y: number, level: number, color: number, emblem: string, name: string) {
     let v = this.sites.get(id);
@@ -71,7 +75,7 @@ export class WorldScene extends Phaser.Scene {
     }
     const sig = JSON.stringify([w.campaign?.target, w.campaign?.phase, w.campaign?.engines, w.threat?.rival, w.loans.map((l) => l.rival)]);
     if (sig !== this.sig) { this.sig = sig; this.armies(s); }
-    this.highlight();
+    this.highlight(); this.syncJourneys();
   }
   private soldiers(x: number, y: number, cls: string, n: number, flip = false, tint?: number) {
     for (let i = 0; i < n; i++) { const im = this.add.image(x + (i % 4) * 11 - 16, y + Math.floor(i / 4) * 9, 'soldiers', sFrame(cls, 1, 0)).setOrigin(0.5, 1).setScale(S).setFlipX(flip).setDepth(y + i); if (tint) im.setTint(tint); this.units.push(im);
@@ -84,6 +88,7 @@ export class WorldScene extends Phaser.Scene {
     if (w.campaign) {
       const r = w.rivals.find((x) => x.id === w.campaign!.target)!, tx = r.x * WW, ty = r.y * WH, dx = tx > home.x ? -70 : 70;
       const cx = tx + dx, cy = ty + 30;
+      if (w.campaign.phase === 'march') return;
       if (w.campaign.phase === 'siege') { this.units.push(this.add.image(cx, cy + 10, 'camp_icon').setScale(0.6).setDepth(cy)); ENGINE_IDS.filter((e) => w.campaign!.engines[e] > 0).forEach((e, i) => this.units.push(this.add.image(cx - 30 + i * 22, cy + 34, `eng_${e}`).setScale(0.5).setDepth(cy + 40))); }
       const g = this.add.container(home.x, home.y + 20); this.units.push(g);
       this.soldiers(cx, cy - 20, 'swordsman', 8, dx > 0);
@@ -91,6 +96,38 @@ export class WorldScene extends Phaser.Scene {
     }
     if (w.threat) { const r = w.rivals.find((x) => x.id === w.threat!.rival)!; this.soldiers(home.x + 60, home.y + 10, 'spearman', 12, true, 0xffb0a0); const b = this.add.image(home.x + 80, home.y - 20, bannerTex(this, r.color, r.emblem, 0)).setScale(S * 1.4); this.units.push(b); }
     for (const l of w.loans) { const r = w.rivals.find((x) => x.id === l.rival); if (r) this.soldiers(r.x * WW - 40, r.y * WH + 26, 'spearman', 4); }
+  }
+  /** Travellers on the roads: riders, wagons and marching columns, positioned by elapsed time. */
+  private syncJourneys() {
+    const w0 = getState().world, c = w0.campaign, march: Journey[] = c && c.phase === 'march' ? [{ id: 'campaign-march', kind: 'army', rival: c.target, depart: c.started, arrive: c.arrive ?? c.started, label: 'Your host on the march' }] : [];
+    const js = [...(w0.journeys ?? []), ...march], ids = new Set(js.map((j) => j.id));
+    for (const [id, v] of this.travellers) if (!ids.has(id)) { v.parts.forEach((p) => p.destroy()); v.label.destroy(); this.travellers.delete(id); }
+    for (const j of js) if (!this.travellers.has(j.id)) {
+      const parts: Phaser.GameObjects.Image[] = [];
+      if (j.kind === 'caravan' || j.kind === 'gift' || (j.kind === 'return' && !j.bats)) { parts.push(this.add.image(0, 0, 'wagon0').setOrigin(0.5, 1).setScale(0.9)); parts.push(this.add.image(0, 0, 'soldiers', sFrame('worker', 0, 0)).setOrigin(0.5, 1).setScale(S * 1.6)); }
+      else if (j.kind === 'envoy') parts.push(this.add.image(0, 0, 'soldiers', sFrame('lightcav', 2, 0)).setOrigin(0.5, 1).setScale(S * 1.8));
+      else for (let i = 0; i < 5; i++) parts.push(this.add.image(0, 0, 'soldiers', sFrame(i === 0 ? 'knight' : 'spearman', 1, 0)).setOrigin(0.5, 1).setScale(S * 1.5));
+      const label = this.add.text(0, 0, '', { fontFamily: 'monospace', fontSize: '22px', color: '#fff4d6', stroke: '#1d1716', strokeThickness: 5 }).setOrigin(0.5, 1).setScale(0.5).setDepth(7000);
+      this.travellers.set(j.id, { parts, label, j });
+    }
+  }
+  update(time: number) {
+    const now = Date.now(), w = getState().world, home = { x: HOME.x * WW, y: HOME.y * WH };
+    let k = 0;
+    for (const { parts, label, j } of this.travellers.values()) {
+      const lift = (k++ % 3) * 13;
+      const r = w.rivals.find((x) => x.id === j.rival); if (!r) continue;
+      const far = { x: r.x * WW, y: r.y * WH }, [a, b] = j.home ? [far, home] : [home, far];
+      const t = Math.min(1, Math.max(0, (now - j.depart) / Math.max(1, j.arrive - j.depart))), x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t + Math.sin(t * 9) * 6;
+      const flip = b.x < a.x, f = Math.floor(time / 160) % 4;
+      parts.forEach((p, i) => {
+        const back = i * (j.kind === 'caravan' || j.kind === 'gift' || (j.kind === 'return' && !j.bats) ? 22 : 14);
+        p.setPosition(x - (flip ? -back : back), y + (i % 2) * 6).setFlipX(flip).setDepth(y + 10);
+        if (p.texture.key === 'soldiers') { const cls = (p.frame.name as string).split('|')[0], rk = +(p.frame.name as string).split('|')[1]; p.setFrame(sFrame(cls, rk, f)); } else p.setTexture(`wagon${f % 2}`);
+      });
+      const left = Math.max(0, j.arrive - now);
+      label.setText(`${j.label} · ${left > 60000 ? Math.ceil(left / 60000) + 'm' : Math.ceil(left / 1000) + 's'}`).setPosition(x, y - 46 - lift);
+    }
   }
   private highlight() { const sel = getUI().selRival; for (const [id, v] of this.sites) v.ring.setVisible(id === sel); }
   focusHome() { this.cameras.main.pan(HOME.x * WW, HOME.y * WH, 500); }

@@ -4,9 +4,10 @@ import Phaser from 'phaser';
 import { KingdomScene } from '../game/KingdomScene.ts';
 import { WorldScene } from '../game/WorldScene.ts';
 import { BattleScene } from '../game/BattleScene.ts';
+import { RivalScene } from '../game/RivalScene.ts';
 import { audio, type Sfx } from '../game/audio.ts';
 import { WEATHER_NAME, type Weather } from '../game/weather.ts';
-import { worldTick } from '../lib/warActions.ts';
+import { worldTick, journeysTick } from '../lib/warActions.ts';
 import { WorldPanel, BattleReport, worldBadge } from './World.tsx';
 import { initPersistence } from '../lib/sync.ts';
 import { getState, setState, studyTick, fxBus, neglect, idleDays, type Fx } from '../lib/state.ts';
@@ -89,7 +90,9 @@ function TopBar() {
     </div>
     <div className="pointer-events-auto pt-1 w-full lg:w-auto flex justify-center gap-1.5 flex-wrap">
       <StudyMini onOpen={() => setUI({ panel: 'study' })} />
-      <button className="wood rounded px-2.5 py-1 flex items-center gap-1 text-sm" onClick={() => setUI({ view: ui.view === 'world' ? 'kingdom' : 'world' })}><Icon name={ui.view === 'world' ? 'realm' : 'map'} size={18} />{ui.view === 'world' ? 'Kingdom' : 'World'}</button>
+      {ui.view === 'rival' && <span className="wood rounded px-2.5 py-1 text-sm">Visiting {s.world.rivals.find((r) => r.id === ui.visit)?.name}</span>}
+      {ui.view !== 'world' && <button className="wood rounded px-2.5 py-1 flex items-center gap-1 text-sm" onClick={() => setUI({ view: 'world' })}><Icon name="map" size={18} />World</button>}
+      {ui.view !== 'kingdom' && <button className="wood rounded px-2.5 py-1 flex items-center gap-1 text-sm" onClick={() => setUI({ view: 'kingdom' })}><Icon name="realm" size={18} />Kingdom</button>}
       {neglect(s) > 0 && <button className="rounded px-2.5 py-1 text-sm bg-[#6a3a1a] text-parch border-2 border-black" title="Study to calm the realm" onClick={() => setUI({ panel: 'study' })}>Restless realm · {idleDays(s)} idle days</button>}
       {s.world.threat && <button className="rounded px-2.5 py-1 text-sm bg-blood text-parch border-2 border-black pulse" onClick={() => setUI({ panel: 'world' })}>Under siege!</button>}
       {s.world.campaign && <button className="wood rounded px-2.5 py-1 text-sm" onClick={() => setUI({ panel: 'world' })}>{s.world.campaign.phase === 'field' ? 'Battle awaits' : `Siege day ${s.world.campaign.day}`}</button>}
@@ -115,9 +118,9 @@ export default function Game() {
   useStudyAlerts();
   useEffect(() => {
     initPersistence();
-    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, BattleScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
+    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, RivalScene, BattleScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
     gameRef.current = game;
-    worldTick(); const wt = setInterval(worldTick, 60000);
+    worldTick(); const wt = setInterval(worldTick, 60000); const jt = setInterval(() => journeysTick(), 2000);
     const wake = () => { audio.start(); const st = getState().settings; audio.setVolumes({ music: st.music ?? 0.5, sfx: st.sfx ?? 0.7, ambience: st.ambience ?? true }); };
     addEventListener('pointerdown', wake); addEventListener('keydown', wake);
     const click = (e: MouseEvent) => { if ((e.target as HTMLElement).closest?.('.btn')) audio.play('click'); };
@@ -132,19 +135,28 @@ export default function Game() {
       else { const k = SFX[fx.kind]; if (k) audio.play(k); }
     };
     fxBus.addEventListener('fx', onFx);
-    Object.assign(window, { __game: game, __kod: { getState, setState } });
+    Object.assign(window, { __game: game, __kod: { getState, setState, setUI } });
     const keys = (e: KeyboardEvent) => {
       const el = document.activeElement; if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
       const i = +e.key - 1; if (i >= 0 && i < TABS.length) setUI({ panel: TABS[i][0] });
     };
     addEventListener('keydown', keys);
     if ('serviceWorker' in navigator && location.hostname !== 'localhost') navigator.serviceWorker.register('/sw.js').catch(() => {});
-    return () => { game.destroy(true); removeEventListener('keydown', keys); clearInterval(wt); removeEventListener('pointerdown', wake); removeEventListener('keydown', wake); removeEventListener('click', click, true); fxBus.removeEventListener('fx', onFx); };
+    return () => { game.destroy(true); removeEventListener('keydown', keys); clearInterval(wt); clearInterval(jt); removeEventListener('pointerdown', wake); removeEventListener('keydown', wake); removeEventListener('click', click, true); fxBus.removeEventListener('fx', onFx); };
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = s.settings.theme; }, [s.settings.theme]);
   useEffect(() => { audio.setVolumes({ music: s.settings.sound ? s.settings.music ?? 0.5 : 0, sfx: s.settings.sound ? s.settings.sfx ?? 0.7 : 0, ambience: s.settings.sound && (s.settings.ambience ?? true) }); }, [s.settings.music, s.settings.sfx, s.settings.ambience, s.settings.sound]);
   useEffect(() => { audio.setMood(s.world.campaign || s.world.threat || ui.battle ? 'war' : ui.night > 0.5 ? 'night' : 'day'); }, [!!s.world.campaign, !!s.world.threat, !!ui.battle, ui.night]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { const g = gameRef.current; if (!g) return; if (ui.view === 'world') { g.scene.sleep('kingdom'); if (g.scene.isSleeping('world')) g.scene.wake('world'); else g.scene.run('world'); } else { g.scene.sleep('world'); g.scene.wake('kingdom'); } }, [ui.view]);
+  useEffect(() => {
+    const g = gameRef.current; if (!g) return;
+    const show = (k: string) => { if (g.scene.isSleeping(k)) g.scene.wake(k); else if (!g.scene.isActive(k)) g.scene.run(k); };
+    if (ui.view !== 'kingdom') g.scene.sleep('kingdom');
+    if (ui.view !== 'world' && g.scene.isActive('world')) g.scene.sleep('world');
+    if (ui.view !== 'rival' && (g.scene.isActive('rival') || g.scene.isSleeping('rival'))) g.scene.stop('rival');
+    if (ui.view === 'kingdom') show('kingdom');
+    if (ui.view === 'world') show('world');
+    if (ui.view === 'rival' && ui.visit) { g.scene.start('rival', { id: ui.visit }); g.scene.bringToTop('battle'); }
+  }, [ui.view, ui.visit]);
   const Panel = ui.panel ? PANELS[ui.panel] : null;
   const placing = ui.placing ? BUILDINGS[ui.placing].name : null;
   const hint = placing ? `Placing ${placing}: tap the map${BUILDINGS[ui.placing!].paint ? ' or drag to paint' : ''}` : ui.moving ? 'Tap a new spot for the building' : ui.selArmy ? `Tap the map to march the ${ui.selArmy}` : ui.selBat && !Panel ? 'Tap the map to march the battalion' : null;
