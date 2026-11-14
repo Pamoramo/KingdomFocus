@@ -80,7 +80,9 @@ export function realmLayout(w: Pick<WorldState, 'seed' | 'rivals'>, r: Rival): R
   let walls = ring(box, type === 'motte' ? 3 : type === 'hillfort' ? 2 : 0, type === 'hillfort' ? 3 : 0);
   if (inner) walls = [...walls, ...ring(inner, type === 'concentric' ? 1 : 0)];
   const innerGate = inner ? { x: Math.round((inner.x0 + inner.x1) / 2) - 1, y: inner.y1 } : null;
-  walls = walls.filter((t) => !(t.y === gate.y && t.x >= gate.x - 1 && t.x <= gate.x + 2) && !(innerGate && t.y === innerGate.y && t.x >= innerGate.x - 1 && t.x <= innerGate.x + 2));
+  // cut exactly the gate's own footprint so the curtain wall runs right up to it (a 3-wide gatehouse, or a 2-wide gate)
+  const house = !r.bandits && L >= 3 && type !== 'motte', g0 = house ? gate.x - 1 : gate.x, g1 = house ? gate.x + 1 : gate.x + 1;
+  walls = walls.filter((t) => !(t.y === gate.y && t.x >= g0 && t.x <= g1) && !(innerGate && t.y === innerGate.y && t.x >= innerGate.x && t.x <= innerGate.x + 1));
   for (const t of walls) occ.add(`${t.x},${t.y}`);
   // ---- castle core ----
   const core = inner ?? box, kx = type === 'keep' ? (R() < 0.5 ? core.x0 + 2 : core.x1 - 5) : Math.round((core.x0 + core.x1) / 2) - 2;
@@ -91,7 +93,7 @@ export function realmLayout(w: Pick<WorldState, 'seed' | 'rivals'>, r: Rival): R
     if (type === 'concentric' || (L >= 4 && W0 > 18)) towers.push([Math.round((box.x0 + box.x1) / 2), box.y0 - 1], [box.x0 - 1, Math.round((box.y0 + box.y1) / 2)], [box.x1, Math.round((box.y0 + box.y1) / 2)]);
     if (inner) towers.push([inner.x0 - 1, inner.y0 - 1], [inner.x1, inner.y0 - 1]);
     for (const [tx, ty] of towers) put('tower', tx, ty, Math.min(3, L - 1 + (wealth === 'rich' ? 1 : 0)), true);
-    if (L >= 3 && type !== 'motte') put('gatehouse', gate.x - 1, gate.y - 1, L >= 5 ? 2 : 1, true); else put('gate', gate.x, gate.y, 1, true);
+    if (house) put('gatehouse', gate.x - 1, gate.y - 1, L >= 5 ? 2 : 1, true); else put('gate', gate.x, gate.y, 1, true);
     if (innerGate) put('gate', innerGate.x, innerGate.y, 2, true);
     const ix0 = box.x0 + 2, ix1 = box.x1 - 3, iy0 = box.y0 + 2, iy1 = box.y1 - 3;
     if (L >= 4) scatter('greathall', 1, L >= 5 ? 2 : 1, ix0, ix1, iy0, iy1);

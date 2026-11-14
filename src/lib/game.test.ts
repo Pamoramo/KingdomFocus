@@ -101,3 +101,33 @@ test('compensation grants an hour at 3x once, within the server ceiling', () => 
   assert.equal(s.outbox.ledger.filter((l) => l.ref === id).length, 1);
   for (const [k, c] of Object.entries({ gold: 100, wood: 50, stone: 30, renown: 12 })) assert.ok(rec[0].reward[k as keyof Res] <= 60 * c);
 });
+
+test('battalions split in half, by company, by troop type or by hand, and merge back', () => {
+  const g = S.newGame(); g.res = { gold: 1e6, wood: 1e6, stone: 1e6, renown: 1e4 };
+  g.buildings.push({ id: 'b1', kind: 'barracks', x: 1, y: 1, level: 3, done: 0 } as never, { id: 'r1', kind: 'range', x: 5, y: 1, level: 3, done: 0 } as never, ...Array.from({ length: 20 }, (_, i) => ({ id: 'h' + i, kind: 'house', x: 10 + i * 3, y: 30, level: 3, done: 0 }) as never));
+  g.stage = 5; g.techs = ['longbow', 'polearms'] as never;
+  S.setState(g, false);
+  S.recruit('spearman', 48); S.recruit('archer', 24);
+  const bat = () => S.getState().battalions[0].id, size = (id: string) => S.batSize(S.getState(), id), total = () => S.armySize(S.getState());
+  assert.equal(total(), 72);
+  S.splitBattalion(bat(), { kind: 'half' }, 'patrol');
+  let s = S.getState(); assert.equal(s.battalions.length, 2);
+  const det = s.battalions[1];
+  assert.equal(det.orders, 'patrol'); assert.equal(det.color, s.battalions[0].color);
+  assert.equal(size(det.id), 36, 'even split'); assert.equal(total(), 72);
+  for (const cls of ['spearman', 'archer']) assert.equal(s.squads.filter((q) => q.bat === det.id && q.cls === cls).reduce((a, q) => a + q.count, 0), cls === 'spearman' ? 24 : 12, `keeps the mix of ${cls}`);
+  S.mergeBattalion(det.id, bat()); assert.equal(S.getState().battalions.length, 1); assert.equal(size(bat()), 72);
+  S.splitBattalion(bat(), { kind: 'class', cls: 'archer' }, 'garrison', 'Wall archers');
+  s = S.getState(); const arch = s.battalions.find((b) => b.name === 'Wall archers')!;
+  assert.ok(s.squads.filter((q) => q.bat === arch.id).every((q) => q.cls === 'archer')); assert.equal(size(arch.id), 24);
+  assert.equal(S.companiesOf(s, bat()).length, 1);
+  assert.match(String(S.splitBattalion(bat(), { kind: 'company', index: 0 })), /not all/);
+  const one = s.squads.find((q) => q.bat === bat())!;
+  S.splitBattalion(bat(), { kind: 'squads', ids: [one.id] }); assert.equal(S.getState().battalions.length, 3);
+  // a lone squad is halved
+  const lone = S.getState().battalions[2].id; S.splitBattalion(lone, { kind: 'half' });
+  s = S.getState(); assert.equal(s.battalions.length, 4); assert.equal(size(lone) + size(s.battalions[3].id), 12); assert.equal(total(), 72);
+  // long names stay within the database limit
+  S.editBattalion(bat(), { name: 'x'.repeat(60) }); S.splitBattalion(bat(), { kind: 'half' });
+  assert.ok(S.getState().battalions.every((b) => b.name.length <= 60));
+});

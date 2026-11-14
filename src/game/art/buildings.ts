@@ -235,6 +235,10 @@ export function scaffold(kind: BKind): HTMLCanvasElement {
 
 // ---------------- tile-based works: road, palisade, wall, courtyard, moat ----------------
 export const TILE_H = 30; // tile canvases are 16 wide, 30 tall, ground at bottom 16px
+/** Height (px above a wall tile's base) of the wall-walk, where defenders' feet go. Drawn just behind
+ *  the tile, the parapet then hides their legs and they show from the waist up between the merlons.
+ *  Matches drawTile: an east-west stone wall's top is at canvas y 16 (level 1) or 11 (level 2), and they stand ~5px below it; palisade posts top out at 12. */
+export const wallWalk = (kind: 'wall' | 'palisade', lvl: number) => (kind === 'palisade' ? 10 : lvl >= 2 ? 14 : 11);
 /** mask bits: 1=N 2=E 4=S 8=W (same-kind or connectable neighbours). */
 export function drawTile(kind: 'road' | 'palisade' | 'wall' | 'courtyard' | 'moat', lvl: number, mask: number, f = 0, bridge = false): HTMLCanvasElement {
   const [cv, c] = canvas(16, TILE_H), g = TILE_H - 16, R = rng(mask * 7 + lvl * 31 + f);

@@ -6,7 +6,7 @@ import { setUI } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res } from '../lib/rewards.ts';
 import { TACTICS, TERRAINS, tacticLock, sidePower, type Tactic, type Terrain } from '../lib/battle.ts';
-import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, type Rival, type Engines, type Stance } from '../lib/war.ts';
+import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, fieldSpoils, conquestSpoils, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, type Rival, type Engines, type Stance } from '../lib/war.ts';
 import * as WA from '../lib/warActions.ts';
 import { engineArt } from '../game/art/war.ts';
 import { hdify, HD } from '../game/art/hd.ts';
@@ -62,7 +62,8 @@ function RivalDetail({ r }: { r: Rival }) {
         <div>{BIOME_NAME[biomeOf(s.world, r)]} · {CASTLE_NAME[realmLayout(s.world, r).type]} · {realmLayout(s.world, r).wealth} realm</div>
         <button className="btn btn-gold !py-0.5 mt-1" onClick={() => setUI({ view: 'rival', visit: r.id, panel: mobile() ? null : 'world' })}>Visit {r.name}</button>
         {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}</div></div>
-    {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +5% gold from every study session.</p> : <>
+    {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +{Math.round(VASSAL_GOLD * 100)}% gold and +{Math.round(VASSAL_RENOWN * 100)}% renown from every study session (all vassals together give at most +{Math.round(VASSAL_GOLD_MAX * 100)}% gold).</p> : <>
+      {r.status === 'war' && <Spoils r={r} />}
       {!r.bandits && r.status !== 'war' && <Section title="Trade">
         <div className="flex flex-wrap gap-1 items-center text-sm">Give <input type="number" className="inp !w-20" min={10} value={amt} onChange={(e) => setAmt(+e.target.value)} />
           <select className="inp !w-auto" value={give} onChange={(e) => setGive(e.target.value as keyof Res)}>{(['gold', 'wood', 'stone'] as const).map((k) => <option key={k}>{k}</option>)}</select> for
@@ -89,6 +90,20 @@ function RivalDetail({ r }: { r: Rival }) {
       </Section>
     </>}
   </div>;
+}
+
+/** What a war against this realm pays, step by step, so the stakes are clear before you march. */
+function Spoils({ r, phase }: { r: Rival; phase?: 'march' | 'field' | 'siege' }) {
+  const s = useGame(), vassals = s.world.rivals.filter((x) => x.status === 'vassal').length;
+  const goldNow = Math.min(VASSAL_GOLD_MAX, vassals * VASSAL_GOLD), goldThen = Math.min(VASSAL_GOLD_MAX, (vassals + 1) * VASSAL_GOLD), pct = (x: number) => `${Math.round(x * 100)}%`;
+  const friends = r.friends.map((f) => s.world.rivals.find((x) => x.id === f)?.name).filter(Boolean);
+  const step = (done: boolean, title: string, body: React.ReactNode) => <div className={`flex gap-2 text-sm ${done ? 'opacity-50 line-through' : ''}`}><span className="w-4 shrink-0">{done ? '✓' : '•'}</span><div className="flex-1"><b>{title}</b> {body}</div></div>;
+  return <Section title="Spoils of war">
+    {step(phase === 'siege', 'Win the field battle:', <Cost cost={fieldSpoils(r)} plus />)}
+    {step(false, `Take ${r.name} (assault or surrender):`, <Cost cost={conquestSpoils(r)} plus />)}
+    {step(false, 'It becomes your vassal:', <>study gold +{pct(goldThen - goldNow)} (vassal tribute {pct(goldNow)} → {pct(goldThen)}, max {pct(VASSAL_GOLD_MAX)}) and +{pct(VASSAL_RENOWN)} renown on every session, for good.</>)}
+    <p className="text-xs opacity-75">Your engines and unused supplies come home with the army. Three conquests earn the title of Emperor.{friends.length ? ` ${friends.join(', ')} will think less of you (−20 relations).` : ''}</p>
+  </Section>;
 }
 
 function TacticPicker({ units, terrain, commander, onPick, label }: { units: ReturnType<typeof WA.unitsOf>; terrain: Terrain; commander: number; onPick: (t: Tactic) => void; label: string }) {
@@ -132,6 +147,7 @@ function CampaignTab() {
         <div className="flex gap-2"><button className="btn flex-1" onClick={WA.demandSurrender}>Demand surrender ({Math.round(surrenderChance(c) * 100)}%)</button><button className="btn btn-red flex-1" onClick={() => confirm('Lift the siege and bring everyone home?') && WA.liftSiege()}>Lift siege</button></div>
       </Section>
     </>}
+    <Spoils r={r} phase={c.phase} />
     <Section title="Campaign log">{[...c.log].reverse().slice(0, 12).map((l, i) => <div key={i} className="text-xs">{l}</div>)}</Section>
   </div>;
 }
@@ -154,6 +170,7 @@ function PlanCampaign() {
       {r && <p className="text-xs">Strength {fmt(sidePower(WA.unitsOf(s.squads.filter((q) => bats.includes(q.bat)))))} vs their field army ≈{fmt(r.power * 0.6)} and garrison ≈{fmt(r.garrison)}.</p>}
       <button className="btn btn-red w-full text-lg" disabled={!bats.length || !target} onClick={() => WA.startCampaign(target, bats, eng, sup)}>March to war</button>
     </Section>
+    {r && <Spoils r={r} />}
   </div>;
 }
 

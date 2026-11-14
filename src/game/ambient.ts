@@ -1,13 +1,15 @@
 import Phaser from 'phaser';
 import { type GameState, type Building, footprint, TILE, count } from '../lib/state.ts';
 import { sFrame, S } from './textures.ts';
+import { wallWalk } from './art/buildings.ts';
 import { UNIT_K, dutySoldiers } from './army.ts';
 import { awayBats } from '../lib/warActions.ts';
 import { caught as catchThief, theft } from '../lib/town.ts';
 import type { Chatter } from './chatter.ts';
 
 type Mode = 'walk' | 'patrol' | 'archer' | 'spar' | 'tilt';
-interface Duty { img: Phaser.GameObjects.Image; cls: string; rank: number; kind: 'patrol' | 'post'; x: number; y: number; tx: number; ty: number; wait: number; ph: number; leader?: Duty; chasing?: boolean; hx: number; hy: number }
+const RANGED = new Set(['archer', 'longbow', 'crossbow', 'royalarcher']);
+interface Duty { img: Phaser.GameObjects.Image; cls: string; rank: number; kind: 'patrol' | 'post'; x: number; y: number; tx: number; ty: number; wait: number; ph: number; leader?: Duty; chasing?: boolean; onWall?: boolean; hx: number; hy: number }
 interface Thief { img: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; state: 'run' | 'caught' | 'gone'; t: number; warned: boolean }
 interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number] }
 
@@ -66,10 +68,16 @@ export class Ambient {
     // guard posts: beside doors, gates and towers first, then homes and shops
     const pri = (k: string) => (['gatehouse', 'gate', 'keep', 'tower', 'watchtower', 'guardhouse', 'market', 'camp'].includes(k) ? 0 : 1);
     this.posts = [...B].sort((a, b) => pri(a.kind) - pri(b.kind)).flatMap((b) => { const [w, h] = footprint(b.kind), x = (b.x + w / 2) * TILE, y = (b.y + h) * TILE + 5; return [{ x: x - 9, y }, { x: x + 9, y }]; });
-    let post = 0;
+    // wall-walk posts for bowmen: east-west runs of wall or palisade (they face out over the parapet), evenly spread
+    const wallAt = new Set(s.buildings.filter((b) => b.kind === 'wall' || b.kind === 'palisade').map((b) => `${b.x},${b.y}`));
+    const runs = s.buildings.filter((b) => (b.kind === 'wall' || b.kind === 'palisade') && !wallAt.has(`${b.x},${b.y - 1}`) && !wallAt.has(`${b.x},${b.y + 1}`)).sort((a, b) => a.y - b.y || a.x - b.x);
+    const wallPosts = runs.filter((_, i) => i % 2 === 0).map((b) => ({ x: (b.x + 0.5) * TILE, y: (b.y + 1) * TILE - wallWalk(b.kind as 'wall' | 'palisade', b.level) }));
+    const order = [...wallPosts.keys()].sort((a, b) => ((a * 0.618034) % 1) - ((b * 0.618034) % 1)), spread = (k: number, _n: number) => wallPosts[order[k]];
+    let post = 0, onWall = 0;
     for (const b of bats) {
       const men = dutySoldiers(s, b);
-      if (b.orders === 'garrison') for (const m of men) { const p = this.posts[post++ % Math.max(1, this.posts.length)] ?? { x: b.x, y: b.y }; this.addDuty(m.cls, m.rank, 'post', p.x + (post > this.posts.length ? 4 : 0), p.y).img.setFlipX(post % 2 === 0); }
+      if (b.orders === 'garrison') for (const m of men) {
+        if (RANGED.has(m.cls) && onWall < wallPosts.length) { const p = spread(onWall++, wallPosts.length); const d = this.addDuty(m.cls, m.rank, 'post', p.x, p.y); d.onWall = true; d.img.setFlipX(onWall % 2 === 0); continue; } const p = this.posts[post++ % Math.max(1, this.posts.length)] ?? { x: b.x, y: b.y }; this.addDuty(m.cls, m.rank, 'post', p.x + (post > this.posts.length ? 4 : 0), p.y).img.setFlipX(post % 2 === 0); }
       else for (let i = 0; i < men.length; i += 2) {
         const start = this.waypoints[Math.floor(Math.random() * Math.max(1, this.waypoints.length))] ?? { x: b.x, y: b.y };
         const lead = this.addDuty(men[i].cls, men[i].rank, 'patrol', start.x, start.y);
@@ -102,7 +110,7 @@ export class Ambient {
       const dx = t.tx - t.x, dy = t.ty - t.y, d = Math.hypot(dx, dy), sp = (dt / 1000) * 24;
       if (d > 1) { t.x += (dx / d) * Math.min(sp, d); t.y += (dy / d) * Math.min(sp, d); t.img.setFlipX(dx < 0); }
       t.img.setFrame(sFrame('villager', 0, tick % 4));
-      for (const g of this.duty) if (!g.chasing && Math.hypot(g.x - t.x, g.y - t.y) < 110) { g.chasing = true; if (!t.warned) { t.warned = true; this.chatter.say(this.dutyTarget(g), 'Stop, thief!', 0, 300); } }
+      for (const g of this.duty) if (!g.chasing && !g.onWall && Math.hypot(g.x - t.x, g.y - t.y) < 110) { g.chasing = true; if (!t.warned) { t.warned = true; this.chatter.say(this.dutyTarget(g), 'Stop, thief!', 0, 300); } }
       const catcher = this.duty.find((g) => g.chasing && Math.hypot(g.x - t.x, g.y - t.y) < 8);
       if (catcher) { t.state = 'caught'; t.t = 0; this.chatter.say(this.thiefTarget(), 'I yield! I yield!', 0, 640); catchThief(); }
       else if (d < 3 || t.t > 16000) { t.state = 'gone'; t.t = 0; theft(); }

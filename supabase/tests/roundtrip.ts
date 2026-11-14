@@ -16,6 +16,7 @@ Date.now = () => t0 + 29 * MIN; S.studyCheckIn();
 Date.now = () => t0 + 45 * MIN; S.studyEnd();
 Date.now = real;
 S.build('hut', 30, 30); S.build('hut', 33, 30); S.recruit('peasant', 6);
+S.splitBattalion(S.getState().battalions[0].id, { kind: 'half' }, 'patrol'); // a lone squad of 6 is halved into a new battalion
 S.addHabit({ name: 'Read', freq: 'daily', target: 2, unit: 'chapters', weight: 2, requireNote: false });
 S.habitProgress(S.getState().habits[0].id, 2);
 S.grantCompensation(S.stableUuid('lan-loading-2026-11:11111111-1111-1111-1111-111111111111'), 60, 3, 'History', 'roundtrip'); // passes the server's reward ceiling
@@ -32,6 +33,7 @@ assert.ok(outboxEmpty(cleared));
 const merged = adoptSnapshot(cleared, snap);
 assert.equal(merged.buildings.length, local.buildings.length);
 assert.equal(S.armySize(merged), 6);
+assert.equal(merged.battalions.length, 2); assert.deepEqual(merged.squads.map((q) => q.count).sort(), [3, 3]); assert.equal(merged.battalions.find((b) => b.orders === 'patrol')?.name, '1st Royal Battalion (detachment)');
 assert.deepEqual(merged.habits[0].done, local.habits[0].done);
 const timed = merged.sessions.find((r) => r.verifiedSec === 45 * 60)!;
 assert.equal(merged.sessions.length, 2);

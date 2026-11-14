@@ -2,7 +2,7 @@
 import { neglect, type GameState, type Squad, _internal, studyHooks, emit, getState, setState, count, maxLevel, has, armySize, canAfford, TILE, CAMP_X, CAMP_Y } from './state.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
-import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr } from './war.ts';
+import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
 import { RANKS } from './economy.ts';
 
@@ -233,8 +233,8 @@ export const fieldBattle = (tactic: Tactic) => update((s) => {
   const w = { ...o.world, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.max(10, Math.round(x.power - killed * 1.4)), beaten: res.winner === 'a' ? 1 : x.beaten } : x)) };
   if (res.winner === 'a') o = W(o, { ...w, campaign: { ...c, phase: 'siege', log: [...c.log, `Victory in the field! The siege of ${r.name} begins.`] } });
   else o = goHome(W(o, { ...w, campaign: null, engines: addEngines(w.engines, c.engines), supplies: w.supplies + c.supplies }), r, c.battalions, `Your host retreating from ${r.name}`);
-  o = ledger(o, 'loot', uid(), res.winner === 'a' ? { ...ZERO, renown: 10 * r.level } : ZERO);
-  o = report(o, `Battle before ${r.name}`, res.winner === 'a', res, a, foe);
+  o = ledger(o, 'loot', uid(), res.winner === 'a' ? fieldSpoils(r) : ZERO);
+  o = report(o, `Battle before ${r.name}`, res.winner === 'a', res, a, foe, res.winner === 'a' ? fieldSpoils(r) : undefined);
   play(`Battle before ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color);
   return event(o, 'war', res.winner === 'a' ? `Defeated ${r.name}'s army in the field.` : `Defeated in the field by ${r.name}; the host retreats.`);
 });
@@ -249,9 +249,13 @@ export const liftSiege = () => update((s) => {
   return event(goHome(W(s, { ...s.world, campaign: null, engines: addEngines(s.world.engines, c.engines), supplies: s.world.supplies + c.supplies }), r, c.battalions, `Your host returning from ${r.name}`), 'war', `Lifted the siege of ${r.name}.`);
 });
 function conquer(s: GameState, r: Rival): GameState {
-  const loot: Res = { gold: 300 * r.level ** 2, wood: 0, stone: 80 * r.level ** 2, renown: 60 * r.level };
+  const loot = conquestSpoils(r);
   const c = s.world.campaign!;
   let o = ledger(s, 'loot', uid(), loot);
+  // the spoils go on the latest report of this siege (the assault), or a new surrender report
+  const last = o.world.reports?.[0];
+  if (last && Date.now() - last.t < 5000 && last.title.includes(r.name)) o = W(o, { ...o.world, reports: [{ ...last, loot }, ...o.world.reports.slice(1)] });
+  else o = W(o, { ...o.world, reports: [{ id: uid(), t: Date.now(), title: `${r.name} surrenders`, win: true, lines: [`${r.ruler} opens the gates and swears fealty.`], you: 0, foe: 0, lostYou: 0, lostFoe: 0, loot }, ...(o.world.reports ?? [])].slice(0, 25) });
   const w = { ...o.world, campaign: null, engines: addEngines(o.world.engines, c.engines), supplies: o.world.supplies + c.supplies, conquests: o.world.conquests + 1,
     rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, status: 'vassal' as const, power: Math.round(x.power * 0.3), garrison: 0, relation: 20 } : r.friends.includes(x.id) ? { ...x, relation: Math.max(-100, x.relation - 20) } : x)) };
   o = goHome(W(o, w), r, c.battalions, `Your victorious host returning from ${r.name}`);
@@ -306,9 +310,9 @@ export const defend = (tactic: Tactic) => update((s) => {
   const won = res.winner === 'b';
   const flipped: BattleResult = { ...res, winner: won ? 'a' : 'b', lossA: res.lossB, lossB: res.lossA, startA: res.startB, startB: res.startA, moraleA: res.moraleB, moraleB: res.moraleA };
   play(`Defence of your castle`, a, foe, flipped, 'Your garrison', r.name, 0xb3242a, r.color);
-  o = report(o, `Defence against ${r.name}`, won, flipped, a, foe, won ? { gold: 150 * r.level, renown: 30 * r.level } : undefined);
+  o = report(o, `Defence against ${r.name}`, won, flipped, a, foe, won ? defenceSpoils(r) : undefined);
   let w = { ...o.world, threat: null, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.round(x.power * (won ? 0.6 : 0.9)), relation: Math.min(100, x.relation + 10), beaten: won ? 1 : x.beaten } : x)) };
-  if (won) { o = ledger(W(o, w), 'loot', uid(), { ...ZERO, gold: 150 * r.level, renown: 30 * r.level }); emit({ kind: 'achieve', text: `${r.name}'s host is broken before your walls!` }); }
+  if (won) { o = ledger(W(o, w), 'loot', uid(), defenceSpoils(r)); emit({ kind: 'achieve', text: `${r.name}'s host is broken before your walls!` }); }
   else {
     const take = { gold: Math.min(5000, Math.floor(o.res.gold * 0.15)), wood: Math.floor(o.res.wood * 0.1), stone: Math.floor(o.res.stone * 0.1) };
     o = spend(W(o, w), take); emit({ kind: 'war', text: `${r.name} breaks in and carries off ${take.gold} gold before withdrawing. Your buildings stand.` });

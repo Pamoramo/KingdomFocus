@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useGame, useUI, hex, fmt, mobile } from './hooks.ts';
 import { TROOPS, TCLASSES, RANKS, OFFICERS, SQUADS_PER_COMPANY, COLORS, HERALD_COLORS, EMBLEMS, HERALD_EMBLEMS, PRESTIGE_EMBLEMS, type TClass, type Formation } from '../lib/economy.ts';
-import { townOrder, DUTY_CAP, type Orders, recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
+import { townOrder, DUTY_CAP, type Orders, recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, splitBattalion, mergeBattalion, musterOf, companiesOf, awayFromHome, type SplitHow, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
 import { nameFor } from '../lib/names.ts';
 import { hash } from '../lib/names.ts';
 import { setUI, focusOn } from '../game/ui.ts';
@@ -90,9 +90,35 @@ function composition(s: GameState, id: string) {
   return [...m].sort((a, b) => TCLASSES.indexOf(a[0]) - TCLASSES.indexOf(b[0]));
 }
 
+/** Plural of a troop name: Spearman → Spearmen, Man-at-Arms → Men-at-Arms; Militia, Shield Infantry, Light Cavalry stay as they are. */
+const plural = (n: string) => /^Man-at/.test(n) ? n.replace('Man', 'Men') : /man$/.test(n) ? n.replace(/man$/, 'men') : /(Militia|Infantry|Cavalry)$/.test(n) ? n : `${n}s`;
+const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+const ORDER_NAME: Record<Orders, string> = { formation: 'Hold formation', patrol: 'Patrol town', garrison: 'Garrison' };
+/** Detach part of a battalion as its own battalion (with its own orders), or fold it into another. */
+function SplitMerge({ bat, picked, clear }: { bat: Battalion; picked: string[]; clear: () => void }) {
+  const s = useGame(), [orders, setOrders] = useState<Orders>('patrol'), [into, setInto] = useState('');
+  const muster = musterOf(s, bat.id), companies = companiesOf(s, bat.id), classes = [...new Set(muster.map((q) => q.cls))], away = awayFromHome(s);
+  const others = s.battalions.filter((b) => b.id !== bat.id && !away.has(b.id)), men = (ids: string[]) => muster.filter((q) => ids.includes(q.id)).reduce((a, q) => a + q.count, 0);
+  const n = batSize(s, bat.id), go = (how: SplitHow) => { splitBattalion(bat.id, how, orders); clear(); };
+  if (away.has(bat.id)) return <Section title="Split & merge"><p className="text-sm">This battalion is away from the realm. Split or merge it once it returns.</p></Section>;
+  return <Section title="Split & merge">
+    <p className="text-xs opacity-80">Detach part of this battalion as a new battalion under its own commander: for example leave half at home to patrol while the rest marches to war.</p>
+    <div className="text-sm">Detachment's orders:</div>
+    <div className="grid grid-cols-3 gap-1">{(Object.keys(ORDER_NAME) as Orders[]).map((k) => <button key={k} className={`btn text-xs !px-1 ${orders === k ? 'btn-gold' : ''}`} onClick={() => setOrders(k)}>{ORDER_NAME[k]}</button>)}</div>
+    <div className="flex flex-wrap gap-1">
+      <button className="btn text-sm" disabled={n < 2} onClick={() => go({ kind: 'half' })}>Split in half (≈{Math.floor(n / 2)})</button>
+      {companies.length > 1 && companies.map((c, i) => <button key={i} className="btn text-sm" onClick={() => go({ kind: 'company', index: i })}>Detach {ROMAN[i] ?? i + 1} Company ({men(c.map((q) => q.id))})</button>)}
+      {classes.length > 1 && classes.map((c) => <button key={c} className="btn text-sm" onClick={() => go({ kind: 'class', cls: c })}>Detach {plural(TROOPS[c].name)} ({muster.filter((q) => q.cls === c).reduce((a, q) => a + q.count, 0)})</button>)}
+      <button className="btn btn-gold text-sm" disabled={!picked.length || picked.length === muster.length} onClick={() => go({ kind: 'squads', ids: picked })}>{picked.length ? `Detach ${picked.length} ticked squad${picked.length > 1 ? 's' : ''} (${men(picked)})` : 'Tick squads below to detach them'}</button>
+    </div>
+    {others.length > 0 && <div className="flex gap-2 items-center text-sm"><select className="inp" value={into} onChange={(e) => setInto(e.target.value)}><option value="">Merge this battalion into…</option>{others.map((b) => <option key={b.id} value={b.id}>{b.name} ({batSize(s, b.id)})</option>)}</select>
+      <button className="btn" disabled={!into} onClick={() => { if (confirm(`Merge ${bat.name} into ${s.battalions.find((b) => b.id === into)?.name}?`)) { mergeBattalion(bat.id, into); setUI({ selBat: into }); } }}>Merge</button></div>}
+  </Section>;
+}
+
 function BattalionDetail({ bat }: { bat: Battalion }) {
   const s = useGame(), n = batSize(s, bat.id), officer = OFFICERS[bat.commander.rank], next = OFFICERS[bat.commander.rank + 1];
-  const squads = s.squads.filter((q) => q.bat === bat.id).sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank);
+  const squads = musterOf(s, bat.id), [picked, setPicked] = useState<string[]>([]), live = picked.filter((id) => squads.some((q) => q.id === id));
   const colors = [...COLORS, ...(has(s, 'heraldry') ? HERALD_COLORS : []), ...(unlocked(s, 'color:gold') ? [0xecc94b] : [])];
   const emblems = [...EMBLEMS, ...(has(s, 'heraldry') ? HERALD_EMBLEMS : []), ...Object.entries(PRESTIGE_EMBLEMS).filter(([, a]) => s.achievements.includes(a)).map(([e]) => e)];
   const armies = [...new Set([...s.battalions.map((b) => b.army), 'Royal Army'])];
@@ -120,9 +146,9 @@ function BattalionDetail({ bat }: { bat: Battalion }) {
       </div>
     </Section>
     <Section title="Orders">
-      <div className="grid grid-cols-3 gap-1">{([['formation', 'Hold formation', 'Stand in formation where you send them.'], ['patrol', 'Patrol town', `Up to ${DUTY_CAP} soldiers walk the streets in pairs.`], ['garrison', 'Garrison', `Up to ${DUTY_CAP} soldiers guard doors, gates and towers.`]] as [Orders, string, string][]).map(([k, n, d]) =>
+      <div className="grid grid-cols-3 gap-1">{([['formation', 'Hold formation', 'Stand in formation where you send them.'], ['patrol', 'Patrol town', `Up to ${DUTY_CAP} soldiers walk the streets in pairs.`], ['garrison', 'Garrison', `Up to ${DUTY_CAP} soldiers guard doors, gates and towers; bowmen man the walls.`]] as [Orders, string, string][]).map(([k, n, d]) =>
         <button key={k} title={d} className={`btn text-sm !px-1 ${(bat.orders ?? 'formation') === k ? 'btn-gold' : ''}`} onClick={() => editBattalion(bat.id, { orders: k })}>{n}</button>)}</div>
-      <p className="text-xs opacity-80">{bat.orders === 'patrol' ? `Patrolling: ${Math.min(DUTY_CAP, n)} soldiers roam the town in pairs and chase down thieves.` : bat.orders === 'garrison' ? `On guard: ${Math.min(DUTY_CAP, n)} soldiers stand watch at doors, gates and towers.` : 'Soldiers on patrol or garrison duty keep thieves away.'}{bat.orders && bat.orders !== 'formation' && n > DUTY_CAP ? ` The other ${n - DUTY_CAP} stay in formation.` : ''}</p>
+      <p className="text-xs opacity-80">{bat.orders === 'patrol' ? `Patrolling: ${Math.min(DUTY_CAP, n)} soldiers roam the town in pairs and chase down thieves.` : bat.orders === 'garrison' ? `On guard: ${Math.min(DUTY_CAP, n)} soldiers stand watch at doors, gates and towers. Archers and crossbowmen take the wall-walks.` : 'Soldiers on patrol or garrison duty keep thieves away.'}{bat.orders && bat.orders !== 'formation' && n > DUTY_CAP ? ` The other ${n - DUTY_CAP} stay in formation.` : ''}</p>
     </Section>
     <Section title="Formation">
       <div className="flex gap-1">{(['line', 'block', 'column'] as Formation[]).map((f) => <button key={f} className={`btn flex-1 capitalize ${bat.formation === f ? 'btn-gold' : ''}`} onClick={() => editBattalion(bat.id, { formation: f })}>{f}</button>)}</div>
@@ -136,10 +162,11 @@ function BattalionDetail({ bat }: { bat: Battalion }) {
         <span className="flex gap-1 flex-wrap justify-end">{ranks.map((x, r) => x ? <span key={r} className="inline-flex items-center gap-0.5" title={RANKS[r].name}><Insignia kind="soldier" rank={r} scale={1.5} />{x}</span> : null)}</span></div>)}
       {!squads.length && <p className="text-sm italic">Empty. Recruit soldiers into this battalion.</p>}
     </Section>
-    {Array.from({ length: Math.ceil(squads.length / SQUADS_PER_COMPANY) }, (_, ci) => <Section key={ci} title={`${['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][ci] ?? ci + 1} Company`}>
+    {squads.length > 0 && <SplitMerge bat={bat} picked={live} clear={() => setPicked([])} />}
+    {Array.from({ length: Math.ceil(squads.length / SQUADS_PER_COMPANY) }, (_, ci) => <Section key={ci} title={`${ROMAN[ci] ?? ci + 1} Company`}>
       {squads.slice(ci * SQUADS_PER_COMPANY, (ci + 1) * SQUADS_PER_COMPANY).map((q, j) => { const nr = RANKS[q.rank + 1], why = canPromote(s, q);
         return <div key={q.id} className="text-sm border-b border-black/10 pb-1 space-y-0.5">
-          <div className="flex items-center gap-2"><Soldier cls={q.cls} rank={q.rank} scale={2} /><span className="flex-1"><b>Squad {ci * SQUADS_PER_COMPANY + j + 1}</b>: {q.count} {TROOPS[q.cls].name} · <Insignia kind="soldier" rank={q.rank} scale={1.5} /> {RANKS[q.rank].name}</span></div>
+          <div className="flex items-center gap-2"><input type="checkbox" aria-label="select squad to detach" checked={live.includes(q.id)} onChange={(e) => setPicked(e.target.checked ? [...live, q.id] : live.filter((x) => x !== q.id))} /><Soldier cls={q.cls} rank={q.rank} scale={2} /><span className="flex-1"><b>Squad {ci * SQUADS_PER_COMPANY + j + 1}</b>: {q.count} {TROOPS[q.cls].name} · <Insignia kind="soldier" rank={q.rank} scale={1.5} /> {RANKS[q.rank].name}</span></div>
           {nr && <div className="flex items-center gap-2"><span className="text-xs w-24">XP {Math.floor(q.xp)}/{nr.xp}</span><div className="flex-1"><Bar value={q.xp} max={nr.xp} color="bg-moss" /></div></div>}
           <div className="flex gap-1 flex-wrap">
             <button className="btn !py-0 text-xs" disabled={!canAfford(s.res, { gold: q.count * 2 })} onClick={() => drill(q.id)}>Drill ({q.count * 2}g)</button>

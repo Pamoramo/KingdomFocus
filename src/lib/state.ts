@@ -1,9 +1,9 @@
 import { type Res, ZERO, DEFAULT_RATES, MANUAL_FACTOR, MANUAL_MAX_PER_DAY_MIN, add, sub, maxRes, canAfford, full, scale, studyReward, isZero } from './rewards.ts';
 import { type Session, type SessionCfg, DEFAULT_CFG, startSession, tick, checkIn, pause, takeBreak, endSession, uid, MIN } from './study.ts';
 import { type Habit, type Freq, progress, streak, habitReward, MILESTONES, dayKey, periodKey } from './habits.ts';
-import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
+import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, SQUADS_PER_COMPANY, TCLASSES, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
 import { nameFor } from './names.ts';
-import { type WorldState, type Engines, initWorld } from './war.ts';
+import { type WorldState, type Engines, initWorld, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN } from './war.ts';
 import type { Unit, BattleResult } from './battle.ts';
 
 // ---------------- types ----------------
@@ -135,7 +135,7 @@ export function townOrder(s: GameState) {
 export const studyMult = (s: GameState): Res => {
   const e = effects(s), w = s.world, vassals = w ? w.rivals.filter((r) => r.status === 'vassal').length : 0;
   const safe = townOrder(s).ratio >= 1 && townOrder(s).needed > 2 ? 0.03 : 0;
-  return { gold: Math.max(0.5, 1 + e.gold + safe + Math.min(0.3, vassals * 0.05) - (w?.threat ? 0.25 : 0)), wood: 1 + e.wood, stone: 1 + e.stone, renown: 1 + e.renown + vassals * 0.02 };
+  return { gold: Math.max(0.5, 1 + e.gold + safe + Math.min(VASSAL_GOLD_MAX, vassals * VASSAL_GOLD) - (w?.threat ? 0.25 : 0)), wood: 1 + e.wood, stone: 1 + e.stone, renown: 1 + e.renown + vassals * VASSAL_RENOWN };
 };
 export function costOf(s: GameState, kind: BKind, lvlIdx: number): Res {
   const d = BUILDINGS[kind], c = full(d.levels[lvlIdx].cost);
@@ -322,7 +322,60 @@ export const disbandBattalion = (id: string) => update((s) => {
   for (const q of s.squads) if (q.bat === id) o = mark(o, 'squads', q.id);
   return kill(o, 'battalions', id);
 });
-export const transferSquad = (sid: string, bat: string) => update((s) => mark({ ...s, squads: s.squads.map((q) => (q.id === sid ? { ...q, bat } : q)) }, 'squads', sid));
+/** Battalions away from the realm (on campaign, lent to an ally, or on the road). */
+export const awayFromHome = (s: GameState) => new Set([...(s.world?.campaign?.battalions ?? []), ...(s.world?.loans ?? []).map((l) => l.bat), ...(s.world?.journeys ?? []).flatMap((j) => j.bats ?? [])]);
+/** A battalion's squads in muster order (by troop type, then rank); every SQUADS_PER_COMPANY of them form a company. */
+export const musterOf = (s: GameState, batId: string) => s.squads.filter((q) => q.bat === batId).sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank);
+export const companiesOf = (s: GameState, batId: string) => { const m = musterOf(s, batId); return Array.from({ length: Math.ceil(m.length / SQUADS_PER_COMPANY) }, (_, i) => m.slice(i * SQUADS_PER_COMPANY, (i + 1) * SQUADS_PER_COMPANY)); };
+export type SplitHow = { kind: 'half' } | { kind: 'company'; index: number } | { kind: 'class'; cls: TClass } | { kind: 'squads'; ids: string[] };
+/** Squad ids that go to the detachment; for an even split a lone squad is halved instead (returns the men to move). */
+function detachment(s: GameState, batId: string, how: SplitHow): { ids: string[]; halve?: Squad } {
+  const m = musterOf(s, batId);
+  if (how.kind === 'company') return { ids: (companiesOf(s, batId)[how.index] ?? []).map((q) => q.id) };
+  if (how.kind === 'class') return { ids: m.filter((q) => q.cls === how.cls).map((q) => q.id) };
+  if (how.kind === 'squads') return { ids: m.filter((q) => how.ids.includes(q.id)).map((q) => q.id) };
+  if (m.length === 1) return { ids: [], halve: m[0] };
+  // even split that keeps the mix of troop types: each squad goes to whichever side has fewer of its type, then fewer men
+  const side = [{ ids: [] as string[], n: 0, by: new Map<TClass, number>() }, { ids: [] as string[], n: 0, by: new Map<TClass, number>() }];
+  for (const q of [...m].sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.count - a.count)) {
+    const [a, b] = side, ka = a.by.get(q.cls) ?? 0, kb = b.by.get(q.cls) ?? 0, t = ka !== kb ? (ka < kb ? a : b) : a.n <= b.n ? a : b;
+    t.ids.push(q.id); t.n += q.count; t.by.set(q.cls, (t.by.get(q.cls) ?? 0) + q.count);
+  }
+  return { ids: side[1].ids };
+}
+/** Splits off part of a battalion as a new one (same army and colours) with its own orders: e.g. half stays to patrol while half marches. */
+export const splitBattalion = (id: string, how: SplitHow, orders: Orders = 'formation', name?: string) => update((s) => {
+  const src = s.battalions.find((b) => b.id === id); if (!src) return 'Unknown battalion';
+  if (awayFromHome(s).has(id)) return 'This battalion is away from the realm';
+  if (s.battalions.length >= 40) return 'Too many battalions';
+  const { ids, halve } = detachment(s, id, how), all = musterOf(s, id);
+  if (halve && halve.count < 2) return 'Too few soldiers to split';
+  if (!halve && (!ids.length || ids.length === all.length)) return 'Choose some, but not all, of the squads';
+  const fresh = newBat(s, (name?.trim() || `${src.name.slice(0, 46)} (detachment)`).slice(0, 60));
+  const b: Battalion = { ...fresh, army: src.army, color: src.color, emblem: src.emblem, formation: src.formation, orders, ...clampPos(src.x + 14 * TILE, src.y) }; // forms up beside its parent, clear of its ranks
+  let o: GameState = { ...s, battalions: [...s.battalions, b] };
+  if (halve) {
+    const nq: Squad = { ...halve, id: uid(), count: Math.floor(halve.count / 2), bat: b.id };
+    o = mark(mark({ ...o, squads: [...o.squads.map((q) => (q.id === halve.id ? { ...q, count: q.count - nq.count } : q)), nq] }, 'squads', halve.id), 'squads', nq.id);
+  } else { o = { ...o, squads: o.squads.map((q) => (ids.includes(q.id) ? { ...q, bat: b.id } : q)) }; for (const q of ids) o = mark(o, 'squads', q); }
+  const n = batSize(o, b.id);
+  emit({ kind: 'info', text: `${n} soldiers detached as ${b.name}` });
+  return mark(event(o, 'command', `${n} soldiers of ${src.name} were detached as ${b.name} under ${b.commander.name}.`, n), 'battalions', b.id);
+});
+/** Folds one battalion into another; the emptied battalion is stood down. */
+export const mergeBattalion = (from: string, into: string) => update((s) => {
+  if (from === into) return;
+  const a = s.battalions.find((b) => b.id === from), b = s.battalions.find((x) => x.id === into); if (!a || !b) return 'Unknown battalion';
+  const away = awayFromHome(s); if (away.has(from) || away.has(into)) return 'Both battalions must be at home';
+  let o: GameState = { ...s, battalions: s.battalions.filter((x) => x.id !== from), squads: s.squads.map((q) => (q.bat === from ? { ...q, bat: into } : q)) };
+  for (const q of s.squads) if (q.bat === from) o = mark(o, 'squads', q.id);
+  return kill(event(o, 'command', `${a.name} joined ${b.name}.`), 'battalions', from);
+});
+export const transferSquad = (sid: string, bat: string) => update((s) => {
+  const q = s.squads.find((x) => x.id === sid), away = awayFromHome(s); if (!q) return;
+  if (away.has(q.bat) || away.has(bat)) return 'Squads can only move between battalions at home';
+  return mark({ ...s, squads: s.squads.map((x) => (x.id === sid ? { ...x, bat } : x)) }, 'squads', sid);
+});
 const clampPos = (x: number, y: number) => ({ x: Math.max(2 * TILE, Math.min((MAP_W - 2) * TILE, x)), y: Math.max(3 * TILE, Math.min((MAP_H - 1) * TILE, y)) });
 export const marchTo = (id: string, x: number, y: number) => editBattalion(id, clampPos(x, y));
 export const marchArmy = (army: string, x: number, y: number) => update((s) => {

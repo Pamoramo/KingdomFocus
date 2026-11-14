@@ -8,6 +8,7 @@ import { biomeTile, plant, rubble, pavise, campfire, mineEntrance, barricade, wa
 import { engineArt, siegeCamp } from './art/war.ts';
 import { hdify, HD } from './art/hd.ts';
 import { withoutOutline } from './art/px.ts';
+import { wallWalk } from './art/buildings.ts';
 import { bTex, tileTex, waterTex, sFrame, bannerTex, S } from './textures.ts';
 import { Chatter } from './chatter.ts';
 import { WeatherFx, weatherAt, type Weather } from './weather.ts';
@@ -35,7 +36,7 @@ function biomeWeather(b: Biome, w: Weather): Weather {
   return w === 'snow' && b === 'grassland' ? 'snow' : w;
 }
 
-interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; tx?: number; ty?: number; wait?: number; ph: number }
+interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; onWall?: boolean; tx?: number; ty?: number; wait?: number; ph: number }
 
 /** A rival kingdom up close: its biome, castle and town, and your siege camp when you march on it. */
 export class RivalScene extends Phaser.Scene {
@@ -149,7 +150,8 @@ export class RivalScene extends Phaser.Scene {
     // sentries on the gate wall
     const south = this.L.walls.filter((t) => t.y === this.L.box.y1 && Math.abs(t.x - this.L.gate.x) > 2).sort((a, b) => a.x - b.x);
     const n2 = Math.min(6, Math.max(2, Math.floor(south.length / 3)));
-    for (let i = 0; i < n2 && south.length; i++) { const t = south[Math.floor((i + 0.5) * south.length / n2)]; this.fig(this.r.level >= 3 ? 'crossbow' : 'archer', Math.min(3, Math.max(0, this.r.level - 1)), t.x * TILE + 8, (t.y + 1) * TILE - 9, 'foe', i % 2 === 0); }
+    const walk = wallWalk(this.L.wallKind, this.L.wallLevel);
+    for (let i = 0; i < n2 && south.length; i++) { const t = south[Math.floor((i + 0.5) * south.length / n2)]; const f = this.fig(this.r.level >= 3 ? 'crossbow' : 'archer', Math.min(3, Math.max(0, this.r.level - 1)), t.x * TILE + 8, (t.y + 1) * TILE - walk, 'foe', i % 2 === 0); f.onWall = true; } // depth follows f.y, just behind the wall, so the parapet hides their legs
   }
 
   /** The siege laid out as it was historically done (front to back):

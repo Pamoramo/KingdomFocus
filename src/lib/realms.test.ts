@@ -25,3 +25,17 @@ test('layouts are sound: no overlaps, nothing on water, the approach is clear', 
     for (const b of L.buildings) if (b.y > L.box.y1 + 1) assert.ok(Math.abs(b.x + BUILDINGS[b.kind].w / 2 - (L.gate.x + 1)) > 10, `${r.name}: ${b.kind} blocks the approach`);
   }
 });
+
+test('curtain walls run right up to both sides of every gate', () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const w = initWorld(seed * 7919);
+    for (const r0 of w.rivals) for (const level of [1, 2, 3, 4, 5]) {
+      const r = { ...r0, level }, L = realmLayout(w, r), has = (x: number, y: number) => L.walls.some((t) => t.x === x && t.y === y);
+      const outer = L.buildings.find((b) => (b.kind === 'gatehouse' && b.y === L.gate.y - 1) || (b.kind === 'gate' && b.y === L.gate.y))!;
+      assert.ok(outer, 'a gate is built');
+      const wdt = outer.kind === 'gatehouse' ? 3 : 2;
+      assert.ok(has(outer.x - 1, L.gate.y) && has(outer.x + wdt, L.gate.y), `${r.name} L${level} ${L.type}: wall gap beside the gate`);
+      assert.ok(!L.walls.some((t) => t.y === L.gate.y && t.x >= outer.x && t.x < outer.x + wdt), 'no wall through the gate');
+    }
+  }
+});

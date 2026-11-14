@@ -190,3 +190,15 @@ export function castleFort(counts: { wall: number; palisade: number; tower: numb
   return Math.min(0.85, score / 2000);
 }
 export const yourPower = (units: Unit[]) => sidePower(units);
+
+// ---------------- spoils of war (one source of truth for what victories pay and what the UI promises) ----------------
+const lv = (r: Pick<Rival, 'level'>) => Math.max(1, r.level);
+/** Winning the field battle before a siege. */
+export const fieldSpoils = (r: Pick<Rival, 'level'>): Res => ({ gold: 0, wood: 0, stone: 0, renown: 10 * lv(r) });
+/** Taking the castle by assault or surrender: its treasury and quarried stone. */
+export const conquestSpoils = (r: Pick<Rival, 'level'>): Res => ({ gold: 300 * lv(r) ** 2, wood: 0, stone: 80 * lv(r) ** 2, renown: 60 * lv(r) });
+/** Breaking an enemy host that attacks your castle. */
+export const defenceSpoils = (r: Pick<Rival, 'level'>): Res => ({ gold: 150 * lv(r), wood: 0, stone: 0, renown: 30 * lv(r) });
+/** Lasting tribute from each vassal, applied to every study session. */
+export const VASSAL_GOLD = 0.05, VASSAL_GOLD_MAX = 0.3, VASSAL_RENOWN = 0.02;
+
