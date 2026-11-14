@@ -4,11 +4,11 @@ import { realmLayout, RW, RH, type RealmLayout, type Biome } from '../lib/realms
 import { armyOf, ENGINE_IDS, type Rival } from '../lib/war.ts';
 import { BUILDINGS, CONNECTS, type BKind } from '../lib/economy.ts';
 import { campaignSquads } from '../lib/warActions.ts';
-import { biomeTile, plant, rubble, BIOME_PLANTS, BIOME_DENSITY } from './art/biome.ts';
+import { biomeTile, plant, rubble, pavise, campfire, mineEntrance, barricade, wagon, BIOME_PLANTS, BIOME_DENSITY } from './art/biome.ts';
 import { engineArt, siegeCamp } from './art/war.ts';
 import { hdify, HD } from './art/hd.ts';
 import { withoutOutline } from './art/px.ts';
-import { bTex, tileTex, sFrame, bannerTex, S } from './textures.ts';
+import { bTex, tileTex, waterTex, sFrame, bannerTex, S } from './textures.ts';
 import { Chatter } from './chatter.ts';
 import { WeatherFx, weatherAt, type Weather } from './weather.ts';
 import { nightFactor } from './KingdomScene.ts';
@@ -42,12 +42,14 @@ export class RivalScene extends Phaser.Scene {
   private r!: Rival; private L!: RealmLayout; private frame = 0;
   private bImgs: { img: Phaser.GameObjects.Image; kind: BKind; level: number }[] = [];
   private wallImgs: { img: Phaser.GameObjects.Image; x: number; y: number }[] = [];
+  private fires: Phaser.GameObjects.Image[] = []; private smoke: [number, number][] = []; private sheltering = false;
+  private waterImgs: { img: Phaser.GameObjects.Image; land: number }[] = [];
   private figs: Fig[] = []; private siegeObjs: Phaser.GameObjects.GameObject[] = []; private siegeSig = '';
   private chatter!: Chatter; private weather!: WeatherFx; private shade!: Phaser.GameObjects.Rectangle;
   private doors: { x: number; y: number }[] = []; private unsub: (() => void)[] = [];
   private drag: { x: number; y: number; sx: number; sy: number } | null = null; private pinch: { d: number; z: number } | null = null;
   constructor() { super('rival'); }
-  init(data: { id: string }) { this.r = getState().world.rivals.find((x) => x.id === data.id)!; this.figs = []; this.bImgs = []; this.wallImgs = []; this.siegeObjs = []; this.siegeSig = ''; }
+  init(data: { id: string }) { this.r = getState().world.rivals.find((x) => x.id === data.id)!; this.figs = []; this.waterImgs = []; this.bImgs = []; this.wallImgs = []; this.siegeObjs = []; this.siegeSig = ''; }
 
   create() {
     const s = getState(); this.L = realmLayout(s.world, this.r);
@@ -68,9 +70,10 @@ export class RivalScene extends Phaser.Scene {
     this.input.on('wheel', (_p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.88 : 1.14), 0.5, 5)));
     this.unsub.push(subscribe(() => this.syncSiege(getState())));
     this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
-    this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; for (const b of this.bImgs) b.img.setTexture(bTex(this, b.kind, b.level, this.frame % 2).key); } });
+    this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; for (const b of this.bImgs) b.img.setTexture(bTex(this, b.kind, b.level, this.frame % 2).key); for (const w of this.waterImgs) w.img.setTexture(waterTex(this, w.land, this.frame % 3)); for (const f of this.fires) f.setTexture(`fire${this.frame % 2}`); } });
     this.time.addEvent({ delay: 6500, loop: true, callback: () => this.chat() });
     this.time.addEvent({ delay: 4200, loop: true, callback: () => this.volley() });
+    this.time.addEvent({ delay: 900, loop: true, callback: () => { for (const [x, y] of this.smoke) { const p = this.add.image(x, y, 'px').setTint(0xcfc6b8).setAlpha(0.7).setDepth(19000).setScale(1.5); this.tweens.add({ targets: p, y: y - 26, x: x + 6, alpha: 0, scale: 3.5, duration: 2600, onComplete: () => p.destroy() }); } } });
     const wx = () => this.weather.set(biomeWeather(this.L.biome, weatherAt())); wx(); this.time.addEvent({ delay: 30000, loop: true, callback: wx });
     this.applyNight(); this.time.addEvent({ delay: 20000, loop: true, callback: () => this.applyNight() });
     this.syncSiege(s);
@@ -82,12 +85,14 @@ export class RivalScene extends Phaser.Scene {
     BIOME_PLANTS[b].forEach((p, i) => { for (const sd of [0, 1]) { const k = `bp_${p}${sd}`; if (!T.exists(k)) T.addCanvas(k, hdify(withoutOutline(() => plant(p, sd + i * 3)), { seed: sd })); } });
     for (let i = 0; i < 3; i++) if (!T.exists(`rubble${i}`)) T.addCanvas(`rubble${i}`, hdify(withoutOutline(() => rubble(i * 7 + 1))));
     if (!T.exists('camp_icon')) T.addCanvas('camp_icon', hdify(withoutOutline(() => siegeCamp())));
+    const once = (k: string, draw: () => HTMLCanvasElement) => { if (!T.exists(k)) T.addCanvas(k, hdify(withoutOutline(draw), { grain: 3 })); };
+    once('pavise', pavise); once('mine', mineEntrance); once('barricade', barricade); for (const f of [0, 1]) { once(`fire${f}`, () => campfire(f)); once(`wagon${f}`, () => wagon(f)); }
     for (const e of ENGINE_IDS) for (const f of [0, 1]) if (!T.exists(`eng_${e}${f}`)) T.addCanvas(`eng_${e}${f}`, hdify(withoutOutline(() => engineArt(e, f))));
   }
   private occupied() {
     const o = new Set<string>();
     for (const b of this.L.buildings) { const d = BUILDINGS[b.kind]; for (let i = 0; i < d.w; i++) for (let j = 0; j < d.h; j++) o.add(`${b.x + i},${b.y + j}`); }
-    for (const w of this.L.walls) o.add(`${w.x},${w.y}`);
+    for (const w of [...this.L.walls, ...this.L.water, ...this.L.bridges]) o.add(`${w.x},${w.y}`);
     return o;
   }
   private drawGround() {
@@ -104,7 +109,15 @@ export class RivalScene extends Phaser.Scene {
     for (const [k, x, y] of deco.sort((a, c) => a[2] - c[2])) rt.batchDraw(k, x * TILE * HD, (y * TILE - 8) * HD);
     rt.endDraw();
     // the road from the gate down through the siege approach
-    for (let y = this.L.box.y1 + 1; y < RH; y++) for (const x of [gx, gx + 1]) this.add.image(x * TILE, (y + 1) * TILE, tileTex(this, 'road', 1, 1 | 4 | (x === gx ? 2 : 8))).setOrigin(0, 1).setScale(S).setDepth(-6);
+    for (let y = this.L.box.y1 + 1; y < RH; y++) for (const x of [gx, gx + 1]) if (!this.L.bridges.some((b) => b.x === x && b.y === y)) this.add.image(x * TILE, (y + 1) * TILE, tileTex(this, 'road', 1, 1 | 4 | (x === gx ? 2 : 8))).setOrigin(0, 1).setScale(S).setDepth(-6);
+    // rivers, ponds, oases, frozen lakes and moats
+    const wet = new Set(this.L.water.map((t) => `${t.x},${t.y}`)), isWet = (x: number, y: number) => wet.has(`${x},${y}`) || this.L.bridges.some((b) => b.x === x && b.y === y) || x < 0 || x >= RW || y < 0 || y >= RH;
+    for (const t of this.L.water) {
+      const land = (isWet(t.x, t.y - 1) ? 0 : 1) | (isWet(t.x + 1, t.y) ? 0 : 2) | (isWet(t.x, t.y + 1) ? 0 : 4) | (isWet(t.x - 1, t.y) ? 0 : 8);
+      const img = this.add.image(t.x * TILE, t.y * TILE, waterTex(this, land, 0)).setOrigin(0).setScale(S).setDepth(-7);
+      if (this.L.frozen) img.setTint(0xdcecff); else this.waterImgs.push({ img, land });
+    }
+    for (const b of this.L.bridges) this.add.image(b.x * TILE, (b.y + 1) * TILE, tileTex(this, 'road', 2, 5, 0, true)).setOrigin(0, 1).setScale(S).setDepth(-5);
   }
   private placeBuildings() {
     const L = this.L, wallSet = new Set(L.walls.map((w) => `${w.x},${w.y}`)), conn = new Map<string, BKind>();
@@ -134,42 +147,68 @@ export class RivalScene extends Phaser.Scene {
     const n = Math.min(26, 6 + this.L.buildings.length);
     for (let i = 0; i < n; i++) { const d = this.doors[i % this.doors.length]; const f = this.fig(i % 3 ? 'villager' : 'worker', 0, d.x, d.y, 'folk'); f.wait = Math.random() * 4000; }
     // sentries on the gate wall
-    for (let i = 0; i < 4; i++) this.fig(this.r.level >= 3 ? 'crossbow' : 'archer', Math.min(3, this.r.level - 1), (this.L.box.x0 + 3 + i * 4) * TILE, (this.L.box.y1 + 1) * TILE - 9, 'foe', i % 2 === 0);
+    const south = this.L.walls.filter((t) => t.y === this.L.box.y1 && Math.abs(t.x - this.L.gate.x) > 2).sort((a, b) => a.x - b.x);
+    const n2 = Math.min(6, Math.max(2, Math.floor(south.length / 3)));
+    for (let i = 0; i < n2 && south.length; i++) { const t = south[Math.floor((i + 0.5) * south.length / n2)]; this.fig(this.r.level >= 3 ? 'crossbow' : 'archer', Math.min(3, Math.max(0, this.r.level - 1)), t.x * TILE + 8, (t.y + 1) * TILE - 9, 'foe', i % 2 === 0); }
   }
 
-  /** Your camp, engines and troops, the enemy army in the field, and the state of the walls. */
+  /** The siege laid out as it was historically done (front to back):
+   *  - mangonels and ballistae behind pavises within bowshot, rams under their shed at the gate, towers at the wall;
+   *  - a palisaded siege line against sallies, with trebuchets behind it (they outrange archers);
+   *  - the host formed up behind the line;
+   *  - the camp out of arrow range: rows of tents, a command tent, cooking fires, supply wagons and horse lines.
+   *  Blockades post pickets around the other sides; sapping opens a timber-propped mine near the wall. */
   private syncSiege(s: GameState) {
     const c = s.world.campaign?.target === this.r.id && s.world.campaign.phase !== 'march' ? s.world.campaign : null, r = s.world.rivals.find((x) => x.id === this.r.id) ?? this.r;
-    const sig = c ? `${c.phase}|${Math.round((c.wallHp / c.wallMax) * 20)}|${JSON.stringify(c.engines)}|${campaignSquads(s).map((q) => q.count).join()}` : 'peace';
+    const sig = c ? `${c.phase}|${c.stance}|${Math.round((c.wallHp / c.wallMax) * 20)}|${JSON.stringify(c.engines)}|${campaignSquads(s).map((q) => q.count).join()}` : 'peace';
     if (sig === this.siegeSig) return; this.siegeSig = sig;
-    this.siegeObjs.forEach((o) => o.destroy()); this.siegeObjs = [];
+    this.siegeObjs.forEach((o) => o.destroy()); this.siegeObjs = []; this.fires = []; this.smoke = [];
     this.figs = this.figs.filter((f) => { if (f.side === 'you' || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); return false; } return true; });
-    // walls: cracks and breaches follow the siege damage
-    const ratio = c ? c.wallHp / c.wallMax : 1, N = this.wallImgs.length;
-    const byGate = [...this.wallImgs].sort((a, b) => Math.hypot(a.x - this.L.gate.x, a.y - this.L.box.y1) - Math.hypot(b.x - this.L.gate.x, b.y - this.L.box.y1));
-    const cracked = Math.round((1 - ratio) * N * 0.6), breach = ratio < 0.4 ? Math.round(((0.4 - ratio) / 0.4) * 8) + 1 : 0;
-    byGate.forEach((w, i) => { w.img.setVisible(i >= breach).setTint(i < cracked + breach ? 0x9a8c84 : 0xffffff); if (i < breach) this.siegeObjs.push(this.add.image(w.img.x, w.img.y, `rubble${i % 3}`).setOrigin(0, 1).setScale(S).setDepth(w.img.depth)); });
+    if (this.sheltering !== !!c) for (const f of this.figs) if (f.side === 'folk') { f.tx = undefined; f.wait = Math.random() * 1500; }
+    this.sheltering = !!c;
+    const add = <T extends Phaser.GameObjects.GameObject>(o: T) => { this.siegeObjs.push(o); return o; };
+    const img = (k: string, x: number, y: number, sc = S, frame?: string) => add(this.add.image(x, y, k, frame).setOrigin(0.5, 1).setScale(sc).setDepth(y));
+    // walls crack and, near the gate, fall into rubble; defenders block the breach with barricades
+    const ratio = c ? c.wallHp / c.wallMax : 1, inner = this.L.inner;
+    const outer = this.wallImgs.filter((w) => !inner || w.x < inner.x0 - 1 || w.x > inner.x1 + 1 || w.y < inner.y0 - 1 || w.y > inner.y1 + 1);
+    const byGate = [...outer].sort((a, b) => Math.hypot(a.x - this.L.gate.x, a.y - this.L.box.y1) - Math.hypot(b.x - this.L.gate.x, b.y - this.L.box.y1));
+    const cracked = Math.round((1 - ratio) * outer.length * 0.6), breach = ratio < 0.4 ? Math.round(((0.4 - ratio) / 0.4) * 8) + 1 : 0;
+    this.wallImgs.forEach((w) => w.img.setVisible(true).setTint(0xffffff));
+    byGate.forEach((w, i) => { if (i < breach) { w.img.setVisible(false); add(this.add.image(w.img.x, w.img.y, `rubble${i % 3}`).setOrigin(0, 1).setScale(S).setDepth(w.img.depth)); if (i % 2 === 0) add(this.add.image(w.img.x, w.img.y - 2, 'barricade').setOrigin(0, 1).setScale(S).setDepth(w.img.depth + 1)); } else if (i < cracked + breach) w.img.setTint(0x9a8c84); });
     if (!c) return;
-    const gx = (this.L.gate.x + 1) * TILE, front = (this.L.box.y1 + 1) * TILE;
-    // camp
-    for (const [dx, dy] of [[-150, 210], [120, 220], [-40, 250], [60, 270]]) this.siegeObjs.push(this.add.image(gx + dx, front + dy, 'camp_icon').setOrigin(0.5, 1).setScale(S * 1.2).setDepth(front + dy));
-    const myBat = s.battalions.find((b) => c.battalions.includes(b.id));
-    this.siegeObjs.push(this.add.image(gx - 20, front + 200, bannerTex(this, myBat?.color ?? 0xb3242a, myBat?.emblem ?? 'lion', 0)).setOrigin(0.2, 1).setScale(S * 1.3).setDepth(front + 200));
-    // your soldiers in blocks (one figure per soldier, up to 140)
+    const gx = (this.L.gate.x + 1) * TILE, front = (this.L.box.y1 + 1) * TILE, T = TILE;
+    const line = front + 9 * T, hostY = line + 1.5 * T, campY = Math.min(RH * T - 20, line + 9 * T);
+    // the camp, out of arrow range
+    const myBat = s.battalions.find((b) => c.battalions.includes(b.id)), col = myBat?.color ?? 0xb3242a, emb = myBat?.emblem ?? 'lion';
+    for (let row = 0; row < 2; row++) for (let i = 0; i < 6; i++) img('camp_icon', gx - 210 + i * 80 + (row ? 40 : 0), campY - row * 34, S * 0.9);
+    img('camp_icon', gx, campY - 64, S * 1.6); // the commander's pavilion
+    for (const dx of [-26, 26]) add(this.add.image(gx + dx, campY - 70, bannerTex(this, col, emb, 0)).setOrigin(0.2, 1).setScale(S * 1.2).setDepth(campY - 69));
+    for (const dx of [-130, -40, 70, 160]) { const f = img('fire0', gx + dx, campY - 46, S); this.fires.push(f); this.smoke.push([gx + dx, campY - 54]); }
+    for (let i = 0; i < 3; i++) img('wagon0', gx + 230 + (i % 2) * 10, campY - 40 - i * 22, S * 1.1);
+    const horses = campaignSquads(s).some((q) => ['lightcav', 'mknight', 'vetcav'].includes(q.cls));
+    if (horses) for (let i = 0; i < 5; i++) img('soldiers', gx - 250, campY - 30 - i * 14, S, sFrame('lightcav', 0, 0));
+    // the siege line: a palisade with a gap for sorties and the road
+    for (let x = this.L.gate.x - 12; x <= this.L.gate.x + 13; x++) if (Math.abs(x - this.L.gate.x - 0.5) > 2) add(this.add.image(x * T, line, tileTex(this, 'palisade', 1, (x > this.L.gate.x - 12 ? 8 : 0) | (x < this.L.gate.x + 13 ? 2 : 0))).setOrigin(0, 1).setScale(S).setDepth(line));
+    // your host behind the line, one figure per soldier (up to 140)
     const men = campaignSquads(s).flatMap((q) => Array.from({ length: q.count }, () => ({ cls: q.cls, rank: q.rank }))).slice(0, 140);
-    men.forEach((m, i) => { const blk = Math.floor(i / 24), k = i % 24; const bx = gx - 170 + (blk % 4) * 95, by = front + 120 + Math.floor(blk / 4) * 70 + (c.phase === 'field' ? 40 : 0); this.fig(m.cls, m.rank, bx + (k % 6) * 12 + (Math.floor(k / 6) % 2) * 3, by + Math.floor(k / 6) * 10, 'you', Math.random() < 0.15); });
+    men.forEach((m, i) => { const blk = Math.floor(i / 24), k = i % 24, bx = gx - 200 + (blk % 4) * 108 + (blk % 4 >= 2 ? 20 : 0), by = hostY + Math.floor(blk / 4) * 66; this.fig(m.cls, m.rank, bx + (k % 6) * 12 + (Math.floor(k / 6) % 2) * 3, by + Math.floor(k / 6) * 10, 'you', Math.random() < 0.15); });
     if (c.phase === 'field') {
       const foe = armyOf(r, r.power * 0.6).flatMap((u) => Array.from({ length: u.count }, () => ({ cls: u.cls, rank: u.rank }))).slice(0, 90);
-      foe.forEach((m, i) => this.fig(m.cls, m.rank, gx - 150 + (i % 18) * 17, front + 26 + Math.floor(i / 18) * 11, 'foe', i % 2 === 0));
+      foe.forEach((m, i) => this.fig(m.cls, m.rank, gx - 150 + (i % 18) * 17, front + 30 + Math.floor(i / 18) * 11, 'foe', i % 2 === 0));
       return;
     }
-    // engines in the siege line, rams at the gate, towers at the wall
-    let ex = gx - 160;
+    // engines: trebuchets behind the line, mangonels and ballistae forward behind pavises
+    let fx = gx - 190, bx = gx - 120;
     for (const e of ENGINE_IDS) for (let i = 0; i < Math.min(3, c.engines[e]); i++) {
-      if (e === 'ram') { const ram = this.add.image(gx + i * 6, front + 22, `eng_ram0`).setOrigin(0.5, 1).setScale(S).setDepth(front + 22); this.tweens.add({ targets: ram, y: ram.y - 6, duration: 700, yoyo: true, repeat: -1, ease: 'Quad.In' }); this.siegeObjs.push(ram); continue; }
-      if (e === 'tower') { this.siegeObjs.push(this.add.image((this.L.box.x0 + 4 + i * 6) * TILE, front + 14, 'eng_tower0').setOrigin(0.5, 1).setScale(S * 1.2).setDepth(front + 14)); continue; }
-      const img = this.add.image(ex, front + 80, `eng_${e}0`).setOrigin(0.5, 1).setScale(S).setDepth(front + 80); img.setData('engine', e); this.siegeObjs.push(img); ex += 46;
+      if (e === 'ram') { const ram = img('eng_ram0', gx + i * 6, front + 22); this.tweens.add({ targets: ram, y: ram.y - 6, duration: 700, yoyo: true, repeat: -1, ease: 'Quad.In' }); continue; }
+      if (e === 'tower') { img('eng_tower0', (this.L.box.x0 + 3 + i * 6) * T, front + 14, S * 1.2); continue; }
+      if (e === 'trebuchet') { const t = img('eng_trebuchet0', bx, line - 4, S * 1.15); t.setData('engine', e); bx += 70; continue; }
+      const m = img(`eng_${e}0`, fx, front + 4.5 * T); m.setData('engine', e); img('pavise', fx + 4, front + 3.2 * T); fx += 52;
     }
+    for (let i = 0; i < 5; i++) img('pavise', gx + 70 + i * 26, front + 3.2 * T); // shields for your archers
+    // blockade pickets on the other sides; a mine when sapping
+    if (c.stance === 'blockade') for (let i = 0; i < 6; i++) { const side = i % 3, px = side === 0 ? (this.L.box.x0 - 4) * T : side === 1 ? (this.L.box.x1 + 5) * T : (this.L.box.x0 + 4 + i * 3) * T, py = side === 2 ? Math.max(14, (this.L.box.y0 - 2) * T) : (this.L.box.y0 + 3 + i * 2) * T; this.fig('spearman', 1, px, py, 'you'); this.fig('spearman', 1, px + 10, py + 2, 'you', true); }
+    if (c.stance === 'sap') { const mx = (this.L.box.x0 + 5) * T, my = front + 3 * T; img('mine', mx, my, S * 1.2); for (let i = 0; i < 2; i++) { const w = this.fig('worker', 0, mx - 14 + i * 28, my + 4, 'you', i === 1); this.tweens.add({ targets: w.img, angle: { from: -6, to: 6 }, duration: 300, yoyo: true, repeat: -1 }); } }
   }
   /** Engines fire at the walls; archers on the walls shoot at your camp. */
   private volley() {
@@ -204,7 +243,7 @@ export class RivalScene extends Phaser.Scene {
       return;
     }
     const folk = vis('folk'); if (!folk.length) return;
-    const lines = [...FOLK[this.L.biome], `Long live ${this.r.ruler}!`, ...(this.r.status === 'war' ? ['They say war is coming...', 'Lock your doors tonight.'] : this.r.status === 'ally' ? ['Our allies grow strong, I hear.'] : this.r.status === 'vassal' ? ['We pay tribute now... sigh.'] : [])];
+    const lines = this.sheltering ? ['The enemy is at the gates!', 'Will the walls hold?', 'Pray for us...', 'I left my goats outside!', 'How long can the food last?'] : [...FOLK[this.L.biome], `Long live ${this.r.ruler}!`, ...(this.r.status === 'war' ? ['They say war is coming...', 'Lock your doors tonight.'] : this.r.status === 'ally' ? ['Our allies grow strong, I hear.'] : this.r.status === 'vassal' ? ['We pay tribute now... sigh.'] : [])];
     this.chatter.say(target(pick(folk)), pick(lines), 0, VOICE.folk);
   }
   private applyNight() {
@@ -220,8 +259,14 @@ export class RivalScene extends Phaser.Scene {
       let fr = 0;
       if (f.side === 'folk') {
         if ((f.wait ?? 0) > 0) f.wait! -= dt;
-        else { if (f.tx == null || Math.hypot(f.tx - f.x, (f.ty ?? 0) - f.y) < 1) { const d = pick(this.doors); f.tx = d.x + (Math.random() - 0.5) * 14; f.ty = d.y + Math.random() * 6; f.wait = 1500 + Math.random() * 4000; }
-          else { const dx = f.tx - f.x, dy = f.ty! - f.y, d = Math.hypot(dx, dy), k = Math.min(1, ((dt / 1000) * 14) / d); f.x += dx * k; f.y += dy * k; f.img.setFlipX(dx < 0); fr = (tick + f.ph) % 4; } }
+        else { if (f.tx == null || Math.hypot(f.tx - f.x, (f.ty ?? 0) - f.y) < 1) {
+            if (this.sheltering) {
+              const b = this.L.inner ?? this.L.box, B = this.L.box, inside = f.x > B.x0 * TILE && f.x < B.x1 * TILE && f.y > B.y0 * TILE && f.y < B.y1 * TILE + 4;
+              const gate = { x: (this.L.gate.x + 1) * TILE, y: (B.y1 + 1) * TILE + 6 };
+              if (!inside && Math.hypot(f.x - gate.x, f.y - gate.y) > 6) { f.tx = gate.x + (Math.random() - 0.5) * 8; f.ty = gate.y; f.wait = 0; } // in through the gate, not through the walls
+              else { f.tx = (b.x0 + 2 + Math.random() * (b.x1 - b.x0 - 3)) * TILE; f.ty = (b.y1 - 1 - Math.random() * 3) * TILE; f.wait = 6000 + Math.random() * 8000; } }
+            else { const d = pick(this.doors); f.tx = d.x + (Math.random() - 0.5) * 14; f.ty = d.y + Math.random() * 6; f.wait = 1500 + Math.random() * 4000; } }
+          else { const dx = f.tx - f.x, dy = f.ty! - f.y, d = Math.hypot(dx, dy), k = Math.min(1, ((dt / 1000) * (this.sheltering ? 34 : 14)) / d); f.x += dx * k; f.y += dy * k; f.img.setFlipX(dx < 0); fr = (tick + f.ph) % 4; } }
       } else if ((tick + f.ph) % 30 === 0) fr = 2;
       if (f.side !== 'foe' || f.img.frame.name.endsWith('|0') || f.img.frame.name.endsWith('|2')) f.img.setFrame(sFrame(f.cls, f.rank, fr));
       f.img.setPosition(Math.round(f.x), Math.round(f.y)).setDepth(f.y);

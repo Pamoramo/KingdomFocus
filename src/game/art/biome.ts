@@ -68,3 +68,32 @@ export function wagon(f: number): HTMLCanvasElement {
   for (const [x, d] of [[16, 0], [18, 1], [20, 0]]) r(c, x + ((f + d) % 2), 9, 1, 3, '#4a2e16');
   outline(cv); return cv;
 }
+
+/** Siege works: a pavise (wooden mantlet), a campfire, a timber-propped mine entrance and a breach barricade. */
+export function pavise(): HTMLCanvasElement {
+  const [cv, c] = canvas(14, 14);
+  for (let i = 0; i < 12; i += 3) { r(c, 1 + i, 2, 2, 10, P.wood); r(c, 1 + i, 2, 1, 10, P.woodL); }
+  r(c, 1, 4, 12, 1, P.woodD); r(c, 1, 9, 12, 1, P.woodD); r(c, 3, 12, 1, 2, P.woodD); r(c, 10, 12, 1, 2, P.woodD); r(c, 6, 5, 2, 3, '#b02a28');
+  outline(cv); return cv;
+}
+export function campfire(f: number): HTMLCanvasElement {
+  const [cv, c] = canvas(12, 12);
+  for (let i = 0; i < 8; i++) px(c, 2 + i, 10, i % 2 ? P.stoneD : P.stone);
+  r(c, 3, 9, 6, 1, P.woodD); r(c, 4, 8, 4, 1, P.wood);
+  (f ? [3, 5, 4] : [4, 3, 5]).forEach((h, i) => { r(c, 4 + i, 8 - h, 1, h, P.fire); px(c, 4 + i, 8 - Math.max(1, h - 2), P.fireL); });
+  r(c, 9, 4, 1, 5, P.woodD); r(c, 2, 4, 1, 5, P.woodD); r(c, 2, 4, 8, 1, P.woodD); r(c, 5, 5, 2, 2, '#5a5a62');
+  return cv;
+}
+export function mineEntrance(): HTMLCanvasElement {
+  const [cv, c] = canvas(22, 16);
+  r(c, 0, 9, 22, 7, '#7a5a34'); for (let i = 0; i < 12; i++) px(c, (i * 7) % 22, 10 + (i % 5), '#5e4426');
+  r(c, 6, 5, 10, 9, '#1a120c'); r(c, 5, 4, 2, 10, P.woodD); r(c, 15, 4, 2, 10, P.woodD); r(c, 5, 3, 12, 2, P.wood);
+  r(c, 0, 7, 5, 4, '#8a6a40'); r(c, 18, 6, 4, 5, '#8a6a40');
+  outline(cv); return cv;
+}
+export function barricade(): HTMLCanvasElement {
+  const [cv, c] = canvas(16, 30);
+  r(c, 1, 20, 5, 5, P.wood); r(c, 1, 20, 5, 1, P.woodL); r(c, 7, 19, 4, 6, P.wood); r(c, 7, 20, 4, 1, P.stoneD); r(c, 7, 23, 4, 1, P.stoneD);
+  r(c, 11, 21, 4, 4, P.woodD); for (let i = 0; i < 4; i++) { r(c, 2 + i * 4, 16 + (i % 2), 1, 5, P.woodL); px(c, 2 + i * 4, 15 + (i % 2), P.stoneL); }
+  r(c, 0, 25, 16, 2, P.stone); outline(cv); return cv;
+}
