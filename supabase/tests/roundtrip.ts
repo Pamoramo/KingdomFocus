@@ -48,6 +48,7 @@ import('../../src/lib/warActions.ts').then(async (WA) => {
   const sent2 = buildPayload(S.getState()), snap2 = call(sent2.payload);
   assert.deepEqual(snap2.balance, S.getState().res, 'trade synced into the balance');
   assert.equal(snap2.squads.find((q: { id: string }) => q.id === sq.id).count, 2, 'casualties persist');
-  assert.equal(snap2.kingdom.world.rivals.length, 7, 'world map state persists');
+  assert.equal(snap2.kingdom.world.rivals.length, S.getState().world.rivals.length, 'world map state persists');
+  assert.equal(snap2.kingdom.world.v, 2, 'the wide world (v2) is what the cloud keeps');
   console.log('roundtrip ok', JSON.stringify(snap2.balance));
 });
