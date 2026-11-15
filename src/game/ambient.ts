@@ -11,6 +11,7 @@ import type { BKind } from '../lib/economy.ts';
 
 type Mode = 'walk' | 'patrol' | 'archer' | 'spar' | 'tilt';
 const RANGED = new Set(['archer', 'longbow', 'crossbow', 'royalarcher']);
+const YARDS = new Set<BKind>(['farm', 'trainfield', 'range', 'cavstable', 'stable']);
 interface Duty { img: Phaser.GameObjects.Image; cls: string; rank: number; kind: 'patrol' | 'post'; x: number; y: number; tx: number; ty: number; wait: number; ph: number; leader?: Duty; chasing?: boolean; onWall?: boolean; hx: number; hy: number; path?: Pt[]; repath?: number }
 interface Thief { img: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; path?: Pt[]; state: 'run' | 'caught' | 'gone'; t: number; warned: boolean }
 interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number]; path?: Pt[]; dest?: Place; act?: Act; carry?: Phaser.GameObjects.Image }
@@ -38,6 +39,7 @@ export class Ambient {
   private posts: { x: number; y: number }[] = [];
   private waypoints: { x: number; y: number }[] = [];
   private places: Place[] = [];
+  private yards: Building[] = [];
   /** enemies at the gates: townsfolk shelter indoors */ alarm = false;
   /** a victory festival: crowds gather at the market */ festival = false;
   /** Walkable ground: everyone walks around buildings, walls and water. */
@@ -63,6 +65,7 @@ export class Ambient {
     const door = (b: Building) => { const [w, h] = footprint(b.kind); return { x: (b.x + w / 2) * TILE, y: (b.y + h) * TILE + 3 }; };
     this.doors = B.map(door);
     // each building's doorstep, nudged onto open ground if something stands in front of it
+    this.yards = B.filter((b) => YARDS.has(b.kind));
     this.places = B.flatMap((b): Place[] => {
       const [w, h] = footprint(b.kind), cx = (b.x + w / 2) * TILE;
       if (b.kind === 'farm') return [{ kind: b.kind, b, at: { x: (b.x + 0.5 + Math.random() * (w - 1)) * TILE, y: (b.y + 0.8 + Math.random() * (h - 1)) * TILE }, cx }];
@@ -84,7 +87,7 @@ export class Ambient {
         const p1 = this.add('swordsman', 1, 'spar', x0 + 14, y1 - 14), p2 = this.add('manatarms', 1, 'spar', x0 + 26, y1 - 14); p2.img.setFlipX(true); p2.ph = 3; void p1;
         if (b.level >= 2) { const k = this.add('mknight', 2, 'tilt', x0 + 6, y1 - 22); k.a = x0 + 6; k.b = x0 + w * TILE - 6; }
       }
-      if (b.kind === 'barracks') { for (let i = 0; i < b.level; i++) { const a = this.add(['militia', 'spearman', 'swordsman'][i], i, 'spar', x0 + 10 + i * 13, y1 - 4); a.ph = i * 2; } }
+      if (b.kind === 'barracks') { for (let i = 0; i < b.level; i++) { const a = this.add(['militia', 'spearman', 'swordsman'][i], i, 'spar', x0 + 10 + i * 13, y1 + 7); a.ph = i * 2; /* sparring in the yard before the barracks */ } }
       if (b.kind === 'cavstable' || b.kind === 'stable') { const k = this.add(b.kind === 'stable' ? 'lightcav' : 'mknight', 1, 'tilt', x0 + 8, y1 + 6); k.a = x0; k.b = x0 + w * TILE; }
     }
   }
@@ -234,7 +237,8 @@ export class Ambient {
   }
   /** Draw order for someone at a point: people working a field stand among its crops, in front of the field's sprite. */
   private depthAt(x: number, y: number) {
-    for (const p of this.places) if (p.kind === 'farm') { const b = p.b, [w, h] = footprint('farm'); if (x >= b.x * TILE && x < (b.x + w) * TILE && y >= b.y * TILE && y <= (b.y + h) * TILE) return (b.y + h) * TILE + 0.5 + y / 1000; }
+    // open yards (fields, the training ground, the archery range, paddocks): people inside stand in front of the yard's fence and ground
+    for (const b of this.yards) { const [w, h] = footprint(b.kind); if (x >= b.x * TILE && x < (b.x + w) * TILE && y >= b.y * TILE && y <= (b.y + h) * TILE + 2) return (b.y + h) * TILE + 0.5 + y / 1000; }
     return y;
   }
   /** Enemies at the gates: hurry indoors to the nearest home and stay there. */

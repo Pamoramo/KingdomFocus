@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getState, subscribe, maxLevel, type GameState } from '../lib/state.ts';
 import { getUI, setUI, subUI, camBus } from './ui.ts';
-import { worldMap, castleIcon, siegeCamp, engineArt, MAP_PW, MAP_PH } from './art/war.ts';
+import { worldMap, castleIcon, siegeCamp, engineArt, roadNet, roadRoute, MAP_PW, MAP_PH } from './art/war.ts';
 import { wagon } from './art/biome.ts';
 import { isKnown, reachOf, WORLD_SCALE, type Journey } from '../lib/war.ts';
 import { hdify } from './art/hd.ts';
@@ -24,7 +24,21 @@ export class WorldScene extends Phaser.Scene {
   private sig = ''; private unsub: (() => void)[] = []; private frame = 0;
   private camps = new Map<string, Phaser.GameObjects.GameObject[]>();
   private lands = new Map<string, { sig: string; parts: Phaser.GameObjects.GameObject[] }>();
-  private travellers = new Map<string, { parts: Phaser.GameObjects.Image[]; label: Phaser.GameObjects.Text; j: Journey }>();
+  private travellers = new Map<string, { parts: Phaser.GameObjects.Image[]; label: Phaser.GameObjects.Text; j: Journey; route: { x: number; y: number }[]; len: number; gap: number }>();
+  /** Soldiers in these battalions (for sizing a marching column). */
+  private men(bats?: string[]) { const s = getState(); return s.squads.filter((q) => bats?.includes(q.bat)).reduce((a, q) => a + q.count, 0); }
+  /** Figures in a marching column: grows with the host, but never floods the map. */
+  private columnSize(men: number) { return Math.max(3, Math.min(16, Math.round(2 + Math.sqrt(men) * 0.9))); }
+  /** The way along the roads from your castle to a realm, or to a point off the roads (via the nearest realm), in world units. */
+  private route(j: Journey) {
+    const w = getState().world, sites = [HOME, ...w.rivals.map((r) => ({ x: r.x, y: r.y }))], net = roadNet(sites);
+    let pts: { x: number; y: number }[];
+    if (j.to) { const near = sites.map((p, i) => ({ i, d: Math.hypot(p.x - j.to!.x, p.y - j.to!.y) })).sort((a, b) => a.d - b.d)[0]; pts = [...roadRoute(sites, net, near.d < Math.hypot(HOME.x - j.to.x, HOME.y - j.to.y) ? near.i : 0), j.to]; }
+    else { const i = w.rivals.findIndex((r) => r.id === j.rival) + 1; pts = i > 0 ? roadRoute(sites, net, i) : [HOME]; }
+    pts = pts.map((p) => ({ x: p.x * WW, y: p.y * WH }));
+    if (j.home) pts.reverse();
+    return pts;
+  }
   constructor() { super('world'); }
 
   create() {
@@ -158,7 +172,7 @@ export class WorldScene extends Phaser.Scene {
       if (w.campaign.phase === 'march') return;
       if (w.campaign.phase === 'siege') { this.units.push(this.add.image(cx, cy + 10, 'camp_icon').setScale(0.6).setDepth(cy)); ENGINE_IDS.filter((e) => w.campaign!.engines[e] > 0).forEach((e, i) => this.units.push(this.add.image(cx - 30 + i * 22, cy + 34, `eng_${e}`).setScale(0.5).setDepth(cy + 40))); }
       const g = this.add.container(home.x, home.y + 20); this.units.push(g);
-      this.soldiers(cx, cy - 20, 'swordsman', 8, dx > 0);
+      this.soldiers(cx, cy - 20, 'swordsman', Math.min(20, this.columnSize(this.men(w.campaign.battalions)) + 2), dx > 0); // the camp holds as many as you sent
       const path = this.add.graphics().setDepth(50); path.lineStyle(3, 0xffe27a, 0.8); path.beginPath(); path.moveTo(home.x, home.y + 10); path.lineTo(cx, cy); path.strokePath(); this.units.push(path);
     }
     if (w.threat) { const r = w.rivals.find((x) => x.id === w.threat!.rival)!; this.soldiers(home.x + 60, home.y + 10, 'spearman', 12, true, 0xffb0a0); const b = this.add.image(home.x + 80, home.y - 20, bannerTex(this, r.color, r.emblem, 0)).setScale(S * 1.4); this.units.push(b); }
@@ -173,27 +187,33 @@ export class WorldScene extends Phaser.Scene {
       const parts: Phaser.GameObjects.Image[] = [];
       if (j.kind === 'caravan' || j.kind === 'gift' || (j.kind === 'return' && !j.bats)) { parts.push(this.add.image(0, 0, 'wagon0').setOrigin(0.5, 1).setScale(0.9)); parts.push(this.add.image(0, 0, 'soldiers', sFrame('worker', 0, 0)).setOrigin(0.5, 1).setScale(S * 1.6)); }
       else if (j.kind === 'envoy') parts.push(this.add.image(0, 0, 'soldiers', sFrame('lightcav', 2, 0)).setOrigin(0.5, 1).setScale(S * 1.8));
-      else for (let i = 0; i < 5; i++) parts.push(this.add.image(0, 0, 'soldiers', sFrame(i === 0 ? 'knight' : 'spearman', 1, 0)).setOrigin(0.5, 1).setScale(S * 1.5));
+      else { // a marching column sized to the host: a banner bearer, the commander, then the ranks
+        const n = j.kind === 'explore' ? 3 : this.columnSize(j.id === 'campaign-march' ? this.men(getState().world.campaign?.battalions) : this.men(j.bats)), b = getState().battalions.find((x) => j.bats?.includes(x.id) || getState().world.campaign?.battalions.includes(x.id));
+        for (let i = 0; i < n; i++) parts.push(this.add.image(0, 0, 'soldiers', sFrame(j.kind === 'explore' ? 'villager' : i === 0 ? 'knight' : i % 4 === 3 ? 'archer' : 'spearman', 1, 0)).setOrigin(0.5, 1).setScale(S * 1.5));
+        if (b && j.kind !== 'explore') parts.push(this.add.image(0, 0, bannerTex(this, b.color, b.emblem, 0)).setOrigin(0.2, 1).setScale(S * 1.1).setData('banner', true));
+      }
       const label = this.add.text(0, 0, '', { fontFamily: 'monospace', fontSize: '22px', color: '#fff4d6', stroke: '#1d1716', strokeThickness: 5 }).setOrigin(0.5, 1).setScale(0.5).setDepth(7000);
-      this.travellers.set(j.id, { parts, label, j });
+      const route = this.route(j), len = route.slice(1).reduce((a, p, i) => a + Math.hypot(p.x - route[i].x, p.y - route[i].y), 0);
+      this.travellers.set(j.id, { parts, label, j, route, len, gap: j.kind === 'caravan' || j.kind === 'gift' || (j.kind === 'return' && !j.bats) ? 22 : 9 });
     }
   }
   update(time: number) {
     const now = Date.now(), w = getState().world, home = { x: HOME.x * WW, y: HOME.y * WH };
     let k = 0;
-    for (const { parts, label, j } of this.travellers.values()) {
+    for (const { parts, label, j, route, len, gap } of this.travellers.values()) {
       const lift = (k++ % 3) * 13;
-      const r = j.to ?? w.rivals.find((x) => x.id === j.rival); if (!r) continue;
-      const far = { x: r.x * WW, y: r.y * WH }, [a, b] = j.home ? [far, home] : [home, far];
-      const t = Math.min(1, Math.max(0, (now - j.depart) / Math.max(1, j.arrive - j.depart))), x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t + Math.sin(t * 9) * 6;
-      const flip = b.x < a.x, f = Math.floor(time / 160) % 4;
+      if (!route.length) continue;
+      // where along the road someone d world units from the start stands, and which way the road runs there
+      const at = (d: number) => { d = Math.max(0, Math.min(len, d)); for (let i = 1; i < route.length; i++) { const a = route[i - 1], b = route[i], seg = Math.hypot(b.x - a.x, b.y - a.y); if (d <= seg || i === route.length - 1) { const u = seg ? Math.min(1, d / seg) : 0; return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, dx: b.x - a.x }; } d -= seg; } return { ...route[0], dx: 1 }; };
+      const t = Math.min(1, Math.max(0, (now - j.depart) / Math.max(1, j.arrive - j.depart))), head = t * len, f = Math.floor(time / 160) % 4, lead = at(head);
       parts.forEach((p, i) => {
-        const back = i * (j.kind === 'caravan' || j.kind === 'gift' || (j.kind === 'return' && !j.bats) ? 22 : 14);
-        p.setPosition(x - (flip ? -back : back), y + (i % 2) * 6).setFlipX(flip).setDepth(y + 10);
-        if (p.texture.key === 'soldiers') { const cls = (p.frame.name as string).split('|')[0], rk = +(p.frame.name as string).split('|')[1]; p.setFrame(sFrame(cls, rk, f)); } else p.setTexture(`wagon${f % 2}`);
+        if (p.getData('banner')) { const q = at(head - gap); p.setPosition(q.x + 4, q.y - 14).setDepth(q.y + 11); return; } // the colours ride near the front
+        const row = Math.floor(i / 2), q = at(head - row * gap), side = parts.length > 3 && i > 0 ? (i % 2 ? -4 : 4) : 0; // two abreast
+        p.setPosition(q.x + side * 0.4, q.y + side).setFlipX(q.dx < 0).setDepth(q.y + 10);
+        if (p.texture.key === 'soldiers') { const cls = (p.frame.name as string).split('|')[0], rk = +(p.frame.name as string).split('|')[1]; p.setFrame(sFrame(cls, rk, (f + i) % 4)); } else p.setTexture(`wagon${f % 2}`);
       });
       const left = Math.max(0, j.arrive - now);
-      label.setText(`${j.label} · ${left > 60000 ? Math.ceil(left / 60000) + 'm' : Math.ceil(left / 1000) + 's'}`).setPosition(x, y - 46 - lift);
+      label.setText(`${j.label} · ${left > 60000 ? Math.ceil(left / 60000) + 'm' : Math.ceil(left / 1000) + 's'}`).setPosition(lead.x, lead.y - 46 - lift);
     }
   }
   private highlight() { const sel = getUI().selRival; for (const [id, v] of this.sites) v.ring.setVisible(id === sel); }

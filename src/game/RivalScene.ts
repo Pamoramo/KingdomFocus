@@ -176,16 +176,24 @@ export class RivalScene extends Phaser.Scene {
     if (sig === this.siegeSig) return; this.siegeSig = sig;
     this.siegeObjs.forEach((o) => o.destroy()); this.siegeObjs = []; this.fires = []; this.smoke = [];
     // before a siege, defenders burn the suburbs in front of the gate so the enemy finds no shelter there
-    for (const b of [...this.bImgs, ...this.marks]) if (b.suburb) b.img.setVisible(!c);
+    // a siege scars the suburbs: under the enemy's camp and siege lines houses are razed or still burning;
+    // nearer the walls most stand, some damaged, a few ablaze (decided per house, so it stays the same each visit)
+    const gxT = this.L.gate.x + 1, y1 = this.L.box.y1, fate = (b: { img: Phaser.GameObjects.Image }) => {
+      const tx = (b.img.x + b.img.displayWidth / 2) / TILE, ty = b.img.y / TILE, h = (Math.round(tx * 7 + ty * 13) * 2654435761 >>> 0) % 100;
+      if (Math.abs(tx - gxT) <= 14 && ty >= y1 + 8 && ty <= y1 + 25) return h < 55 ? 'razed' : 'ablaze';
+      return h < 45 ? 'whole' : h < 80 ? 'damaged' : 'ablaze';
+    };
+    for (const b of [...this.bImgs, ...this.marks]) if (b.suburb) { const f = c ? fate(b) : 'whole'; b.img.setVisible(f !== 'razed').setTint(f === 'damaged' ? 0xa89888 : f === 'ablaze' ? 0x8a6a58 : 0xffffff); }
     this.figs = this.figs.filter((f) => { if (f.side === 'you' || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); return false; } return true; });
     if (this.sheltering !== !!c) for (const f of this.figs) if (f.side === 'folk') { f.path = undefined; f.wait = Math.random() * 1500; }
     this.sheltering = !!c;
     const add = <T extends Phaser.GameObjects.GameObject>(o: T) => { this.siegeObjs.push(o); return o; };
-    // the burnt suburbs: charred rubble where houses stood, some still smoking
+    // razed houses leave charred rubble; burning ones have flames on the roof; damaged ones smoulder
     if (c) for (const b of [...this.bImgs, ...this.marks]) if (b.suburb) {
-      const w = b.img.displayWidth, x0 = b.img.x, y0 = b.img.y, n = Math.max(1, Math.round(w / TILE));
-      for (let i = 0; i < n; i++) add(this.add.image(x0 + i * TILE, y0, `rubble${(i + Math.round(x0 / TILE)) % 3}`).setOrigin(0, 1).setScale(S).setTint(0x5a4a42).setDepth(y0 - 1));
-      if (Math.round(x0 / TILE + y0 / TILE) % 3 === 0) this.smoke.push([x0 + w / 2, y0 - 10]);
+      const f = fate(b), w = b.img.displayWidth, x0 = b.img.x, y0 = b.img.y, top = y0 - b.img.displayHeight, n = Math.max(1, Math.round(w / TILE));
+      if (f === 'razed') { for (let i = 0; i < n; i++) add(this.add.image(x0 + i * TILE, y0, `rubble${(i + Math.round(x0 / TILE)) % 3}`).setOrigin(0, 1).setScale(S).setTint(0x6a5a50).setDepth(y0 - 1)); if (Math.round(x0 / TILE) % 2) this.smoke.push([x0 + w / 2, y0 - 8]); }
+      if (f === 'ablaze') { for (let i = 0; i < Math.min(2, n); i++) { const fl = add(this.add.image(x0 + w * (0.3 + i * 0.4), top + b.img.displayHeight * 0.45, 'fire0').setOrigin(0.5, 1).setScale(S * 0.9).setDepth(y0 + 1)); this.fires.push(fl); } this.smoke.push([x0 + w / 2, top + 6], [x0 + w * 0.7, top + 10]); }
+      if (f === 'damaged' && Math.round(x0 / TILE + y0 / TILE) % 2 === 0) this.smoke.push([x0 + w / 2, top + 8]);
     }
     const img = (k: string, x: number, y: number, sc = S, frame?: string) => add(this.add.image(x, y, k, frame).setOrigin(0.5, 1).setScale(sc).setDepth(y));
     // walls crack and, near the gate, fall into rubble; defenders block the breach with barricades

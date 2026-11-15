@@ -34,6 +34,14 @@ function valueNoise(seed: number, G = 16) {
   return (u: number, v: number) => { const x = u * G, y = v * G, x0 = Math.floor(x), y0 = Math.floor(y), fx = sm(x - x0), fy = sm(y - y0);
     const a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx, b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx; return a + (b - a) * fy; };
 }
+/** The road network: each site's road joins the nearest site closer to the heart of the map (index 0).
+ *  Returns each site's parent index (-1 for the heart). Shared by the painted roads and the travellers who walk them. */
+export function roadNet(sites: { x: number; y: number }[]): number[] {
+  const home = sites[0], dc = (p: { x: number; y: number }) => Math.hypot(p.x - home.x, p.y - home.y);
+  return sites.map((s, i) => { if (i === 0) return -1; let best = 0, bd = Infinity; sites.forEach((q, j) => { if (j !== i && dc(q) < dc(s)) { const d = Math.hypot(q.x - s.x, q.y - s.y); if (d < bd) { bd = d; best = j; } } }); return best; });
+}
+/** The way along the roads from the heart (site 0) to site i: the list of sites passed, heart first. */
+export function roadRoute(sites: { x: number; y: number }[], parent: number[], i: number) { const out: { x: number; y: number }[] = []; for (let k = i, n = 0; k >= 0 && n < 64; k = parent[k], n++) out.unshift(sites[k]); return out; }
 /** A painted pixel continent with sea, beaches, plains, forests, hills, snowy peaks, rivers and roads. */
 export function worldMap(seed: number, sites: { x: number; y: number }[]): HTMLCanvasElement {
   const [cv, c] = canvas(MAP_PW, MAP_PH), n1 = valueNoise(seed, 30), n2 = valueNoise(seed + 9, 40), n3 = valueNoise(seed + 77, 40), R = rng(seed + 5); // finer grids: features stay the same size on a bigger map
@@ -68,8 +76,8 @@ export function worldMap(seed: number, sites: { x: number; y: number }[]): HTMLC
   }
   // roads from the heart of the realm to every site
   // each realm's road joins the nearest realm closer to the heart of the map, so roads branch outward like a real network
-  const home = sites[0], dc = (p: { x: number; y: number }) => Math.hypot(p.x - home.x, p.y - home.y);
-  for (const s of sites.slice(1)) { const prev = sites.filter((q) => q !== s && dc(q) < dc(s)).sort((a, b) => Math.hypot(a.x - s.x, a.y - s.y) - Math.hypot(b.x - s.x, b.y - s.y))[0] ?? home;
+  const parent = roadNet(sites);
+  for (const [i, s] of sites.entries()) { if (i === 0) continue; const prev = sites[parent[i]];
     const x0 = prev.x * MAP_PW, y0 = prev.y * MAP_PH, x1 = s.x * MAP_PW, y1 = s.y * MAP_PH, n = Math.hypot(x1 - x0, y1 - y0);
     for (let i = 0; i < n; i += 1) { if (i % 6 > 3) continue; const t = i / n, wob = Math.sin(t * 9 + s.x * 20) * 3; px(c, x0 + (x1 - x0) * t + wob * 0.3, y0 + (y1 - y0) * t + wob, '#a8824a'); } }
   return cv;
