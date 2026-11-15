@@ -39,6 +39,8 @@ export interface Threat { rival: string; power: number; since: number; allyHelp:
 export interface Warning { id: string; rival: string; issued: string; due: string; chance: number; source: 'scouts' | 'spies' | 'merchants' | 'refugees'; text: string }
 export interface Missive { id: string; rival: string; kind: 'tribute_demand' | 'trade_offer' | 'aid_request' | 'alliance_offer' | 'peace_offer' | 'news'; text: string; amount?: number; day: string }
 export interface Loan { bat: string; rival: string; leftMin: number }
+/** Minutes of study a lent battalion serves abroad before it marches home. */
+export const LOAN_MIN = 60;
 export interface Report { id: string; t: number; title: string; win: boolean; lines: string[]; you: number; foe: number; lostYou: number; lostFoe: number; loot?: Partial<Res> }
 export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'return' | 'reinforce' | 'raid' | 'explore';
 /** Someone on the road between your kingdom and another. Effects apply when they arrive. */

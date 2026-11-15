@@ -6,7 +6,7 @@ import { setUI, toggleWorldView } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res, canAfford } from '../lib/rewards.ts';
 import { TACTICS, TERRAINS, tacticLock, sidePower, type Tactic, type Terrain } from '../lib/battle.ts';
-import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, vassalGold, vassalRenown, VASSAL_GOLD_MAX, type Rival, type Engines, type Stance } from '../lib/war.ts';
+import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, LOAN_MIN, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, vassalGold, vassalRenown, VASSAL_GOLD_MAX, type Rival, type Engines, type Stance } from '../lib/war.ts';
 import * as WA from '../lib/warActions.ts';
 import { courtOf, courtFx } from '../lib/politics.ts';
 import { engineArt } from '../game/art/war.ts';
@@ -32,6 +32,7 @@ export function WorldPanel() {
     <Intelligence />
     {w.inbox.length > 0 && <Inbox />}
     <OnTheRoad />
+    <LentOut />
     <Tabs value={tab} onChange={setTab} items={[['realms', 'Realms'], ['campaign', w.campaign ? `Siege · day ${w.campaign.day}` : 'War'], ['works', 'Siege works'], ['reports', 'Reports']]} />
     {tab === 'realms' && (sel ? <RivalDetail r={sel} /> : <Realms />)}
     {tab === 'campaign' && <CampaignTab />}
@@ -115,7 +116,8 @@ function RivalDetail({ r }: { r: Rival }) {
         <div className="flex items-center gap-2 text-sm"><input type="number" className="inp !w-24" min={50} value={giftAmt} onChange={(e) => setGift(+e.target.value)} /> gold → relations +{giftRelation(r, giftAmt)}<button className="btn ml-auto" onClick={() => WA.gift(r.id, giftAmt)}>Send gift</button></div>
         {r.status !== 'war' && <div className="flex items-center gap-2 text-sm"><select className="inp" value={bat} onChange={(e) => setBat(e.target.value)}><option value="">Choose a battalion to lend…</option>{homeBats.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
           <button className="btn" disabled={!bat} onClick={() => WA.sendAid(r.id, bat)}>Send troops</button></div>}
-        <p className="text-xs opacity-70">Loaned troops return after 60 minutes of study, with experience. Lending soldiers builds trust fastest.</p>
+        {s.world.loans.filter((l) => l.rival === r.id).map((l) => <div key={l.bat} className="text-xs"><b>{s.battalions.find((b) => b.id === l.bat)?.name}</b> serving here: {Math.max(0, Math.ceil(l.leftMin))} of {LOAN_MIN} min of study left <Bar value={LOAN_MIN - l.leftMin} max={LOAN_MIN} color="bg-moss" /></div>)}
+        <p className="text-xs opacity-70">Loaned troops return after {LOAN_MIN} minutes of study, with experience. Lending soldiers builds trust fastest.</p>
       </Section>}
       <Section title="Statecraft">
         <div className="flex flex-wrap gap-2">
@@ -271,6 +273,16 @@ function Defense() {
 }
 
 /** Envoys, caravans and troops currently travelling, with time to arrival. */
+/** Battalions serving with allies: how much of their service (counted in your study minutes) is left. */
+function LentOut() {
+  const s = useGame(), loans = s.world.loans; if (!loans.length) return null;
+  return <Section title="Lent battalions">
+    {loans.map((l) => { const b = s.battalions.find((x) => x.id === l.bat), r = s.world.rivals.find((x) => x.id === l.rival), left = Math.max(0, Math.ceil(l.leftMin));
+      return <div key={l.bat + l.rival} className="text-sm space-y-0.5"><div className="flex justify-between gap-2"><span><b>{b?.name ?? 'Battalion'}</b> serving with {r?.name ?? 'an ally'}</span><span className="whitespace-nowrap tabular-nums">{left} min left</span></div>
+        <Bar value={LOAN_MIN - left} max={LOAN_MIN} color="bg-moss" /></div>; })}
+    <p className="text-xs opacity-70">Their service counts down while you study: {LOAN_MIN} minutes of study, then they march home with experience.</p>
+  </Section>;
+}
 function OnTheRoad() {
   const s = useGame(), now = useNow(1000), c = s.world.campaign;
   const list = [...(s.world.journeys ?? []).map((j) => ({ id: j.id, label: j.label, arrive: j.arrive, depart: j.depart })), ...(c?.phase === 'march' ? [{ id: 'march', label: `Your host marching on ${s.world.rivals.find((r) => r.id === c.target)?.name}`, arrive: c.arrive ?? 0, depart: c.started }] : [])];

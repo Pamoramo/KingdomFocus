@@ -5,7 +5,7 @@ import { courtOf, courtFx, adjust } from './politics.ts';
 import { rating, lossFactor, has as hasTrait, praiseReady, styled, battleCry, type BattleKind } from './commanders.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
-import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
+import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, LOAN_MIN, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
 import { RANKS, OFFICERS } from './economy.ts';
 
@@ -291,7 +291,7 @@ export const journeysTick = (now = Date.now()) => {
       } else if (j.kind === 'gift') { o = W(o, shiftRelations(o.world, r.id, d.rel)); emit({ kind: 'info', text: `${r.name} welcomes your gift (+${d.rel} relations).` }); }
       else if (j.kind === 'aid') {
         const bat = j.bats![0];
-        o = W(o, { ...shiftRelations(o.world, r.id, d.rel), loans: [...o.world.loans, { bat, rival: r.id, leftMin: 60 }] });
+        o = W(o, { ...shiftRelations(o.world, r.id, d.rel), loans: [...o.world.loans, { bat, rival: r.id, leftMin: LOAN_MIN }] });
         o = { ...o, squads: o.squads.map((q) => (q.bat === bat ? { ...q, xp: q.xp + 30 } : q)) }; for (const q of o.squads) if (q.bat === bat) o = mark(o, 'squads', q.id);
         emit({ kind: 'info', text: `Your troops reached ${r.name} (+${d.rel} relations). They return after 60 minutes of study.` });
       } else if (j.kind === 'envoy') {

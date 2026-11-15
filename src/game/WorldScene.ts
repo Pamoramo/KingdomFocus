@@ -118,7 +118,7 @@ export class WorldScene extends Phaser.Scene {
       this.sites.get(r.id)!.label.setColor(r.status === 'war' ? '#ff9a8a' : r.status === 'ally' ? '#a8f0a0' : r.status === 'vassal' ? '#ffe27a' : '#fff4d6');
     }
     this.outposts(s); this.settlements(s);
-    const sig = JSON.stringify([w.campaign?.target, w.campaign?.phase, w.campaign?.engines, w.threat?.rival, w.loans.map((l) => l.rival)]);
+    const sig = JSON.stringify([w.campaign?.target, w.campaign?.phase, w.campaign?.engines, w.threat?.rival, w.loans.map((l) => l.rival + Math.ceil(l.leftMin))]); // redraw as a loan's time runs down
     if (sig !== this.sig) { this.sig = sig; this.armies(s); }
     this.highlight(); this.syncJourneys();
   }
@@ -176,7 +176,8 @@ export class WorldScene extends Phaser.Scene {
       const path = this.add.graphics().setDepth(50); path.lineStyle(3, 0xffe27a, 0.8); path.beginPath(); path.moveTo(home.x, home.y + 10); path.lineTo(cx, cy); path.strokePath(); this.units.push(path);
     }
     if (w.threat) { const r = w.rivals.find((x) => x.id === w.threat!.rival)!; this.soldiers(home.x + 60, home.y + 10, 'spearman', 12, true, 0xffb0a0); const b = this.add.image(home.x + 80, home.y - 20, bannerTex(this, r.color, r.emblem, 0)).setScale(S * 1.4); this.units.push(b); }
-    for (const l of w.loans) { const r = w.rivals.find((x) => x.id === l.rival); if (r) this.soldiers(r.x * WW - 40, r.y * WH + 26, 'spearman', 4); }
+    for (const l of w.loans) { const r = w.rivals.find((x) => x.id === l.rival); if (!r) continue; this.soldiers(r.x * WW - 40, r.y * WH + 26, 'spearman', 4);
+      const name = getState().battalions.find((b) => b.id === l.bat)?.name ?? 'Your troops'; this.units.push(this.add.text(r.x * WW - 40, r.y * WH + 46, `${name} · ${Math.max(0, Math.ceil(l.leftMin))} min of study left`, { fontFamily: 'monospace', fontSize: '20px', color: '#a8f0a0', stroke: '#1d1716', strokeThickness: 5 }).setOrigin(0.5, 0).setScale(0.5).setDepth(6000)); }
   }
   /** Travellers on the roads: riders, wagons and marching columns, positioned by elapsed time. */
   private syncJourneys() {
