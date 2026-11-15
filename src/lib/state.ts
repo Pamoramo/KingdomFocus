@@ -239,6 +239,24 @@ export const upgradeAll = (kind: BKind) => update((s) => {
   emit({ kind: 'info', text: `Upgraded ${n} ${d.name} tiles` });
   return event(o, 'upgrade', `Upgraded ${n} ${d.name} sections.`, n);
 });
+/** Half of what a building cost in total (all its levels): paid back when it is demolished. */
+export const refundOf = (b: Building) => scale(BUILDINGS[b.kind].levels.slice(0, b.level).reduce((a, l) => add(a, l.cost), { ...ZERO }), 0.5);
+/** Demolishes many buildings at once (e.g. a stretch of wall), with one refund for the lot. */
+export const demolishMany = (ids: string[]) => update((s) => {
+  const gone = s.buildings.filter((b) => ids.includes(b.id) && b.kind !== 'camp'); if (!gone.length) return 'Nothing to remove there';
+  const refund = gone.reduce((a, b) => add(a, refundOf(b)), { ...ZERO }), set = new Set(gone.map((b) => b.id));
+  let o = ledger({ ...s, buildings: s.buildings.filter((b) => !set.has(b.id)) }, 'refund', uid(), refund);
+  for (const b of gone) o = kill(o, 'buildings', b.id);
+  emit({ kind: 'reward', text: `Cleared ${gone.length} section${gone.length > 1 ? 's' : ''}`, res: refund });
+  return event(o, 'build', `Cleared ${gone.length} ${gone.length > 1 ? 'sections' : 'section'} of ${[...new Set(gone.map((b) => BUILDINGS[b.kind].name.toLowerCase()))].join(' and ')}.`, gone.length);
+});
+/** All sections of the same kind joined to this one (a whole wall, palisade or road), for removing them together. */
+export const connectedOf = (s: GameState, id: string) => {
+  const start = s.buildings.find((b) => b.id === id); if (!start) return [];
+  const at = new Map(s.buildings.filter((b) => b.kind === start.kind).map((b) => [`${b.x},${b.y}`, b])), seen = new Set<string>([start.id]), q = [start];
+  while (q.length) { const b = q.pop()!; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const n = at.get(`${b.x + dx},${b.y + dy}`); if (n && !seen.has(n.id)) { seen.add(n.id); q.push(n); } } }
+  return [...seen];
+};
 export const demolish = (id: string) => update((s) => {
   const b = s.buildings.find((q) => q.id === id);
   if (!b || b.kind === 'camp') return 'The camp cannot be removed';

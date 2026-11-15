@@ -131,3 +131,18 @@ test('battalions split in half, by company, by troop type or by hand, and merge 
   S.editBattalion(bat(), { name: 'x'.repeat(60) }); S.splitBattalion(bat(), { kind: 'half' });
   assert.ok(S.getState().battalions.every((b) => b.name.length <= 60));
 });
+
+test('walls and palisades can be removed in bulk: a whole connected stretch, with one refund', () => {
+  const g = S.newGame(), B = (kind: 'wall' | 'palisade' | 'road', x: number, y: number) => ({ id: `${kind}${x},${y}`, kind, x, y, level: 1, at: 0 });
+  const wall = Array.from({ length: 12 }, (_, i) => B('wall', 10 + i, 20)), other = [B('wall', 30, 20), B('palisade', 11, 21), B('road', 10, 19)];
+  S._with({ ...g, res: { gold: 0, wood: 0, stone: 0, renown: 0 }, buildings: [...g.buildings, ...wall, ...other] });
+  const ids = S.connectedOf(S.getState(), 'wall15,20');
+  assert.equal(ids.length, 12, 'the whole wall, not the separate section nor the palisade beside it');
+  const back = wall.reduce((a, b) => add(a, S.refundOf(b)), ZERO);
+  assert.equal(S.demolishMany(ids), null);
+  const s = S.getState();
+  assert.equal(s.buildings.filter((b) => b.kind === 'wall').length, 1); assert.ok(s.buildings.some((b) => b.kind === 'palisade') && s.buildings.some((b) => b.kind === 'road'));
+  assert.deepEqual(s.res, back, 'half the cost back, in one go');
+  assert.equal(s.outbox.ledger.filter((l) => l.kind === 'refund').length, 1, 'one refund row');
+  assert.match(S.demolishMany([g.buildings[0].id]) ?? '', /Nothing/, 'the camp stays');
+});

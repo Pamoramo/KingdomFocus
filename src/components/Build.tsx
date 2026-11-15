@@ -2,7 +2,8 @@
 import { useState } from 'react';
 import { useGame, useUI, mobile } from './hooks.ts';
 import { BUILDINGS, BKINDS, type BKind, type Cat, type Effects } from '../lib/economy.ts';
-import { upgrade, upgradeAll, demolish, canAfford, costOf, lockReason, count } from '../lib/state.ts';
+import { upgrade, upgradeAll, demolish, demolishMany, connectedOf, refundOf, canAfford, costOf, lockReason, count } from '../lib/state.ts';
+import { add, ZERO } from '../lib/rewards.ts';
 import { setUI } from '../game/ui.ts';
 import { drawBuilding, drawTile } from '../game/art/buildings.ts';
 import { Sprite } from './Icon.tsx';
@@ -42,9 +43,12 @@ export function BuildPanel() {
         {sel.kind !== 'camp' && <button className="btn btn-red flex-1" onClick={() => { if (confirm(`Demolish this ${d.name}? Half its cost is refunded.`)) { demolish(sel.id); setUI({ selBuilding: null }); } }}>Demolish</button>}
         <button className="btn flex-1" onClick={() => setUI({ selBuilding: null })}>Back</button>
       </div>
+      {TILES.has(sel.kind) && (() => { const ids = connectedOf(s, sel.id), back = s.buildings.filter((b) => ids.includes(b.id)).reduce((a, b) => add(a, refundOf(b)), { ...ZERO });
+        return ids.length > 1 ? <button className="btn btn-red w-full" onClick={() => { if (confirm(`Remove all ${ids.length} connected ${d.name.toLowerCase()} sections? Half their cost is refunded.`)) { demolishMany(ids); setUI({ selBuilding: null }); } }}>Remove all {ids.length} connected sections (<Cost cost={back} plus />)</button> : null; })()}
     </div>;
   }
   return <div className="space-y-2">
+    <ClearTool />
     <Tabs value={cat} onChange={setCat} items={[['civil', 'Civil'], ['military', 'Military'], ['castle', 'Castle']]} />
     <p className="text-xs opacity-75">Tap a building on the map to upgrade it. Walls, roads, courtyards and moats can be dragged to paint lines.</p>
     {BKINDS.filter((k) => BUILDINGS[k].cat === cat && k !== 'camp').map((k) => {
@@ -59,3 +63,17 @@ export function BuildPanel() {
     })}
   </div>;
 }
+
+const CLEARABLE: [BKind, string][] = [['wall', 'Stone walls'], ['palisade', 'Palisades'], ['road', 'Roads'], ['courtyard', 'Courtyards'], ['moat', 'Moat']];
+/** Clear an area: choose what to remove, then drag a box over the map. Half the cost of everything removed is refunded. */
+function ClearTool() {
+  const ui = useUI(), on = !!ui.clearing?.length, [kinds, setKinds] = useState<BKind[]>(['wall', 'palisade']);
+  const toggle = (k: BKind) => { const next = kinds.includes(k) ? kinds.filter((x) => x !== k) : [...kinds, k]; setKinds(next); if (on) setUI({ clearing: next.length ? next : null }); };
+  return <div className={`card p-2 space-y-1.5 ${on ? 'ring-4 ring-blood' : ''}`}>
+    <div className="flex items-center gap-2"><b className="flex-1 text-sm">Clear an area</b>
+      <button className={`btn !py-0 text-sm ${on ? 'btn-red' : ''}`} disabled={!kinds.length} onClick={() => setUI(on ? { clearing: null } : { clearing: kinds, placing: null, moving: null, selBuilding: null, selBat: null, selArmy: null, panel: mobile() ? null : 'build' })}>{on ? 'Done' : 'Start clearing'}</button></div>
+    <div className="flex flex-wrap gap-1">{CLEARABLE.map(([k, n]) => <label key={k} className="text-xs flex items-center gap-1"><input type="checkbox" checked={kinds.includes(k)} onChange={() => toggle(k)} />{n}</label>)}</div>
+    <p className="text-xs opacity-75">{on ? 'Drag a box over the map to remove everything ticked inside it. Press Done (or Esc) when finished.' : 'Remove many sections at once by dragging a box over them. Half their cost is refunded.'}</p>
+  </div>;
+}
+

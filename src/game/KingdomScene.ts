@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { getState, subscribe, fxBus, type Fx, MAP_W, MAP_H, TILE, CAMP_X, CAMP_Y, canPlace, build, marchTo, marchArmy, moveBuilding, footprint } from '../lib/state.ts';
+import { getState, subscribe, fxBus, type Fx, MAP_W, MAP_H, TILE, CAMP_X, CAMP_Y, canPlace, build, marchTo, marchArmy, moveBuilding, footprint, demolishMany } from '../lib/state.ts';
 import { BUILDINGS, type BKind } from '../lib/economy.ts';
 import { getUI, setUI, subUI, camBus } from './ui.ts';
 import { makeTextures } from './textures.ts';
@@ -54,7 +54,7 @@ export class KingdomScene extends Phaser.Scene {
     this.input.on('wheel', (p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => { const z = (this.zoomGoal?.z ?? cam.zoom) * Math.exp(-Phaser.Math.Clamp(dy, -300, 300) * 0.0012); this.zoomGoal = { z: Phaser.Math.Clamp(z, this.minZoom(), 6), sx: p.x, sy: p.y }; });
     this.scale.on('resize', () => cam.setZoom(Math.max(cam.zoom, this.minZoom())));
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,Q,E,PLUS,MINUS,SHIFT', false) as Record<string, Phaser.Input.Keyboard.Key>;
-    this.input.keyboard!.on('keydown-ESC', () => setUI({ placing: null, moving: null, selBat: null, selArmy: null, selBuilding: null, inspect: null }));
+    this.input.keyboard!.on('keydown-ESC', () => setUI({ clearing: null, placing: null, moving: null, selBat: null, selArmy: null, selBuilding: null, inspect: null }));
 
     this.unsub.push(subscribe(() => this.sync()), subUI(() => this.syncUI()));
     const onFx = (e: Event) => this.fx((e as CustomEvent<Fx>).detail);
@@ -126,6 +126,21 @@ export class KingdomScene extends Phaser.Scene {
     this.drag = { x: p.x, y: p.y, sx: this.cameras.main.scrollX, sy: this.cameras.main.scrollY, moved: false, paint };
     this.lastPaint = '';
     if (paint) this.tryPlace(p);
+    if (ui.clearing?.length) { const t = this.tileAt(p); this.clearFrom = { x: t.tx, y: t.ty }; this.showClear(p); } // the clearing tool: drag a box instead of moving the camera
+  }
+  /** The red box of the clearing tool, from where the drag began to the pointer, and how many tiles it would clear. */
+  private clearFrom: { x: number; y: number } | null = null; private clearBox?: Phaser.GameObjects.Rectangle; private clearLabel?: Phaser.GameObjects.Text;
+  private clearRect(p: Phaser.Input.Pointer) { const a = this.clearFrom!, t = this.tileAt(p); return { x0: Math.min(a.x, t.tx), y0: Math.min(a.y, t.ty), x1: Math.max(a.x, t.tx), y1: Math.max(a.y, t.ty) }; }
+  private clearIds(r: { x0: number; y0: number; x1: number; y1: number }) {
+    const kinds = getUI().clearing ?? [];
+    return getState().buildings.filter((b) => { if (!kinds.includes(b.kind)) return false; const [w, h] = footprint(b.kind); return b.x <= r.x1 && b.x + w - 1 >= r.x0 && b.y <= r.y1 && b.y + h - 1 >= r.y0; }).map((b) => b.id);
+  }
+  private showClear(p: Phaser.Input.Pointer) {
+    const r = this.clearRect(p), n = this.clearIds(r).length;
+    this.clearBox ??= this.add.rectangle(0, 0, 16, 16, 0xff3020, 0.22).setOrigin(0).setStrokeStyle(1.5, 0xff6a50, 1).setDepth(40002);
+    this.clearLabel ??= this.add.text(0, 0, '', { fontFamily: 'monospace', fontSize: '22px', color: '#fff4d6', stroke: '#1d1716', strokeThickness: 5 }).setOrigin(0, 1).setScale(0.4).setDepth(40003);
+    this.clearBox.setVisible(true).setPosition(r.x0 * TILE, r.y0 * TILE).setSize((r.x1 - r.x0 + 1) * TILE, (r.y1 - r.y0 + 1) * TILE);
+    this.clearLabel.setVisible(true).setText(n ? `Remove ${n}` : 'Nothing to remove').setPosition(r.x0 * TILE, r.y0 * TILE - 2);
   }
   private onMove(p: Phaser.Input.Pointer) {
     this.updateGhost(p);
@@ -137,11 +152,17 @@ export class KingdomScene extends Phaser.Scene {
     if (!this.drag || !p.isDown) return;
     if (Math.hypot(p.x - this.drag.x, p.y - this.drag.y) > 6) this.drag.moved = true;
     if (this.drag.paint) { this.tryPlace(p); return; }
+    if (this.clearFrom) { this.showClear(p); return; }
     if (this.drag.moved) { const z = this.cameras.main.zoom; this.cameras.main.setScroll(this.drag.sx - (p.x - this.drag.x) / z, this.drag.sy - (p.y - this.drag.y) / z); }
   }
   private onUp(p: Phaser.Input.Pointer) {
     if (this.pinch) { if (!this.input.pointer1.isDown && !this.input.pointer2.isDown) this.pinch = null; this.drag = null; return; }
     const d = this.drag; this.drag = null;
+    if (this.clearFrom) { // remove everything of the chosen kinds inside the box
+      const ids = this.clearIds(this.clearRect(p)); this.clearFrom = null; this.clearBox?.setVisible(false); this.clearLabel?.setVisible(false);
+      if (ids.length && (ids.length < 4 || confirm(`Remove ${ids.length} sections? Half their cost is refunded.`))) demolishMany(ids);
+      return;
+    }
     if (!d || d.moved || d.paint) return;
     this.tap(p);
   }
