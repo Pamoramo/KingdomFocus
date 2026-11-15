@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { getState, setState, subscribe, newGame, emit, grantCompensation, stableUuid, type GameState } from './state.ts';
+import { upgradeWorld } from './war.ts';
 import { buildPayload, clearSent, outboxEmpty, adoptSnapshot, heldBack, type Snapshot } from './syncCore.ts';
 
 import { SUPABASE_URL as URL, SUPABASE_ANON_KEY as KEY } from './config.ts';
@@ -97,7 +98,7 @@ function compensate(uid: string) {
 let started = false;
 export function initPersistence() {
   if (started) return; started = true;
-  try { const raw = localStorage.getItem(LS); if (raw) { const d = JSON.parse(raw); if (d.v === 2) setState({ ...newGame(), ...d }, false); } } catch { /* corrupt save: start fresh */ }
+  try { const raw = localStorage.getItem(LS); if (raw) { const d = JSON.parse(raw); if (d.v === 2) setState({ ...newGame(), ...d, world: d.world ? upgradeWorld(d.world) : newGame().world }, false); } } catch { /* corrupt save: start fresh */ }
   saveLocal();
   subscribe(() => {
     clearTimeout(saveT); saveT = setTimeout(saveLocal, 250);

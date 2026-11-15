@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
 import { getState, subscribe, maxLevel, type GameState } from '../lib/state.ts';
-import { getUI, setUI, subUI } from './ui.ts';
+import { getUI, setUI, subUI, camBus } from './ui.ts';
 import { worldMap, castleIcon, siegeCamp, engineArt, MAP_PW, MAP_PH } from './art/war.ts';
 import { wagon } from './art/biome.ts';
-import type { Journey } from '../lib/war.ts';
+import { isKnown, reachOf, WORLD_SCALE, type Journey } from '../lib/war.ts';
 import { hdify } from './art/hd.ts';
 import { withoutOutline, hex } from './art/px.ts';
 import { bannerTex, sFrame, bTex, S } from './textures.ts';
@@ -29,27 +29,49 @@ export class WorldScene extends Phaser.Scene {
 
   create() {
     const s = getState(), w = s.world, T = this.textures;
-    const key = `worldmap_${w.seed}`;
+    const key = `worldmap2_${w.seed}`; // v2: the wide world
     if (!T.exists(key)) T.addCanvas(key, hdify(worldMap(w.seed, [HOME, ...w.rivals.map((r) => ({ x: r.x, y: r.y }))]), { rim: false, outline: false, grain: 3 }));
     this.add.image(0, 0, key).setOrigin(0).setScale(K / 2);
     for (const f of [0, 1]) if (!T.exists(`wagon${f}`)) T.addCanvas(`wagon${f}`, hdify(withoutOutline(() => wagon(f))));
     if (!T.exists('camp_icon')) T.addCanvas('camp_icon', hdify(withoutOutline(() => siegeCamp())));
     for (const e of ENGINE_IDS) if (!T.exists(`eng_${e}`)) T.addCanvas(`eng_${e}`, hdify(withoutOutline(() => engineArt(e))));
     // drifting clouds
-    for (let i = 0; i < 7; i++) { const cl = this.add.ellipse(Math.random() * WW, Math.random() * WH, 160 + Math.random() * 120, 50 + Math.random() * 30, 0xffffff, 0.16).setDepth(5000); this.tweens.add({ targets: cl, x: cl.x + 400, duration: 60000 + Math.random() * 40000, repeat: -1, yoyo: true }); }
-    const cam = this.cameras.main; cam.setBounds(-200, -200, WW + 400, WH + 400).setBackgroundColor('#1f4a7a').setZoom(Math.max(this.scale.width / WW, this.scale.height / WH) * 1.05); cam.centerOn(WW / 2, WH / 2);
+    for (let i = 0; i < 24; i++) { const cl = this.add.ellipse(Math.random() * WW, Math.random() * WH, 160 + Math.random() * 120, 50 + Math.random() * 30, 0xffffff, 0.16).setDepth(5000); this.tweens.add({ targets: cl, x: cl.x + 400, duration: 60000 + Math.random() * 40000, repeat: -1, yoyo: true }); }
+    const cam = this.cameras.main; cam.setBounds(-200, -200, WW + 400, WH + 400).setBackgroundColor('#1f4a7a').setZoom(this.homeZoom()); cam.centerOn(WW / 2, WH / 2); // open on your region; zoom out to see the whole world
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => { const ps = [this.input.pointer1, this.input.pointer2].filter((q) => q.isDown); if (ps.length === 2) { this.pinch = { d: Phaser.Math.Distance.Between(ps[0].x, ps[0].y, ps[1].x, ps[1].y), z: cam.zoom }; this.drag = null; return; } this.drag = { x: p.x, y: p.y, sx: cam.scrollX, sy: cam.scrollY, moved: false }; });
     this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
-      if (this.pinch) { const a = this.input.pointer1, b = this.input.pointer2; if (a.isDown && b.isDown) cam.setZoom(Phaser.Math.Clamp(this.pinch.z * Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y) / this.pinch.d, 0.3, 4)); return; }
+      if (this.pinch) { const a = this.input.pointer1, b = this.input.pointer2; if (a.isDown && b.isDown) cam.setZoom(Phaser.Math.Clamp(this.pinch.z * Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y) / this.pinch.d, this.minZoom(), 4)); return; }
       if (!this.drag || !p.isDown) return; if (Math.hypot(p.x - this.drag.x, p.y - this.drag.y) > 6) this.drag.moved = true;
       if (this.drag.moved) cam.setScroll(this.drag.sx - (p.x - this.drag.x) / cam.zoom, this.drag.sy - (p.y - this.drag.y) / cam.zoom);
     });
     this.input.on('pointerup', (p: Phaser.Input.Pointer) => { if (this.pinch) { if (!this.input.pointer1.isDown && !this.input.pointer2.isDown) this.pinch = null; return; } const d = this.drag; this.drag = null; if (d && !d.moved) this.tap(p); });
-    this.input.on('wheel', (_p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.88 : 1.14), 0.3, 4)));
-    this.unsub.push(subscribe(() => this.sync()), subUI(() => this.highlight()));
+    this.input.on('wheel', (_p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.88 : 1.14), this.minZoom(), 4)));
+    const zoomWorld = () => this.toggleWorld(); camBus.addEventListener('world-zoom', zoomWorld);
+    this.unsub.push(subscribe(() => this.sync()), subUI(() => this.highlight()), () => camBus.removeEventListener('world-zoom', zoomWorld));
     this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
     this.time.addEvent({ delay: 400, loop: true, callback: () => { this.frame++; for (const [id, v] of this.sites) { const r = getState().world.rivals.find((x) => x.id === id); v.ban.setTexture(bannerTex(this, r ? r.color : 0xb3242a, r ? r.emblem : 'lion', this.frame % 2)); } } });
     this.sync();
+  }
+  /** Zoomed out just far enough to see the whole world. */
+  minZoom() { return Math.max(this.scale.width / (WW + 400), this.scale.height / (WH + 400)); }
+  /** The home view: your castle and its neighbours (about a league either way). */
+  homeZoom() { return Math.max(this.minZoom(), Math.min(this.scale.width / (WW * 0.46), this.scale.height / (WH * 0.46))); }
+  /** Zoom out to the whole world, or back in to your realm. */
+  toggleWorld() { const cam = this.cameras.main, out = cam.zoom > this.minZoom() * 1.3; cam.zoomTo(out ? this.minZoom() : this.homeZoom(), 600); cam.pan(WW / 2, WH / 2, 600); }
+  /** Uncharted lands lie under fog; it lifts within your reach and around every realm you know. */
+  private fogSig = ''; private fog?: Phaser.GameObjects.RenderTexture; private brush?: Phaser.GameObjects.Image;
+  private drawFog(s: GameState) {
+    const known = s.world.rivals.filter(isKnown), reach = reachOf(s.stage, (s.world.settlements ?? []).length), sig = `${known.map((r) => r.id).join()}|${reach}`;
+    if (sig === this.fogSig) return; this.fogSig = sig;
+    const F = 8, T = this.textures;
+    if (!T.exists('fogbrush')) { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d')!, g = x.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(0.6, 'rgba(0,0,0,0.9)'); g.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64); T.addCanvas('fogbrush', c); }
+    this.fog ??= this.add.renderTexture(-200, -200, (WW + 400) / F, (WH + 400) / F).setOrigin(0).setScale(F).setDepth(5500);
+    this.brush ??= this.make.image({ key: 'fogbrush', add: false });
+    this.fog.clear().fill(0x1a1612, 0.82);
+    // an ellipse in map units is a circle in leagues
+    const clear = (x: number, y: number, lg: number) => { this.brush!.setScale((lg / WORLD_SCALE) * WW * 2.3 / 64 / F, (lg / WORLD_SCALE) * WH * 2.3 / 64 / F); this.fog!.erase(this.brush!, (x * WW + 200) / F, (y * WH + 200) / F); };
+    clear(HOME.x, HOME.y, reach);
+    for (const r of known) clear(r.x, r.y, r.bandits ? 0.2 : 0.3);
   }
   private tap(p: Phaser.Input.Pointer) {
     const wp = this.cameras.main.getWorldPoint(p.x, p.y);
@@ -74,7 +96,9 @@ export class WorldScene extends Phaser.Scene {
     const s = getState(), w = s.world;
     const kl = Math.max(1, maxLevel(s, 'keep'));
     this.place('home', HOME.x * WW, HOME.y * WH, kl, 0xb3242a, s.battalions[0]?.emblem ?? 'lion', 'Your Kingdom');
+    this.drawFog(s);
     for (const r of w.rivals) {
+      if (!isKnown(r)) continue; // beyond your maps
       const tag = r.status === 'vassal' ? ' (vassal)' : r.status === 'ally' ? ' (ally)' : r.status === 'war' ? ' (war)' : '';
       this.place(r.id, r.x * WW, r.y * WH, r.bandits ? 1 : r.level, r.status === 'vassal' ? 0xb3242a : r.color, r.emblem, r.name + tag);
       this.sites.get(r.id)!.label.setColor(r.status === 'war' ? '#ff9a8a' : r.status === 'ally' ? '#a8f0a0' : r.status === 'vassal' ? '#ffe27a' : '#fff4d6');

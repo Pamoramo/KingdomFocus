@@ -1,5 +1,6 @@
 // Pure translation between the local game state and the database sync payload/snapshot.
 import { visibleSubjects } from './state.ts';
+import { upgradeWorld } from './war.ts';
 import type { GameState, StudyRecord, Building, Battalion, Squad, Completion, KEvent, Table } from './state.ts';
 import type { Habit } from './habits.ts';
 import { type Res, ceilingFor, fitsCeiling, minRes, LEGACY_CEILING } from './rewards.ts';
@@ -84,7 +85,7 @@ export function adoptSnapshot(s: GameState, snap: Snapshot): GameState {
     ...s, res: num(snap.balance), lifetime: num(snap.lifetime), sessions, habits, completions: comps,
     buildings: buildings.length ? buildings : s.buildings, battalions, squads, techs: snap.techs as TechId[], events: events.length ? events : s.events,
     stage: Math.max(s.stage, k?.stage ?? 1), achievements: [...new Set([...s.achievements, ...(k?.achievements ?? [])])],
-    world: k?.world ?? s.world,
+    world: k?.world ? upgradeWorld(k.world) : s.world, // a cloud save from before the world grew
     subjects: visibleSubjects([...new Set([...s.subjects, ...(k?.subjects ?? [])])], settings), settings, session, // subjects you removed stay removed
   };
 }

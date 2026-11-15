@@ -2,6 +2,7 @@
 // and how large an army you can feed, but the realm can only hold as many as its stage allows. Pure.
 import type { Res } from './rewards.ts';
 import { hash } from './names.ts';
+import { WORLD_SCALE } from './war.ts';
 
 export type SettleKind = 'village' | 'lumber' | 'mine' | 'market' | 'abbey';
 export const SETTLE: Record<SettleKind, { name: string; levels: [string, string, string]; desc: string; fx: Partial<Record<keyof Res | 'cap', number>>; cost: Res }> = {
@@ -19,7 +20,7 @@ const KIND_ORDER: SettleKind[] = ['village', 'lumber', 'mine', 'market', 'abbey'
 export function sitesFor(seed: number): Site[] {
   let h = hash(`sites:${seed}`); const R = () => ((h = (h * 1664525 + 1013904223) >>> 0) / 4294967296);
   const turn = R() * Math.PI * 2, kinds = [...KIND_ORDER].sort(() => R() - 0.5), names = [...NAMES].sort(() => R() - 0.5);
-  return kinds.map((kind, i) => { const a = turn + (i / kinds.length) * Math.PI * 2 + (R() - 0.5) * 0.4, d = 0.1 + R() * 0.08;
+  return kinds.map((kind, i) => { const a = turn + (i / kinds.length) * Math.PI * 2 + (R() - 0.5) * 0.4, d = (0.1 + R() * 0.08) / WORLD_SCALE; // about a quarter league out
     return { id: `site${i}`, x: 0.5 + Math.cos(a) * d * 1.1, y: 0.5 + Math.sin(a) * d, kind, name: names[i] }; });
 }
 /** How many settlements a kingdom of this stage can hold. */

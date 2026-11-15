@@ -2,11 +2,11 @@
 import { useState } from 'react';
 import { useGame, useUI, useNow, clock, fmt, hex, mobile } from './hooks.ts';
 import { BIOME_NAME, CASTLE_NAME, biomeOf, realmLayout } from '../lib/realms.ts';
-import { setUI } from '../game/ui.ts';
+import { setUI, toggleWorldView } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
-import { type Res } from '../lib/rewards.ts';
+import { type Res, canAfford } from '../lib/rewards.ts';
 import { TACTICS, TERRAINS, tacticLock, sidePower, type Tactic, type Terrain } from '../lib/battle.ts';
-import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, fieldSpoils, conquestSpoils, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, type Rival, type Engines, type Stance } from '../lib/war.ts';
+import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, type Rival, type Engines, type Stance } from '../lib/war.ts';
 import * as WA from '../lib/warActions.ts';
 import { courtOf, courtFx } from '../lib/politics.ts';
 import { engineArt } from '../game/art/war.ts';
@@ -63,14 +63,31 @@ function Realms() {
   const s = useGame(), mine = WA.myPower(s);
   return <div className="space-y-2">
     <Outposts />
-    <p className="text-sm">Your army's strength: <b>{fmt(mine)}</b>. Trade, gifts and sending troops build trust. At 60 relations a kingdom will ally with you.</p>
-    {s.world.rivals.map((r) => <button key={r.id} className="card p-2 w-full text-left flex gap-2 items-center" onClick={() => setUI({ selRival: r.id })}>
+    <Dominion />
+    <p className="text-sm">Your army's strength: <b>{fmt(mine)}</b>. Trade, gifts and sending troops build trust. At 60 relations a kingdom will ally with you. The farther a kingdom, the less it has to do with you.</p>
+    {(['neighbour', 'distant', 'far'] as Tier[]).map((t) => { const list = s.world.rivals.filter((r) => isKnown(r) && tierOf(r) === t).sort((a, b) => leagues(a) - leagues(b)); return list.length ? <div key={t} className="space-y-1.5">
+      <div className="text-sm font-bold pt-1">{TIER[t].name}s <span className="text-xs font-normal opacity-70">{TIER[t].desc}</span></div>
+    {list.map((r) => <button key={r.id} className="card p-2 w-full text-left flex gap-2 items-center" onClick={() => setUI({ selRival: r.id })}>
       <Banner color={r.color} emblem={r.emblem} scale={1.5} />
       <span className="flex-1 min-w-0"><b>{r.name}</b> <span className="text-xs opacity-70">{STATUS[r.status]}{r.bandits ? ' · outlaws' : ` · ${r.personality}`}</span>
         <span className="block text-xs">{strengthText(mine, r.power)} · castle level {r.level}</span>
         {!r.bandits && <span className="flex items-center gap-2 text-xs"><span className="w-24 h-2 bg-black/15 rounded-sm overflow-hidden"><span className={`block h-full ${relColor(r.relation)}`} style={{ width: `${(r.relation + 100) / 2}%` }} /></span>{relationLabel(r.relation)} ({r.relation})</span>}</span>
-    </button>)}
+      <span className="text-xs opacity-70 whitespace-nowrap">{leagues(r).toFixed(1)} lg</span>
+    </button>)}</div> : null; })}
   </div>;
+}
+/** How much of the world you know and hold, and the expedition that pushes your maps outward. */
+function Dominion() {
+  const s = useGame(), all = s.world.rivals.filter((r) => !r.bandits), known = all.filter(isKnown), vassals = all.filter((r) => r.status === 'vassal').length, allies = all.filter((r) => r.status === 'ally').length;
+  const next = WA.nextUncharted(s), cost = WA.expeditionCost(s), out = (s.world.journeys ?? []).find((j) => j.kind === 'explore');
+  return <Section title="The known world" right={<button className="btn !py-0 text-xs" onClick={() => { setUI({ view: 'world' }); setTimeout(toggleWorldView, 300); }}>Whole map</button>}>
+    <div className="grid grid-cols-3 gap-1 text-center text-xs">
+      <div><b className="text-lg block leading-none">{known.length}/{all.length}</b>realms charted</div><div><b className="text-lg block leading-none">{allies}</b>allies</div><div><b className="text-lg block leading-none">{vassals}/{all.length}</b>vassals</div></div>
+    <Bar value={known.length} max={all.length} color="bg-moss" />
+    <p className="text-xs opacity-75">Your maps reach {reachOf(s.stage, (s.world.settlements ?? []).length).toFixed(2)} leagues. They grow as your castle grows and you found settlements; allies and vassals share their maps.</p>
+    {next ? out ? <p className="text-sm italic">Your explorers are on their way into uncharted lands.</p> : <div className="flex items-center gap-2 text-sm"><span className="flex-1">Send an expedition beyond your maps: <Cost cost={cost} have={s.res} /></span><button className="btn btn-gold !py-0" disabled={!canAfford(s.res, cost)} onClick={() => WA.sendExpedition()}>Explore</button></div>
+      : <p className="text-sm">Your maps show the whole world.</p>}
+  </Section>;
 }
 
 function RivalDetail({ r }: { r: Rival }) {
@@ -82,6 +99,7 @@ function RivalDetail({ r }: { r: Rival }) {
       <div className="text-sm flex-1"><h3 className="font-title text-3xl leading-none">{r.name}</h3><div>Ruled by {r.ruler}</div><div className="opacity-80">{r.bandits ? 'Outlaws who raid the borderlands. They will not parley.' : PERSONALITY_TEXT[r.personality]}</div>
         <div>{STATUS[r.status]} · {strengthText(mine, r.power)} (≈{fmt(r.power)}) · walls {r.wallMax}</div>
         <div>{BIOME_NAME[biomeOf(s.world, r)]} · {CASTLE_NAME[realmLayout(s.world, r).type]} · {realmLayout(s.world, r).wealth} realm</div>
+        <div className="text-xs opacity-80">{TIER[tierOf(r)].name}, {leagues(r).toFixed(1)} leagues away: {TIER[tierOf(r)].desc}</div>
         <button className="btn btn-gold !py-0.5 mt-1" onClick={() => setUI({ view: 'rival', visit: r.id, panel: mobile() ? null : 'world' })}>Visit {r.name}</button>
         {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}</div></div>
     {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +{Math.round(VASSAL_GOLD * 100)}% gold and +{Math.round(VASSAL_RENOWN * 100)}% renown from every study session (all vassals together give at most +{Math.round(VASSAL_GOLD_MAX * 100)}% gold).</p> : <>

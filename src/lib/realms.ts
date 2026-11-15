@@ -11,7 +11,10 @@ const ORDER: Biome[] = ['grassland', 'desert', 'tundra', 'forest', 'swamp', 'hig
 /** Each kingdom gets a different biome (stable for a given world); the bandits hide in the highlands. */
 export function biomeOf(w: Pick<WorldState, 'seed' | 'rivals'>, r: Pick<Rival, 'id' | 'bandits'>): Biome {
   if (r.bandits) return 'highlands';
-  const kingdoms = w.rivals.filter((x) => !x.bandits), i = Math.max(0, kingdoms.findIndex((x) => x.id === r.id));
+  // the wide world beyond your old horizon: snow in the north, sand in the south
+  const full = w.rivals.find((x) => x.id === r.id);
+  if (full && /^w\d/.test(full.id)) { const h = hash(r.id + w.seed) % 2; return full.y < 0.3 ? (h ? 'tundra' : 'highlands') : full.y > 0.7 ? (h ? 'desert' : 'swamp') : (['grassland', 'forest', 'highlands', 'swamp'] as Biome[])[hash(r.id + w.seed) % 4]; }
+  const kingdoms = w.rivals.filter((x) => !x.bandits && !/^w\d/.test(x.id)), i = Math.max(0, kingdoms.findIndex((x) => x.id === r.id));
   const shuffled = [...ORDER].sort((a, b) => (hash(a + w.seed) % 997) - (hash(b + w.seed) % 997));
   return shuffled[i % shuffled.length];
 }

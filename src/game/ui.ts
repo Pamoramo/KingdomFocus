@@ -10,3 +10,5 @@ export const subUI = (l: () => void) => (ls.add(l), () => { ls.delete(l); });
 /** Lets React ask the scene to pan the camera. */
 export const camBus = new EventTarget();
 export const focusOn = (x: number, y: number) => camBus.dispatchEvent(new CustomEvent('focus', { detail: { x, y } }));
+/** Asks the world map to zoom out to the whole world (or back to your realm). */
+export const toggleWorldView = () => camBus.dispatchEvent(new Event('world-zoom'));

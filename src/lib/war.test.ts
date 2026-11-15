@@ -37,7 +37,8 @@ test('enemy sieges only come when strong (stage 4) or deeply hated; absences cap
   w = { ...w, lastDay: '2026-01-01', rivals: w.rivals.map((r) => ({ ...r, relation: r.bandits ? r.relation : 0, status: r.bandits ? 'war' : 'neutral' })) };
   for (let i = 0; i < 30; i++) { const day = `2026-01-${String(i + 2).padStart(2, '0')}`; w = advanceDays({ ...w, threat: null }, { stage: 2, myPower: 10, fort: 0, active: true }, day); assert.equal(w.threat, null, 'no siege on a young realm without hatred'); }
   const hated: WorldState = { ...w, lastDay: '2026-02-01', rivals: w.rivals.map((r, i) => (i === 1 ? { ...r, relation: -90 } : r)) };
-  let got = false; for (let i = 2; i < 28 && !got; i++) got = !!advanceDays({ ...hated, threat: null }, { stage: 1, myPower: 10, fort: 0, active: true }, `2026-02-${String(i).padStart(2, '0')}`).threat;
+  // day by day, so warnings have time to come true (some are false alarms)
+  let got = false, h: WorldState = hated; for (let i = 2; i < 28 && !got; i++) { h = advanceDays({ ...h, threat: null }, { stage: 1, myPower: 10, fort: 0, active: true }, `2026-02-${String(i).padStart(2, '0')}`); got = !!h.threat; }
   assert.ok(got, 'a hated realm eventually attacks');
   const p0 = w.rivals[2].power, far = advanceDays(w, { stage: 2, myPower: 10, fort: 0, active: false }, '2027-06-01');
   assert.ok(far.rivals[2].power < p0 * 1.06, 'long absence only counts up to 3 days');

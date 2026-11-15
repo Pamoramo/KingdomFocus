@@ -5,7 +5,7 @@ import { courtOf, courtFx, adjust } from './politics.ts';
 import { rating, lossFactor, has as hasTrait, praiseReady, styled, battleCry, type BattleKind } from './commanders.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
-import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
+import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
 import { RANKS, OFFICERS } from './economy.ts';
 
@@ -69,9 +69,31 @@ function play(title: string, a: Unit[], b: Unit[], result: BattleResult, aName: 
 }
 
 // ---------------- daily world turn & study hooks ----------------
+/** Charts kingdoms that have come within your reach, and announces them. */
+export const discoverTick = () => {
+  const s = getState(), { w, found } = discover(s.world, s.stage, (s.world.settlements ?? []).length);
+  if (!found.length) return;
+  for (const r of found) emit({ kind: 'achieve', text: `Your mapmakers chart a new realm: ${r.name}, ruled by ${r.ruler}.` });
+  setState(event(W(s, w), 'diplomacy', `Charted ${found.map((r) => r.name).join(', ')}.`));
+};
+/** Cost of an expedition: dearer as your maps grow. */
+export const expeditionCost = (s: GameState) => { const known = s.world.rivals.filter(isKnown).length; return { gold: 150 + known * 30, wood: 60 }; };
+/** The nearest kingdom your maps do not show, if any. */
+export const nextUncharted = (s: GameState) => s.world.rivals.filter((r) => !isKnown(r)).sort((a, b) => leagues(a) - leagues(b))[0];
+/** Sends explorers toward the nearest uncharted kingdom; they chart it when they arrive. */
+export const sendExpedition = () => update((s) => {
+  const r = nextUncharted(s); if (!r) return 'Your maps show the whole world';
+  if ((s.world.journeys ?? []).some((j) => j.kind === 'explore')) return 'An expedition is already out';
+  const cost = expeditionCost(s); if (!canAfford(s.res, cost)) return 'Not enough resources';
+  const dir = (r.y < 0.45 ? 'north' : r.y > 0.55 ? 'south' : '') + (r.x < 0.45 ? 'west' : r.x > 0.55 ? 'east' : '');
+  emit({ kind: 'info', text: `Your explorers set out to the ${dir || 'horizon'}.` });
+  return event(sendTo(spend(s, cost), 'explore', r, `Explorers heading ${dir || 'out'} into uncharted lands`, { data: { rival: r.id } }), 'diplomacy', `Sent an expedition into uncharted lands to the ${dir}.`);
+});
 export const worldTick = () => {
   const s0 = getState(), today = dayStr();
-  if (s0.world.outpostDay !== today) setState(W(s0, refreshOutposts(s0.world, s0.stage, today))); // bandits pitch a new camp each day
+  if ((s0.world.v ?? 1) < 2) setState(W(s0, upgradeWorld(s0.world))); // the world grows
+  discoverTick();
+  if (getState().world.outpostDay !== today) setState(W(getState(), refreshOutposts(getState().world, getState().stage, today))); // bandits pitch a new camp each day
   const s = getState();
   if (s.world.lastDay === today) return;
   const w = advanceDays(s.world, { stage: s.stage, myPower: myPower(s), fort: fortOf(s), active: true, neglect: neglect(s) }, today);
@@ -237,6 +259,16 @@ export const journeysTick = (now = Date.now()) => {
     for (const j of due) {
       const r = rival(o, j.rival)!, d = (j.data ?? {}) as Record<string, never>;
       if (j.kind === 'raid') { o = raidArrives(o, j); continue; }
+      if (j.kind === 'explore') {
+        const id = (j.data as { rival?: string })?.rival, found = o.world.rivals.find((x) => x.id === id);
+        if (found && !isKnown(found)) {
+          o = W(o, { ...o.world, rivals: o.world.rivals.map((x) => (x.id === id ? { ...x, known: true } : x)) });
+          o = ledger(o, 'loot', `explore:${id}`, { ...ZERO, renown: 10 + Math.round(leagues(found) * 10) });
+          emit({ kind: 'achieve', text: `Your explorers have found ${found.name}, a ${found.level >= 4 ? 'mighty' : 'proud'} realm ruled by ${found.ruler}!`, res: { renown: 10 + Math.round(leagues(found) * 10) } });
+          o = event(o, 'diplomacy', `Explorers charted ${found.name}.`);
+        }
+        continue;
+      }
       if (j.kind === 'reinforce') { o = reinforcementsArrive(o, j, r); continue; }
       if (j.kind === 'caravan') {
         o = W(o, shiftRelations(o.world, r.id, d.rel, false));

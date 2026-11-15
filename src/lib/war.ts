@@ -13,6 +13,8 @@ export interface Rival {
   id: string; name: string; ruler: string; personality: Personality; color: number; emblem: string;
   x: number; y: number; terrain: Terrain; level: number; power: number; garrison: number; wallMax: number;
   relation: number; status: RStatus; trades: number; lastTradeDay: string; bandits?: boolean; friends: string[]; foes: string[]; beaten?: number;
+  /** false until your mapmakers have charted it (older saves: undefined = known) */
+  known?: boolean;
 }
 export type Engine = 'ram' | 'mangonel' | 'tower' | 'ballista' | 'trebuchet';
 export const ENGINES: Record<Engine, { name: string; cost: Partial<Res>; siege: number; bombard: number; desc: string }> = {
@@ -38,13 +40,13 @@ export interface Warning { id: string; rival: string; issued: string; due: strin
 export interface Missive { id: string; rival: string; kind: 'tribute_demand' | 'trade_offer' | 'aid_request' | 'alliance_offer' | 'peace_offer' | 'news'; text: string; amount?: number; day: string }
 export interface Loan { bat: string; rival: string; leftMin: number }
 export interface Report { id: string; t: number; title: string; win: boolean; lines: string[]; you: number; foe: number; lostYou: number; lostFoe: number; loot?: Partial<Res> }
-export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'return' | 'reinforce' | 'raid';
+export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'return' | 'reinforce' | 'raid' | 'explore';
 /** Someone on the road between your kingdom and another. Effects apply when they arrive. */
 /** `to` is set for places that are not a realm (bandit outposts); otherwise the journey runs to the rival's castle. */
 export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown>; to?: { x: number; y: number } }
 /** A small bandit camp on the road: easy prey with a small purse. */
 export interface Outpost { id: string; name: string; x: number; y: number; power: number; loot: Res; biome: 'grassland' | 'forest' | 'highlands' | 'swamp' }
-export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[] }
+export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number }
 
 export const SIEGE_DAY_MIN = 20;          // verified study minutes per siege day
 export const SUPPLY_COST = { gold: 15, wood: 5 }; // buys 10 supplies
@@ -56,6 +58,68 @@ const TERRAINS: Terrain[] = ['plains', 'forest', 'hills', 'river', 'marsh'];
 export const relationLabel = (r: number) => (r >= 60 ? 'Trusted' : r >= 25 ? 'Friendly' : r > -25 ? 'Neutral' : r > -50 ? 'Unfriendly' : 'Hostile');
 const clamp = (v: number, a = -100, b = 100) => Math.max(a, Math.min(b, v));
 function rng(seed: number) { return () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296); }
+// ---------------- the wide world: distance, tiers, discovery ----------------
+/** The map is this many times the width of your home region. Positions are fractions of the whole map. */
+export const WORLD_SCALE = 2.6;
+/** Distance from your castle in leagues (your old neighbours sit 0.3 to 0.45 away; the edge of the world about 1.25). */
+export const leagues = (p: { x: number; y: number }) => Math.hypot((p.x - 0.5) * WORLD_SCALE, (p.y - 0.5) * WORLD_SCALE);
+export type Tier = 'neighbour' | 'distant' | 'far';
+/** The farther a kingdom, the less it has to do with you. */
+export const tierOf = (r: Pick<Rival, 'x' | 'y' | 'bandits'>): Tier => (r.bandits || leagues(r) < 0.6 ? 'neighbour' : leagues(r) < 1.0 ? 'distant' : 'far');
+export const TIER: Record<Tier, { name: string; desc: string; weight: number }> = {
+  neighbour: { name: 'Neighbour', desc: 'On your borders: they trade, quarrel, ally and invade.', weight: 1 },
+  distant: { name: 'Distant realm', desc: 'Days away: they deal with you now and then, and only march on you if at war.', weight: 0.45 },
+  far: { name: 'Far kingdom', desc: 'At the edge of the world: great powers who barely notice you, for now.', weight: 0.15 },
+};
+export const isKnown = (r: Pick<Rival, 'known'>) => r.known !== false;
+/** How far your mapmakers' knowledge reaches: grows with your castle, your settlements, allies and vassals. */
+export const reachOf = (stage: number, settlements = 0) => 0.6 + 0.1 * (Math.max(1, stage) - 1) + 0.03 * settlements;
+/** Charts kingdoms within reach, and those near your allies and vassals (who share their maps). */
+export function discover(w: WorldState, stage: number, settlements = 0): { w: WorldState; found: Rival[] } {
+  const reach = reachOf(stage, settlements), friends = w.rivals.filter((r) => isKnown(r) && (r.status === 'ally' || r.status === 'vassal')), found: Rival[] = [];
+  const rivals = w.rivals.map((r) => {
+    if (isKnown(r)) return r;
+    if (leagues(r) <= reach || friends.some((f) => Math.hypot((f.x - r.x) * WORLD_SCALE, (f.y - r.y) * WORLD_SCALE) < 0.5)) { const k = { ...r, known: true }; found.push(k); return k; }
+    return r;
+  });
+  return found.length ? { w: { ...w, rivals }, found } : { w, found };
+}
+const MORE_NAMES = ['Aldermoor', 'Brennhall', 'Caer Lowen', 'Dravensfeld', 'Eldmark', 'Frosthaven', 'Galvorn', 'Harrowgate', 'Isenwald', 'Jorvik', 'Kestrelmount', 'Lyonesse', 'Marrowdeep', 'Northmere', 'Ostervald', 'Penmarch', 'Quellmoor', 'Ravenspire', 'Sundermere', 'Tamsk', 'Umberfall', 'Varrowmoor', 'Wyrmhold', 'Ystrad'];
+const MORE_COLORS = [0x5a7a2a, 0x2a6a8a, 0x8a5a2a, 0x6a2a5a, 0x2a2a7a, 0x9a3a2a, 0x3a7a6a, 0x7a6a2a, 0x5a3a8a, 0x8a2a3a, 0x2a5a4a, 0x6a6a6a, 0x9a6a3a, 0x3a4a7a];
+const MORE_EMBLEMS = ['griffin', 'crown', 'lion', 'sword', 'eagle', 'stag', 'tower', 'cross', 'dragon', 'star'];
+const PERS_ALL: Personality[] = ['aggressive', 'mercantile', 'honorable', 'treacherous', 'pious'];
+/** Kingdoms beyond your old horizon: a ring of distant realms and a ring of far, older, richer powers. */
+function wideKingdoms(seed: number, existing: Rival[]): Rival[] {
+  const R = rng(seed * 7 + 991), used = new Set(existing.map((r) => r.name)), names = MORE_NAMES.filter((n) => !used.has(n)).sort(() => R() - 0.5), out: Rival[] = [];
+  const all = () => [...existing, ...out];
+  const ring = (n: number, d0: number, d1: number, l0: number, l1: number) => {
+    const turn = R() * Math.PI * 2;
+    for (let i = 0; i < n; i++) {
+      let x = 0, y = 0;
+      for (let t = 0; t < 30; t++) { // keep realms apart and on the map
+        const a = turn + (i / n) * Math.PI * 2 + (R() - 0.5) * 0.5, d = (d0 + R() * (d1 - d0)) / WORLD_SCALE;
+        x = Math.min(0.94, Math.max(0.06, 0.5 + Math.cos(a) * d)); y = Math.min(0.92, Math.max(0.08, 0.5 + Math.sin(a) * d * 0.95));
+        if (all().every((r) => Math.hypot((r.x - x) * WORLD_SCALE, (r.y - y) * WORLD_SCALE) > 0.28)) break;
+      }
+      const k = out.length, name = names[k % names.length], level = Math.min(5, l0 + Math.floor(R() * (l1 - l0 + 1))), pers = PERS_ALL[Math.floor(R() * PERS_ALL.length)];
+      const power = Math.round(120 * level ** 2.2 * (0.9 + R() * 0.7));
+      out.push({ id: 'w' + k, name, ruler: nameFor(name + seed), personality: pers, color: MORE_COLORS[k % MORE_COLORS.length], emblem: MORE_EMBLEMS[k % MORE_EMBLEMS.length], x, y,
+        terrain: TERRAINS[Math.floor(R() * TERRAINS.length)], level, power, garrison: Math.round(power * 0.4), wallMax: Math.round(200 * level ** 1.5),
+        relation: Math.round(BASE[pers] * 0.5 + R() * 10 - 5), status: 'neutral', trades: 0, lastTradeDay: '', friends: [], foes: [], known: false });
+    }
+  };
+  ring(6, 0.66, 0.95, 2, 4); ring(8, 1.02, 1.25, 3, 5);
+  for (let i = 0; i < out.length; i++) for (let j = i + 1; j < out.length; j++) { const v = R(); if (v < 0.18) { out[i].friends.push(out[j].id); out[j].friends.push(out[i].id); } else if (v > 0.85) { out[i].foes.push(out[j].id); out[j].foes.push(out[i].id); } }
+  return out;
+}
+/** Version 2: the world grows. Your old region shrinks to the middle of a far larger map (distances in leagues stay the same) and new kingdoms appear beyond it. */
+export function upgradeWorld(w: WorldState): WorldState {
+  if ((w.v ?? 1) >= 2) return w;
+  const sc = <T extends { x: number; y: number }>(p: T): T => ({ ...p, x: 0.5 + (p.x - 0.5) / WORLD_SCALE, y: 0.5 + (p.y - 0.5) / WORLD_SCALE });
+  const rivals = w.rivals.map((r) => ({ ...sc(r), known: true }));
+  return { ...w, v: 2, rivals: [...rivals, ...wideKingdoms(w.seed, rivals)], outposts: w.outposts?.map(sc), journeys: w.journeys?.map((j) => (j.to ? { ...j, to: sc(j.to) } : j)) };
+}
+
 export const dayStr = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 export function initWorld(seed: number): WorldState {
@@ -69,7 +133,7 @@ export function initWorld(seed: number): WorldState {
       relation: BASE[PERS[i]] + Math.round(R() * 20 - 10), status: 'neutral', trades: 0, lastTradeDay: '', friends: [], foes: [] });
   }
   for (let i = 1; i < rivals.length; i++) for (let j = i + 1; j < rivals.length; j++) { const v = R(); if (v < 0.25) { rivals[i].friends.push(rivals[j].id); rivals[j].friends.push(rivals[i].id); } else if (v > 0.8) { rivals[i].foes.push(rivals[j].id); rivals[j].foes.push(rivals[i].id); } }
-  return { seed, lastDay: dayStr(), rivals, engines: { ...NO_ENGINES }, supplies: 50, campaign: null, threat: null, inbox: [], loans: [], reports: [], conquests: 0 };
+  return upgradeWorld({ seed, lastDay: dayStr(), rivals, engines: { ...NO_ENGINES }, supplies: 50, campaign: null, threat: null, inbox: [], loans: [], reports: [], conquests: 0 });
 }
 
 /** Enemy army composition matching a power level and castle level. */
@@ -93,7 +157,7 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
   for (let d = 0; d < days; d++) for (const r of out.rivals) {
     if (r.status === 'vassal') { r.relation = clamp(r.relation + 1); continue; }
     const base = BASE[r.personality] - (r.personality === 'aggressive' ? (ctx.stage - 1) * 4 : 0) + (r.status === 'ally' ? 30 : 0);
-    r.relation = clamp(Math.round(r.relation + Math.sign(base - r.relation) * Math.min(2, Math.abs(base - r.relation))));
+    r.relation = clamp(Math.round(r.relation + Math.sign(base - r.relation) * Math.min(tierOf(r) === 'far' ? 1 : 2, Math.abs(base - r.relation)))); // far kingdoms barely think of you
     if (r.personality === 'treacherous' && R() < 0.3) r.relation = clamp(r.relation - 3);
     r.power = Math.round(r.power * (1 + (r.personality === 'aggressive' ? 0.015 : 0.008)) + (r.bandits ? 2 : 0));
     r.garrison = Math.max(r.garrison, Math.round(r.power * 0.4));
@@ -101,21 +165,21 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
   }
   // a lord who neglects their studies looks weak: warlike neighbours grow bolder each idle day past the grace period
   const n = ctx.neglect ?? 0;
-  if (n > 0) for (const r of out.rivals) if (!r.bandits && r.status !== 'vassal' && r.status !== 'ally' && (r.personality === 'aggressive' || r.personality === 'treacherous')) r.relation = clamp(r.relation - Math.min(12, 3 * n));
+  if (n > 0) for (const r of out.rivals) if (!r.bandits && isKnown(r) && tierOf(r) !== 'far' && r.status !== 'vassal' && r.status !== 'ally' && (r.personality === 'aggressive' || r.personality === 'treacherous')) r.relation = clamp(r.relation - Math.min(12, 3 * n) * TIER[tierOf(r)].weight);
   if (!ctx.active) return out;
   if (n > 0) {
-    const foe = out.rivals.filter((r) => !r.bandits && r.status !== 'vassal' && r.status !== 'ally').sort((a, b) => a.relation - b.relation)[0];
+    const foe = out.rivals.filter((r) => !r.bandits && isKnown(r) && tierOf(r) === 'neighbour' && r.status !== 'vassal' && r.status !== 'ally').sort((a, b) => a.relation - b.relation)[0];
     if (foe) out.inbox.push({ id: `${today}-neglect`, rival: foe.id, kind: 'news', day: today, text: n >= 3
       ? `${foe.ruler} of ${foe.name} writes: "Your halls fall silent and your scholars idle. Study, or we will come for your lands."`
       : `Word spreads that your studies have lapsed. ${foe.name} watches your borders with interest.` });
   }
   // diplomatic events (only processed when the player is actually present)
-  for (const r of out.rivals.filter((x) => !x.bandits && x.status !== 'vassal')) {
-    const roll = R(), id = `${today}-${r.id}`;
+  for (const r of out.rivals.filter((x) => !x.bandits && x.status !== 'vassal' && isKnown(x))) {
+    const tier = tierOf(r), roll = R() / TIER[tier].weight, id = `${today}-${r.id}`; // the farther they are, the rarer their letters
     if (r.status === 'ally' && roll < 0.15) out.inbox.push({ id, rival: r.id, kind: 'aid_request', text: `${r.name} asks for troops against their enemies.`, day: today });
     else if (r.personality === 'mercantile' && r.relation > 0 && roll < 0.25) out.inbox.push({ id, rival: r.id, kind: 'trade_offer', text: `${r.name} offers a favourable trade.`, amount: 200 + r.level * 100, day: today });
     else if (r.relation >= 60 && r.status === 'neutral' && roll < 0.3) out.inbox.push({ id, rival: r.id, kind: 'alliance_offer', text: `${r.ruler} of ${r.name} proposes an alliance.`, day: today });
-    else if (r.personality === 'aggressive' && r.relation < 0 && r.power > ctx.myPower && roll < 0.2) out.inbox.push({ id, rival: r.id, kind: 'tribute_demand', text: `${r.name} demands tribute.`, amount: Math.round(100 * r.level + ctx.stage * 80), day: today });
+    else if (tier === 'neighbour' && r.personality === 'aggressive' && r.relation < 0 && r.power > ctx.myPower && roll < 0.2) out.inbox.push({ id, rival: r.id, kind: 'tribute_demand', text: `${r.name} demands tribute.`, amount: Math.round(100 * r.level + ctx.stage * 80), day: today });
   }
   // invasions come with warning: scouts and spies report hosts gathering; some reports come to nothing
   let warnings = (out.warnings ?? []).filter((x) => x.due >= dayStr(new Date(now.getTime() - 2 * 864e5)));
@@ -131,7 +195,8 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
   warnings = warnings.filter((x) => x.due > today);
   if (!out.threat && !out.campaign) {
     // the real danger: a kingdom at odds with you (only once you are a fortress), or one that truly hates you
-    const angry = out.rivals.filter((r) => !r.bandits && r.status !== 'vassal' && r.status !== 'ally' && !warnings.some((x) => x.rival === r.id) && (r.relation <= -50 || (ctx.stage >= 4 && (r.status === 'war' || (r.personality === 'aggressive' && r.relation < -20)))));
+    const reachable = (r: Rival) => isKnown(r) && (tierOf(r) === 'neighbour' || (tierOf(r) === 'distant' && r.status === 'war')); // far kingdoms do not march across the world for you
+    const angry = out.rivals.filter((r) => !r.bandits && reachable(r) && r.status !== 'vassal' && r.status !== 'ally' && !warnings.some((x) => x.rival === r.id) && (r.relation <= -50 || (ctx.stage >= 4 && (r.status === 'war' || (r.personality === 'aggressive' && r.relation < -20)))));
     const foe = angry.sort((a, b) => a.relation - b.relation)[0];
     if (foe && R() < (foe.personality === 'aggressive' ? 0.45 : 0.3)) {
       if (R() < 0.06) { // rarely, no one sees them coming
@@ -140,11 +205,23 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
       } else warnings.push(warning(foe, today, 0.45 + R() * 0.4, R));
     }
     // rumours: some reports are about kingdoms that merely mistrust you
-    const uneasy = out.rivals.filter((r) => !r.bandits && r.status !== 'vassal' && r.status !== 'ally' && r.relation < 10 && !warnings.some((x) => x.rival === r.id));
+    const uneasy = out.rivals.filter((r) => !r.bandits && reachable(r) && r.status !== 'vassal' && r.status !== 'ally' && r.relation < 10 && !warnings.some((x) => x.rival === r.id));
     if (uneasy.length && R() < 0.12) warnings.push(warning(uneasy[Math.floor(R() * uneasy.length)], today, 0.1 + R() * 0.2, R));
   }
   for (const wr of warnings) if (wr.issued === today && !(w.warnings ?? []).some((x) => x.id === wr.id)) out.inbox.push({ id: `${wr.id}-news`, rival: wr.rival, kind: 'news', text: wr.text, day: today });
   out.warnings = warnings;
+  // news from afar: the wide world goes on without you, and hints at what lies beyond your maps
+  if (R() < 0.3) {
+    const far = out.rivals.filter((r) => !r.bandits && tierOf(r) !== 'neighbour'), r = far[Math.floor(R() * far.length)];
+    if (r) {
+      const dir = (r.y < 0.4 ? 'north' : r.y > 0.6 ? 'south' : '') + (r.x < 0.4 ? 'west' : r.x > 0.6 ? 'east' : ''), foe = out.rivals.find((x) => r.foes.includes(x.id) && isKnown(x));
+      const text = !isKnown(r) ? `Travellers speak of a great kingdom far to the ${dir || 'distance'}, beyond your maps. Grow your realm, or send an expedition, to find it.`
+        : foe && R() < 0.5 ? `News from afar: ${r.name} and ${foe.name} skirmish along their border.`
+        : R() < 0.5 ? `News from afar: ${r.name} raises new towers; ${r.ruler} grows ever stronger.` : `A merchant from ${r.name} tells of their markets and their king, ${r.ruler}.`;
+      if (isKnown(r)) r.power = Math.round(r.power * 1.01);
+      out.inbox.push({ id: `${today}-afar`, rival: r.id, kind: 'news', day: today, text });
+    }
+  }
   return out;
 }
 
@@ -162,13 +239,14 @@ const VALUE: Record<keyof Res, number> = { gold: 1, wood: 1.5, stone: 2.5, renow
 export const valueOf = (r: Partial<Res>) => (Object.keys(r) as (keyof Res)[]).reduce((a, k) => a + (r[k] ?? 0) * VALUE[k], 0);
 /** Trade: give one resource, receive another at a rate that improves with relations and merchants. */
 export function tradeQuote(r: Rival, give: keyof Res, amount: number, want: keyof Res, bonus = 0) {
-  const rate = 0.75 + Math.max(0, r.relation) / 400 + (r.personality === 'mercantile' ? 0.15 : 0) + (r.status === 'ally' ? 0.05 : 0) + bonus;
+  const rate = 0.75 + Math.max(0, r.relation) / 400 + (r.personality === 'mercantile' ? 0.15 : 0) + (r.status === 'ally' ? 0.05 : 0) + bonus - Math.max(0, leagues(r) - 0.6) * 0.15; // goods carried far cost more
   const got = Math.floor((amount * VALUE[give] * rate) / VALUE[want]);
   const rel = Math.min(8, 1 + Math.round((amount * VALUE[give]) / (150 * r.level)));
   return { got, rel, rate };
 }
 export function canTrade(r: Rival, today = dayStr()) {
   if (r.bandits) return 'Bandits do not trade';
+  if (r.known === false) return 'You have not charted their lands';
   if (r.status === 'war') return 'You are at war';
   if (r.lastTradeDay === today && r.trades >= 3) return 'Three trades per kingdom per day';
   return null;
@@ -189,7 +267,7 @@ export const setStatus = (w: WorldState, id: string, status: RStatus): WorldStat
 // ---------------- campaigns ----------------
 /** Travel time from your kingdom: envoys ride fast, caravans trundle, armies march slowly. */
 export function travelMs(kind: JourneyKind, r: Pick<Rival, 'x' | 'y'>) {
-  const d = Math.hypot(r.x - 0.5, r.y - 0.5);
+  const d = leagues(r);
   return Math.round((kind === 'envoy' ? 40 + d * 300 : kind === 'caravan' || kind === 'gift' ? 60 + d * 420 : 90 + d * 560) * 1000);
 }
 export function newCampaign(r: Rival, battalions: string[], engines: Engines, supplies: number, allies: string[], now = Date.now()): Campaign {
@@ -243,8 +321,8 @@ const OUTPOST_NAMES = ['Cutthroat Camp', 'Wolf Hollow', 'Raven Rock', 'Smugglers
 export const outpostCap = (stage: number) => 2 + Math.min(2, Math.floor(stage / 2));
 /** A new outpost along the road to a random realm; small, and stronger (with a fatter purse) as your kingdom grows. */
 export function newOutpost(w: Pick<WorldState, 'rivals' | 'outposts' | 'seed'>, stage: number, salt: number): Outpost {
-  const R = rng(hash(`${w.seed}:${salt}`)), rv = w.rivals[Math.floor(R() * w.rivals.length)] ?? { x: 0.8, y: 0.3 };
-  const t = 0.35 + R() * 0.3, nx = -(rv.y - 0.5), ny = rv.x - 0.5, j = (R() - 0.5) * 0.25;
+  const near = w.rivals.filter((r) => leagues(r) < 0.7), R = rng(hash(`${w.seed}:${salt}`)), rv = near[Math.floor(R() * near.length)] ?? { x: 0.6, y: 0.45 };
+  const t = 0.35 + R() * 0.3, nx = -(rv.y - 0.5), ny = rv.x - 0.5, j = (R() - 0.5) * 0.25; // along the road to a neighbour
   const x = Math.min(0.92, Math.max(0.08, 0.5 + (rv.x - 0.5) * t + nx * j)), y = Math.min(0.9, Math.max(0.1, 0.5 + (rv.y - 0.5) * t + ny * j));
   const lvl = Math.max(1, stage), power = Math.round((10 + R() * 14) * (1 + lvl * 0.6));
   const loot: Res = { gold: Math.round((40 + R() * 50) * lvl), wood: Math.round(R() * 30 * lvl), stone: Math.round(R() * 18 * lvl), renown: 3 + Math.floor(R() * 3) + lvl };

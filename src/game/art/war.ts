@@ -25,9 +25,10 @@ export function siegeCamp(): HTMLCanvasElement {
 }
 
 // ---------------- world map ----------------
-export const MAP_PW = 320, MAP_PH = 208;
-function valueNoise(seed: number) {
-  const R = rng(seed), G = 16, grid = Array.from({ length: (G + 1) * (G + 1) }, () => R());
+/** The world map in pixels: 2.6 times the old 320x208 home region (see WORLD_SCALE). */
+export const MAP_PW = 832, MAP_PH = 540;
+function valueNoise(seed: number, G = 16) {
+  const R = rng(seed), grid = Array.from({ length: (G + 1) * (G + 1) }, () => R());
   const at = (x: number, y: number) => grid[Math.min(G, y) * (G + 1) + Math.min(G, x)];
   const sm = (t: number) => t * t * (3 - 2 * t);
   return (u: number, v: number) => { const x = u * G, y = v * G, x0 = Math.floor(x), y0 = Math.floor(y), fx = sm(x - x0), fy = sm(y - y0);
@@ -35,12 +36,13 @@ function valueNoise(seed: number) {
 }
 /** A painted pixel continent with sea, beaches, plains, forests, hills, snowy peaks, rivers and roads. */
 export function worldMap(seed: number, sites: { x: number; y: number }[]): HTMLCanvasElement {
-  const [cv, c] = canvas(MAP_PW, MAP_PH), n1 = valueNoise(seed), n2 = valueNoise(seed + 9), n3 = valueNoise(seed + 77), R = rng(seed + 5);
+  const [cv, c] = canvas(MAP_PW, MAP_PH), n1 = valueNoise(seed, 30), n2 = valueNoise(seed + 9, 40), n3 = valueNoise(seed + 77, 40), R = rng(seed + 5); // finer grids: features stay the same size on a bigger map
   const img = c.createImageData(MAP_PW, MAP_PH), d = img.data;
   const hexc = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
-  const elev = (x: number, y: number) => { const u = x / MAP_PW, v = y / MAP_PH, edge = Math.hypot((u - 0.5) * 1.15, (v - 0.5) * 1.35); return n1(u, v) * 0.6 + n2(u * 2 % 1, v * 2 % 1) * 0.25 + 0.55 - edge * 1.15; };
+  // elevation: mostly lowland, hills and a few snowy peaks; sea at the rim
+  const elev = (x: number, y: number) => { const u = x / MAP_PW, v = y / MAP_PH, edge = Math.hypot((u - 0.5) * 1.15, (v - 0.5) * 1.35); return (n1(u, v) * 0.6 + n2(u * 2 % 1, v * 2 % 1) * 0.25) * 0.7 + 0.31 - edge * 0.55; };
   for (let y = 0; y < MAP_PH; y++) for (let x = 0; x < MAP_PW; x++) {
-    let e = elev(x, y); for (const s of sites) { const dd = Math.hypot(x - s.x * MAP_PW, y - s.y * MAP_PH); if (dd < 22) e = Math.max(e, 0.5 - dd * 0.003); }
+    let e = elev(x, y); for (const s of sites) { const dd = Math.hypot(x - s.x * MAP_PW, y - s.y * MAP_PH); if (dd < 26) e = Math.max(e, 0.5 - dd * 0.003); }
     const f = n3(x / MAP_PW, y / MAP_PH), dith = ((x + y) % 2) * 0.012;
     let col: string;
     if (e < 0.32) col = e < 0.22 ? '#1f4a7a' : e < 0.28 ? '#2a5e94' : '#3a78b0';
@@ -54,19 +56,21 @@ export function worldMap(seed: number, sites: { x: number; y: number }[]): HTMLC
   }
   c.putImageData(img, 0, 0);
   // trees and peaks as tiny glyphs
-  for (let k = 0; k < 900; k++) {
+  for (let k = 0; k < 6000; k++) {
     const x = Math.floor(R() * MAP_PW), y = Math.floor(R() * MAP_PH), e = elev(x, y), f = n3(x / MAP_PW, y / MAP_PH);
     if (e > 0.4 && e < 0.68 && f > 0.6) { r(c, x, y - 2, 2, 2, '#2b5a1f'); px(c, x, y - 3, '#4a8a34'); px(c, x, y, '#4a2e16'); }
     else if (e > 0.72 && e < 0.93 && k % 3 === 0) { for (let j = 0; j < 4; j++) r(c, x - j, y + j, j * 2 + 1, 1, j < 1 ? '#ffffff' : '#6e6a64'); }
   }
   // rivers flow from hills to the sea
-  for (let k = 0; k < 4; k++) {
-    let x = MAP_PW * (0.3 + R() * 0.4), y = MAP_PH * (0.3 + R() * 0.4);
-    for (let s = 0; s < 220 && elev(Math.round(x), Math.round(y)) > 0.32; s++) { r(c, x, y, 2, 1, '#4a8ac8'); const a = Math.atan2(y - MAP_PH / 2, x - MAP_PW / 2) + (R() - 0.5) * 1.2; x += Math.cos(a); y += Math.sin(a); }
+  for (let k = 0; k < 11; k++) {
+    let x = MAP_PW * (0.15 + R() * 0.7), y = MAP_PH * (0.15 + R() * 0.7);
+    for (let s = 0; s < 520 && elev(Math.round(x), Math.round(y)) > 0.32; s++) { r(c, x, y, 2, 1, '#4a8ac8'); const a = Math.atan2(y - MAP_PH / 2, x - MAP_PW / 2) + (R() - 0.5) * 1.2; x += Math.cos(a); y += Math.sin(a); }
   }
   // roads from the heart of the realm to every site
-  const home = sites[0];
-  for (const s of sites.slice(1)) { const x0 = home.x * MAP_PW, y0 = home.y * MAP_PH, x1 = s.x * MAP_PW, y1 = s.y * MAP_PH, n = Math.hypot(x1 - x0, y1 - y0);
+  // each realm's road joins the nearest realm closer to the heart of the map, so roads branch outward like a real network
+  const home = sites[0], dc = (p: { x: number; y: number }) => Math.hypot(p.x - home.x, p.y - home.y);
+  for (const s of sites.slice(1)) { const prev = sites.filter((q) => q !== s && dc(q) < dc(s)).sort((a, b) => Math.hypot(a.x - s.x, a.y - s.y) - Math.hypot(b.x - s.x, b.y - s.y))[0] ?? home;
+    const x0 = prev.x * MAP_PW, y0 = prev.y * MAP_PH, x1 = s.x * MAP_PW, y1 = s.y * MAP_PH, n = Math.hypot(x1 - x0, y1 - y0);
     for (let i = 0; i < n; i += 1) { if (i % 6 > 3) continue; const t = i / n, wob = Math.sin(t * 9 + s.x * 20) * 3; px(c, x0 + (x1 - x0) * t + wob * 0.3, y0 + (y1 - y0) * t + wob, '#a8824a'); } }
   return cv;
 }
