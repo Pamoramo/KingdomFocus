@@ -51,14 +51,14 @@ export class KingdomScene extends Phaser.Scene {
     this.input.addPointer(2);
     this.input.on('pointerdown', this.onDown, this); this.input.on('pointermove', this.onMove, this); this.input.on('pointerup', this.onUp, this);
     // zoom in proportion to the scroll: a mouse notch (~100) is ~12%, a trackpad's many small events add up smoothly
-    this.input.on('wheel', (p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => { this.glide = null; const z = (this.zoomGoal?.z ?? cam.zoom) * Math.exp(-Phaser.Math.Clamp(dy, -300, 300) * 0.0012); this.zoomGoal = { z: Phaser.Math.Clamp(z, this.minZoom(), 6), sx: p.x, sy: p.y }; });
+    this.input.on('wheel', (p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => { const z = (this.zoomGoal?.z ?? cam.zoom) * Math.exp(-Phaser.Math.Clamp(dy, -300, 300) * 0.0012); this.zoomGoal = { z: Phaser.Math.Clamp(z, this.minZoom(), 6), sx: p.x, sy: p.y }; });
     this.scale.on('resize', () => cam.setZoom(Math.max(cam.zoom, this.minZoom())));
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,Q,E,PLUS,MINUS,SHIFT', false) as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on('keydown-ESC', () => setUI({ placing: null, moving: null, selBat: null, selArmy: null, selBuilding: null, inspect: null }));
 
     this.unsub.push(subscribe(() => this.sync()), subUI(() => this.syncUI()));
     const onFx = (e: Event) => this.fx((e as CustomEvent<Fx>).detail);
-    const onFocus = (e: Event) => { const d = (e as CustomEvent<{ x: number; y: number }>).detail; this.glide = null; cam.pan(d.x, d.y, 600, 'Sine.easeInOut'); };
+    const onFocus = (e: Event) => { const d = (e as CustomEvent<{ x: number; y: number }>).detail; cam.pan(d.x, d.y, 600, 'Sine.easeInOut'); };
     fxBus.addEventListener('fx', onFx); camBus.addEventListener('focus', onFocus);
     this.unsub.push(() => fxBus.removeEventListener('fx', onFx), () => camBus.removeEventListener('focus', onFocus));
     this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
@@ -75,18 +75,7 @@ export class KingdomScene extends Phaser.Scene {
     this.sync();
   }
 
-  private life!: Life; private zoomGoal: { z: number; sx: number; sy: number } | null = null; private glide: { vx: number; vy: number } | null = null; private lastMove: { x: number; y: number; t: number } | null = null;
-  /** Remembers the last 100 ms of a drag, to measure the flick's speed on release (pointer events can arrive in bursts). */
-  private trail: { x: number; y: number; t: number }[] = [];
-  private track(p: Phaser.Input.Pointer) { const now = p.moveTime || performance.now(); this.trail.push({ x: p.x, y: p.y, t: now }); /* the event's own time, so a slow frame rate does not distort the speed */ while (this.trail.length > 2 && now - this.trail[0].t > 100) this.trail.shift(); this.lastMove = this.trail[this.trail.length - 1]; }
-  /** Speed of the flick in screen px per ms (zero if the hand had stopped). */
-  private flick(upAt: number) {
-    const tr = this.trail, a = tr[0], b = tr[tr.length - 1]; this.trail = [];
-    const step = tr.length > 1 ? b.t - tr[tr.length - 2].t : 16; // pointer samples come once a frame: on a slow device they are far apart
-    if (!a || !b || upAt - b.t > Math.max(60, step * 1.4)) return null;
-    const dt = Math.max(16, b.t - a.t), vx = Phaser.Math.Clamp((b.x - a.x) / dt, -2.5, 2.5), vy = Phaser.Math.Clamp((b.y - a.y) / dt, -2.5, 2.5);
-    return Math.hypot(vx, vy) < 0.25 ? null : { vx, vy };
-  }
+  private life!: Life; private zoomGoal: { z: number; sx: number; sy: number } | null = null;
   private minZoom() { return Math.max(this.scale.width / (WW * 1.4), this.scale.height / (WH * 1.4), 0.35); }
   zoomAt(z: number, sx: number, sy: number) {
     const cam = this.cameras.main, before = cam.getWorldPoint(sx, sy);
@@ -110,15 +99,14 @@ export class KingdomScene extends Phaser.Scene {
   update(time: number, dt: number) {
     const s = getState(), ui = getUI(), cam = this.cameras.main;
     this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.life.update(dt, Math.floor(time / 150));
-    // smooth zoom toward the wheel's target, and a glide after a drag
+    // smooth zoom toward the wheel's target
     if (this.zoomGoal) { const z = cam.zoom + (this.zoomGoal.z - cam.zoom) * Math.min(1, dt / 90); this.zoomAt(z, this.zoomGoal.sx, this.zoomGoal.sy); if (Math.abs(z - this.zoomGoal.z) < 0.002) this.zoomGoal = null; }
-    if (this.glide && !this.drag && !this.pinch) { cam.scrollX -= this.glide.vx * dt / cam.zoom; cam.scrollY -= this.glide.vy * dt / cam.zoom; const k = Math.pow(0.92, dt / 16); this.glide.vx *= k; this.glide.vy *= k; if (Math.hypot(this.glide.vx, this.glide.vy) < 0.02) this.glide = null; } this.chatter.update(); this.weather?.update(cam); this.happenings?.update();
     if (this.night > 0.05) for (const l of this.world.lights) l.setAlpha(this.night * (0.55 + Math.random() * 0.15));
     else if (this.world.lights[0]?.alpha) for (const l of this.world.lights) l.setAlpha(0);
     const k = this.keys, sp = ((k.SHIFT.isDown ? 900 : 400) * dt) / 1000 / cam.zoom;
     const el = document.activeElement, typing = !!el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
     if (!typing) {
-      if ([k.A, k.D, k.W, k.S, k.LEFT, k.RIGHT, k.UP, k.DOWN, k.E, k.Q, k.PLUS, k.MINUS].some((x) => x.isDown)) { this.glide = null; this.zoomGoal = null; }
+      if ([k.A, k.D, k.W, k.S, k.LEFT, k.RIGHT, k.UP, k.DOWN, k.E, k.Q, k.PLUS, k.MINUS].some((x) => x.isDown)) { this.zoomGoal = null; }
       if (k.A.isDown || k.LEFT.isDown) cam.scrollX -= sp;
       if (k.D.isDown || k.RIGHT.isDown) cam.scrollX += sp;
       if (k.W.isDown || k.UP.isDown) cam.scrollY -= sp;
@@ -131,7 +119,7 @@ export class KingdomScene extends Phaser.Scene {
   // ---------- input ----------
   private tileAt(p: Phaser.Input.Pointer) { const w = this.cameras.main.getWorldPoint(p.x, p.y); return { tx: Math.floor(w.x / TILE), ty: Math.floor(w.y / TILE), wx: w.x, wy: w.y }; }
   private onDown(p: Phaser.Input.Pointer) {
-    this.glide = null; this.zoomGoal = null; this.lastMove = null; this.trail = []; // a touch takes hold of the camera: stop any glide or easing zoom
+    this.zoomGoal = null; // a touch takes hold of the camera: stop any easing zoom
     const ps = [this.input.pointer1, this.input.pointer2].filter((q) => q.isDown);
     if (ps.length === 2) { this.pinch = { d: Phaser.Math.Distance.Between(ps[0].x, ps[0].y, ps[1].x, ps[1].y), z: this.cameras.main.zoom }; this.drag = null; return; }
     const ui = getUI(), paint = !!ui.placing && !!BUILDINGS[ui.placing].paint;
@@ -149,13 +137,11 @@ export class KingdomScene extends Phaser.Scene {
     if (!this.drag || !p.isDown) return;
     if (Math.hypot(p.x - this.drag.x, p.y - this.drag.y) > 6) this.drag.moved = true;
     if (this.drag.paint) { this.tryPlace(p); return; }
-    if (this.drag.moved) { const z = this.cameras.main.zoom; this.cameras.main.setScroll(this.drag.sx - (p.x - this.drag.x) / z, this.drag.sy - (p.y - this.drag.y) / z); this.track(p); }
+    if (this.drag.moved) { const z = this.cameras.main.zoom; this.cameras.main.setScroll(this.drag.sx - (p.x - this.drag.x) / z, this.drag.sy - (p.y - this.drag.y) / z); }
   }
   private onUp(p: Phaser.Input.Pointer) {
     if (this.pinch) { if (!this.input.pointer1.isDown && !this.input.pointer2.isDown) this.pinch = null; this.drag = null; return; }
     const d = this.drag; this.drag = null;
-    const fl = this.flick(p.upTime || performance.now()); this.glide = d?.moved && !d.paint ? fl : null; // only a real flick glides; letting go after a pause just stops
-    this.lastMove = null;
     if (!d || d.moved || d.paint) return;
     this.tap(p);
   }
