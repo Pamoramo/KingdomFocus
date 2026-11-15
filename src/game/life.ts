@@ -33,6 +33,7 @@ export class Life {
   private scars: Phaser.GameObjects.Image[] = []; private scarSmoke: [number, number][] = []; private sig = ''; private warSig = '';
   private fireflies?: Phaser.GameObjects.Particles.ParticleEmitter; private drift?: Phaser.GameObjects.Particles.ParticleEmitter; private confetti?: Phaser.GameObjects.Particles.ParticleEmitter;
   private view = new Phaser.Geom.Rectangle(0, 0, 10, 10);
+  private heardFestival?: number; private hour = -1;
   constructor(private scene: Phaser.Scene, private world: World, private ambient: Ambient) {
     const T = scene.textures;
     if (!T.exists('bird')) { for (const f of [0, 1]) { const [cv, c] = canvas(7, 4); const col = '#2a2420'; if (f) { r(c, 0, 0, 1, 1, col); r(c, 1, 1, 2, 1, col); r(c, 3, 2, 1, 1, col); r(c, 4, 1, 2, 1, col); r(c, 6, 0, 1, 1, col); } else { r(c, 0, 2, 3, 1, col); r(c, 3, 2, 1, 1, col); r(c, 4, 2, 3, 1, col); } T.addCanvas(`bird${f}`, cv); } }
@@ -146,9 +147,14 @@ export class Life {
   /** Every few seconds: the alarm bell while enemies are at the gates; cheering while the town celebrates. */
   private reactive() {
     const s = getState(); if (!s.settings.sound || getUI().view !== 'kingdom' || getUI().battle) return;
+    const fest = (s.world.festival ?? 0) > Date.now();
     if (s.world.threat) audio.spatial('alarm', 0.7, 0);
-    else if ((s.world.festival ?? 0) > Date.now()) { if (Math.random() < 0.6) audio.spatial('cheer', 0.5, (Math.random() - 0.5) * 0.6); if (Math.random() < 0.3) audio.play('lute'); }
-    else if (Math.random() < 0.06) audio.spatial('bell', 0.35, 0); // the hour bell
+    else if (fest) {
+      // the celebration is heard once, when it begins (or when you come home to it); after that only the crowd's murmur near the square
+      if (this.heardFestival !== s.world.festival) { this.heardFestival = s.world.festival; audio.spatial('cheer', 0.6, 0); audio.play('lute'); }
+      else { const m = this.sources.find((x) => x.kind === 'chatter'), cam = this.scene.cameras.main; if (m && Math.random() < 0.4) { const d = Math.hypot(m.x - cam.midPoint.x, m.y - cam.midPoint.y); if (d < HEARD) audio.spatial('chatter', (1 - d / HEARD) * 0.6, (m.x - cam.midPoint.x) / HEARD); } }
+    }
+    const hr = new Date().getHours(); if (this.hour !== hr) { if (this.hour !== -1 && !s.world.threat) audio.spatial('bell', 0.35, 0); this.hour = hr; } // the bell tolls the hour
     this.ambient.festival = (s.world.festival ?? 0) > Date.now();
   }
 }
