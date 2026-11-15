@@ -394,7 +394,7 @@ function conquer(s: GameState, r: Rival): GameState {
   if (last && Date.now() - last.t < 5000 && last.title.includes(r.name)) o = W(o, { ...o.world, reports: [{ ...last, loot }, ...o.world.reports.slice(1)] });
   else o = W(o, { ...o.world, reports: [{ id: uid(), t: Date.now(), title: `${r.name} surrenders`, win: true, lines: [`${r.ruler} opens the gates and swears fealty.`], you: 0, foe: 0, lostYou: 0, lostFoe: 0, loot }, ...(o.world.reports ?? [])].slice(0, 25) });
   const w = { ...o.world, campaign: null, engines: addEngines(o.world.engines, c.engines), supplies: o.world.supplies + c.supplies, conquests: o.world.conquests + 1,
-    rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, status: 'vassal' as const, power: Math.round(x.power * 0.3), garrison: 0, relation: 20 } : r.friends.includes(x.id) ? { ...x, relation: Math.max(-100, x.relation - 20) } : x)) };
+    rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, status: 'vassal' as const, power: Math.round(x.power * 0.3), garrison: 0, relation: 20, conquered: Date.now() } : r.friends.includes(x.id) ? { ...x, relation: Math.max(-100, x.relation - 20) } : x)) };
   o = goHome(W(o, w), r, c.battalions, `Your victorious host returning from ${r.name}`);
   o = celebrate(o, 10);
   emit({ kind: 'stage', text: `${r.name} has fallen! It is now your vassal.`, res: loot, big: true });

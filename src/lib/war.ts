@@ -15,6 +15,8 @@ export interface Rival {
   relation: number; status: RStatus; trades: number; lastTradeDay: string; bandits?: boolean; friends: string[]; foes: string[]; beaten?: number;
   /** false until your mapmakers have charted it (older saves: undefined = known) */
   known?: boolean;
+  /** when you took their castle (your troops are seen marching in for a while) */
+  conquered?: number;
 }
 export type Engine = 'ram' | 'mangonel' | 'tower' | 'ballista' | 'trebuchet';
 export const ENGINES: Record<Engine, { name: string; cost: Partial<Res>; siege: number; bombard: number; desc: string }> = {

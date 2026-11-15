@@ -80,6 +80,7 @@ export class BattleScene extends Phaser.Scene {
   private figs: Fig[] = []; private play!: BattlePlay; private k = 1; private ox = 0; private oy = 0;
   private biome: Biome = 'grassland'; private night = 0; private dust!: Phaser.GameObjects.Particles.ParticleEmitter; private spark!: Phaser.GameObjects.Particles.ParticleEmitter;
   private debris!: Phaser.GameObjects.Particles.ParticleEmitter; private weather?: WeatherFx; private hud!: { bars: Phaser.GameObjects.Graphics; nums: Phaser.GameObjects.Text[]; left: [number, number]; shown: [number, number] };
+  private blood!: Phaser.GameObjects.Particles.ParticleEmitter;
   private lastClang = 0; private fighting = false; private stuck: Phaser.GameObjects.GameObject[] = [];
   constructor() { super('battle'); }
   init(data: BattlePlay) { this.play = data; this.figs = []; this.stuck = []; this.fighting = false; }
@@ -110,6 +111,8 @@ export class BattleScene extends Phaser.Scene {
     this.dust = this.add.particles(0, 0, 'bpuff', { emitting: false, lifespan: 700, speed: { min: 6, max: 26 }, angle: { min: 180, max: 360 }, scale: { start: this.k * 0.25, end: this.k * 0.55 }, alpha: { start: 0.55, end: 0 }, tint: DUST[this.biome] }).setDepth(8000);
     this.spark = this.add.particles(0, 0, 'bdot', { emitting: false, lifespan: 260, speed: { min: 30 * this.k, max: 70 * this.k }, scale: { start: this.k * 0.6, end: 0 }, tint: [0xffffff, 0xfff0a0, 0xffd060], blendMode: 'ADD' }).setDepth(8500);
     this.debris = this.add.particles(0, 0, 'bdot', { emitting: false, lifespan: 900, speed: { min: 20 * this.k, max: 60 * this.k }, angle: { min: 200, max: 340 }, gravityY: 160 * this.k, scale: { min: this.k * 0.6, max: this.k * 1.2 }, tint: [0x8a8a92, 0x6e6e78, 0xa8a49a] }).setDepth(8500);
+    // blood: a spray when a blow lands, splashes that stay on the ground, and pools under the fallen
+    this.blood = this.add.particles(0, 0, 'bdot', { emitting: false, lifespan: 520, speed: { min: 25 * this.k, max: 75 * this.k }, angle: { min: 190, max: 350 }, gravityY: 260 * this.k, scale: { min: this.k * 0.5, max: this.k * 1.1 }, tint: [0x9a0e0e, 0xc01a14, 0x6e0a08] }).setDepth(8400);
     this.cameras.main.fadeIn(500);
     this.deploy(p.a, 0, res.startA); this.deploy(p.b, 1, res.startB);
     this.engines();
@@ -191,8 +194,14 @@ export class BattleScene extends Phaser.Scene {
     for (const i of [0, 1] as const) if (Math.abs(h.shown[i] - h.left[i]) > 0.5) { h.shown[i] += (h.left[i] - h.shown[i]) * Math.min(1, dt / 220); moved = true; }
     if (moved) this.drawHud();
   }
+  /** A spray of blood and a few drops that stay where they land. */
+  private bleed(x: number, y: number, n = 6) {
+    this.blood.emitParticleAt(x, y, n);
+    for (let i = 0; i < Math.ceil(n / 3); i++) { const d = this.add.image(x + (Math.random() - 0.5) * 9 * this.k, y + (8 + Math.random() * 6) * this.k, 'bdot').setTint(Math.random() < 0.5 ? 0x7a0c0a : 0x9a1410).setScale(this.k * (0.6 + Math.random() * 0.8), this.k * 0.5).setAlpha(0.85).setDepth(3); this.stuck.push(d); }
+  }
   private clang(f: Fig) {
     this.spark.emitParticleAt(this.X(f.x + (f.side ? -5 : 5)), this.Y(f.y - 9), 3 + Math.floor(Math.random() * 3));
+    if (Math.random() < 0.35) this.bleed(this.X(f.x + (f.side ? -7 : 7)), this.Y(f.y - 8), 4); // a blow that draws blood
     if (this.time.now - this.lastClang > 140) { this.lastClang = this.time.now; audio.play('clash'); }
   }
 
@@ -209,9 +218,13 @@ export class BattleScene extends Phaser.Scene {
     f.state = 'dead'; f.flag?.destroy(); f.flag = undefined;
     f.im.setTintFill(0xffffff); this.time.delayedCall(70, () => { f.im.clearTint(); f.im.setTint(this.night > 0.5 ? 0x8890a8 : 0xc8bcb0); });
     const dir = f.side ? 1 : -1;
-    if (f.onWall) { this.tweens.add({ targets: f.im, x: f.im.x + dir * -14 * this.k, y: this.Y(f.y + 14), angle: dir * 120, duration: 500, ease: 'Quad.In' }); f.sh.setVisible(false); return; } // falls from the wall
+    if (f.onWall) { this.bleed(f.im.x, f.im.y - 8 * this.k, 6); this.tweens.add({ targets: f.im, x: f.im.x + dir * -14 * this.k, y: this.Y(f.y + 14), angle: dir * 120, duration: 500, ease: 'Quad.In' }); f.sh.setVisible(false); return; } // falls from the wall
     this.tweens.add({ targets: f.im, angle: dir * 88, x: f.im.x + dir * 4 * this.k, y: f.im.y + 2 * this.k, duration: 280, ease: 'Bounce.Out' });
     this.dust.emitParticleAt(f.im.x, f.im.y, 2);
+    // struck down: a spray of blood, then a pool spreading beneath the body
+    this.bleed(f.im.x, f.im.y - 8 * this.k, 9);
+    const pool = this.add.ellipse(f.im.x + dir * 5 * this.k, f.im.y + 1 * this.k, 2 * this.k, 1 * this.k, 0x6a0a08, 0.8).setDepth(f.im.y - 7); this.stuck.push(pool);
+    this.tweens.add({ targets: pool, width: (9 + Math.random() * 6) * this.k, height: (3 + Math.random() * 2) * this.k, duration: 2600, ease: 'Sine.Out' });
     f.im.setDepth(f.im.y - 6); f.sh.setVisible(false);
   }
   private volley(from: 0 | 1, n: number) {
@@ -228,7 +241,7 @@ export class BattleScene extends Phaser.Scene {
       this.tweens.add({ targets: o, t: 1, duration: 760 + Math.random() * 160, delay: 300 + i * 18 + Math.random() * 90, ease: 'Linear',
         onUpdate: () => { const u = o.t, x = x0 + (x1 - x0) * u, y = (1 - u) * (1 - u) * y0 + 2 * (1 - u) * u * apex + u * u * y1, dy = 2 * (1 - u) * (apex - y0) + 2 * u * (y1 - apex);
           a.setPosition(this.X(x), this.Y(y)).setRotation(Math.atan2(dy, (x1 - x0)) * (x1 < x0 ? -1 : 1)); sh.setPosition(this.X(x), this.Y(y0 + (y1 - y0) * u)); glow?.setPosition(a.x, a.y); },
-        onComplete: () => { sh.destroy(); glow?.destroy(); if (miss) { a.setDepth(this.Y(y1) - 1).setRotation((x1 < x0 ? -1 : 1) * 1.1); this.stuck.push(a); this.tweens.add({ targets: a, alpha: 0, delay: 5000, duration: 1500 }); } else a.destroy(); } });
+        onComplete: () => { sh.destroy(); glow?.destroy(); if (miss) { a.setDepth(this.Y(y1) - 1).setRotation((x1 < x0 ? -1 : 1) * 1.1); this.stuck.push(a); this.tweens.add({ targets: a, alpha: 0, delay: 5000, duration: 1500 }); } else if (Math.random() < 0.5) this.blood.emitParticleAt(this.X(x1), this.Y(y1), 3); if (!miss) a.destroy(); } });
     }
     audio.play('arrows');
   }
@@ -283,7 +296,22 @@ export class BattleScene extends Phaser.Scene {
   }
   private rout(loser: 0 | 1) {
     for (const f of this.alive(loser)) { f.state = 'flee'; f.onWall = false; f.speed = f.cav ? 90 : 50; f.tx = loser ? W + 60 : -60; f.ty = f.y + (Math.random() - 0.5) * 20; f.im.setFlipX(loser === 0); }
-    for (const f of this.alive(loser === 0 ? 1 : 0)) { f.state = 'cheer'; f.tx = f.x; f.ty = f.y; }
+    const walls = this.play.site?.walls, winner = (loser === 0 ? 1 : 0) as 0 | 1;
+    if (walls && walls.side === loser) {
+      // the castle falls: the victors pour in through the gate and over the walls, and their banner goes up over the gate
+      const wx = this.wallX(walls.side), inward = walls.side === 1 ? 1 : -1, gateY = 156;
+      this.alive(winner).forEach((f, i) => {
+        if (f.ranged && i % 3) { f.state = 'cheer'; f.tx = f.x; f.ty = f.y; return; } // some bowmen stay outside and cheer
+        f.state = 'move'; f.speed = f.cav ? 60 : 42; f.onWall = false;
+        const viaGate = i % 3 !== 0; f.tx = viaGate ? wx - inward * 6 : wx; f.ty = viaGate ? gateY + ((i % 5) - 2) * 3 : f.y;
+        this.time.delayedCall(viaGate ? 900 + (i % 10) * 160 : 1200, () => { if (f.state === 'dead') return; f.tx = wx + inward * (34 + Math.random() * 40); f.ty = viaGate ? gateY + (Math.random() - 0.5) * 70 : f.y; f.onWall = !viaGate; });
+        this.time.delayedCall(3200 + i * 40, () => { if (f.state !== 'dead') this.tweens.add({ targets: [f.im, f.sh, f.flag].filter(Boolean), alpha: 0, duration: 700 }); }); // inside the keep
+      });
+      const col = winner === 0 ? this.play.aColor : this.play.bColor, flag = this.add.image(this.X(wx + inward * 6), this.Y(gateY - 22), bannerTex(this, col, winner ? 'cross' : 'lion', 0)).setOrigin(0.2, 1).setScale(this.k * S * 1.4).setDepth(this.Y(gateY)).setAlpha(0);
+      this.tweens.add({ targets: flag, alpha: 1, y: flag.y - 6 * this.k, delay: 1600, duration: 900 });
+      return;
+    }
+    for (const f of this.alive(winner)) { f.state = 'cheer'; f.tx = f.x; f.ty = f.y; }
   }
 
   // ---------------- heads-up display ----------------

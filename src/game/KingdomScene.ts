@@ -30,7 +30,7 @@ export class KingdomScene extends Phaser.Scene {
   private world!: World; private army!: Army; private ambient!: Ambient; private chatter!: Chatter; private weather!: WeatherFx; happenings!: TownEvents;
   private ghost!: Phaser.GameObjects.Rectangle; private selRect!: Phaser.GameObjects.Rectangle; private shade!: Phaser.GameObjects.Rectangle;
   private frame = 0; private unsub: (() => void)[] = [];
-  private pinch: { d: number; z: number } | null = null;
+  private pinch: { d: number; z: number; wx: number; wy: number } | null = null;
   private drag: { x: number; y: number; sx: number; sy: number; moved: boolean; paint: boolean } | null = null;
   private lastPaint = ''; private keys!: Record<string, Phaser.Input.Keyboard.Key>; private night = 0;
 
@@ -51,7 +51,12 @@ export class KingdomScene extends Phaser.Scene {
     this.input.addPointer(2);
     this.input.on('pointerdown', this.onDown, this); this.input.on('pointermove', this.onMove, this); this.input.on('pointerup', this.onUp, this);
     // zoom in proportion to the scroll: a mouse notch (~100) is ~12%, a trackpad's many small events add up smoothly
-    this.input.on('wheel', (p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => { const z = (this.zoomGoal?.z ?? cam.zoom) * Math.exp(-Phaser.Math.Clamp(dy, -300, 300) * 0.0012); this.zoomGoal = { z: Phaser.Math.Clamp(z, this.minZoom(), 6), sx: p.x, sy: p.y }; });
+    this.input.on('wheel', (p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => {
+      const z = Phaser.Math.Clamp((this.zoomGoal?.z ?? cam.zoom) * Math.exp(-Phaser.Math.Clamp(dy, -300, 300) * 0.0012), this.minZoom(), 6);
+      // pin the world point under the cursor once, when the scroll begins (re-reading the camera each frame let rounding accumulate into a drift)
+      const same = this.zoomGoal && Math.abs(this.zoomGoal.sx - p.x) < 2 && Math.abs(this.zoomGoal.sy - p.y) < 2, w = same ? this.zoomGoal! : this.worldAt(p.x, p.y);
+      this.zoomGoal = { z, sx: p.x, sy: p.y, wx: w.wx, wy: w.wy };
+    });
     this.scale.on('resize', () => cam.setZoom(Math.max(cam.zoom, this.minZoom())));
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,Q,E,PLUS,MINUS,SHIFT', false) as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on('keydown-ESC', () => setUI({ clearing: null, placing: null, moving: null, selBat: null, selArmy: null, selBuilding: null, inspect: null }));
@@ -75,12 +80,18 @@ export class KingdomScene extends Phaser.Scene {
     this.sync();
   }
 
-  private life!: Life; private zoomGoal: { z: number; sx: number; sy: number } | null = null;
+  private life!: Life; private zoomGoal: { z: number; sx: number; sy: number; wx: number; wy: number } | null = null;
   private minZoom() { return Math.max(this.scale.width / (WW * 1.4), this.scale.height / (WH * 1.4), 0.35); }
+  /** The world point under a screen point (Phaser zooms about the camera's centre). */
+  private worldAt(sx: number, sy: number) { const cam = this.cameras.main, cx = cam.width * cam.originX, cy = cam.height * cam.originY; return { wx: cam.scrollX + cx + (sx - cam.x - cx) / cam.zoom, wy: cam.scrollY + cy + (sy - cam.y - cy) / cam.zoom }; }
+  /** Sets the zoom so that world point (wx, wy) sits under screen point (sx, sy). */
+  private placeZoom(z: number, sx: number, sy: number, wx: number, wy: number) { const cam = this.cameras.main, cx = cam.width * cam.originX, cy = cam.height * cam.originY; cam.setZoom(z); cam.setScroll(wx - cx - (sx - cam.x - cx) / z, wy - cy - (sy - cam.y - cy) / z); }
   zoomAt(z: number, sx: number, sy: number) {
-    const cam = this.cameras.main, before = cam.getWorldPoint(sx, sy);
-    cam.setZoom(Phaser.Math.Clamp(z, this.minZoom(), 6));
-    const after = cam.getWorldPoint(sx, sy); cam.scrollX += before.x - after.x; cam.scrollY += before.y - after.y;
+    // keep the world point under (sx, sy) still. Phaser zooms about the camera's centre, and its matrix only updates at render,
+    // so getWorldPoint right after setZoom is stale (that made zooming drift sideways); do the arithmetic directly instead.
+    const cam = this.cameras.main, z0 = cam.zoom, z1 = Phaser.Math.Clamp(z, this.minZoom(), 6), cx = cam.width * cam.originX, cy = cam.height * cam.originY;
+    const wx = cam.scrollX + cx + (sx - cam.x - cx) / z0, wy = cam.scrollY + cy + (sy - cam.y - cy) / z0;
+    cam.setZoom(z1); cam.setScroll(wx - cx - (sx - cam.x - cx) / z1, wy - cy - (sy - cam.y - cy) / z1);
   }
 
   private sync() {
@@ -100,7 +111,7 @@ export class KingdomScene extends Phaser.Scene {
     const s = getState(), ui = getUI(), cam = this.cameras.main;
     this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.life.update(dt, Math.floor(time / 150));
     // smooth zoom toward the wheel's target
-    if (this.zoomGoal) { const z = cam.zoom + (this.zoomGoal.z - cam.zoom) * Math.min(1, dt / 90); this.zoomAt(z, this.zoomGoal.sx, this.zoomGoal.sy); if (Math.abs(z - this.zoomGoal.z) < 0.002) this.zoomGoal = null; }
+    if (this.zoomGoal) { const g = this.zoomGoal, z = Math.abs(g.z - cam.zoom) < 0.002 ? g.z : cam.zoom + (g.z - cam.zoom) * Math.min(1, dt / 90); this.placeZoom(z, g.sx, g.sy, g.wx, g.wy); if (z === g.z) this.zoomGoal = null; }
     if (this.night > 0.05) for (const l of this.world.lights) l.setAlpha(this.night * (0.55 + Math.random() * 0.15));
     else if (this.world.lights[0]?.alpha) for (const l of this.world.lights) l.setAlpha(0);
     const k = this.keys, sp = ((k.SHIFT.isDown ? 900 : 400) * dt) / 1000 / cam.zoom;
@@ -121,7 +132,7 @@ export class KingdomScene extends Phaser.Scene {
   private onDown(p: Phaser.Input.Pointer) {
     this.zoomGoal = null; // a touch takes hold of the camera: stop any easing zoom
     const ps = [this.input.pointer1, this.input.pointer2].filter((q) => q.isDown);
-    if (ps.length === 2) { this.pinch = { d: Phaser.Math.Distance.Between(ps[0].x, ps[0].y, ps[1].x, ps[1].y), z: this.cameras.main.zoom }; this.drag = null; return; }
+    if (ps.length === 2) { const w = this.worldAt((ps[0].x + ps[1].x) / 2, (ps[0].y + ps[1].y) / 2); this.pinch = { d: Phaser.Math.Distance.Between(ps[0].x, ps[0].y, ps[1].x, ps[1].y), z: this.cameras.main.zoom, ...w }; this.drag = null; return; }
     const ui = getUI(), paint = !!ui.placing && !!BUILDINGS[ui.placing].paint;
     this.drag = { x: p.x, y: p.y, sx: this.cameras.main.scrollX, sy: this.cameras.main.scrollY, moved: false, paint };
     this.lastPaint = '';
@@ -146,7 +157,7 @@ export class KingdomScene extends Phaser.Scene {
     this.updateGhost(p);
     if (this.pinch) {
       const a = this.input.pointer1, b = this.input.pointer2;
-      if (a.isDown && b.isDown) this.zoomAt(this.pinch.z * (Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y) / this.pinch.d), (a.x + b.x) / 2, (a.y + b.y) / 2);
+      if (a.isDown && b.isDown) this.placeZoom(Phaser.Math.Clamp(this.pinch.z * (Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y) / this.pinch.d), this.minZoom(), 6), (a.x + b.x) / 2, (a.y + b.y) / 2, this.pinch.wx, this.pinch.wy); // the spot between the fingers stays under them
       return;
     }
     if (!this.drag || !p.isDown) return;

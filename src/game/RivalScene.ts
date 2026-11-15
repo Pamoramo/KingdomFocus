@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getState, subscribe, TILE, type GameState } from '../lib/state.ts';
 import { realmLayout, RW, RH, type RealmLayout, type Biome } from '../lib/realms.ts';
-import { armyOf, ENGINE_IDS, type Rival } from '../lib/war.ts';
+import { armyOf, ENGINE_IDS, consumption, type Rival } from '../lib/war.ts';
 import { BUILDINGS, CONNECTS, type BKind } from '../lib/economy.ts';
 import { campaignSquads } from '../lib/warActions.ts';
 import { biomeTile, plant, rubble, church, stall, pavise, campfire, mineEntrance, barricade, wagon, BIOME_PLANTS, BIOME_DENSITY } from './art/biome.ts';
@@ -30,7 +30,7 @@ const FOLK: Record<Biome, string[]> = {
 };
 /** Weather leans on the biome: deserts stay dry, the tundra snows, swamps fog over. */
 
-interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; onWall?: boolean; path?: Pt[]; tx?: number; ty?: number; wait?: number; ph: number }
+interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; onWall?: boolean; path?: Pt[]; leave?: Pt; starving?: boolean; triumph?: boolean; tx?: number; ty?: number; wait?: number; ph: number }
 
 /** A rival kingdom up close: its biome, castle and town, and your siege camp when you march on it. */
 export class RivalScene extends Phaser.Scene {
@@ -51,7 +51,7 @@ export class RivalScene extends Phaser.Scene {
   create() {
     const s = getState(); this.L = realmLayout(s.world, this.r);
     this.nav = realmNav(this.L);
-    this.makeTextures(); this.drawGround(); this.placeBuildings(); this.spawnFolk();
+    this.makeTextures(); this.drawGround(); this.placeBuildings(); this.spawnFolk(); this.triumph();
     this.chatter = new Chatter(this);
     this.weather = new WeatherFx(this, WW, WH);
     this.shade = this.add.rectangle(-WW, -WH, WW * 3, WH * 3, 0xffffff).setOrigin(0).setDepth(20000).setBlendMode(Phaser.BlendModes.MULTIPLY);
@@ -68,6 +68,7 @@ export class RivalScene extends Phaser.Scene {
     this.input.on('wheel', (_p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.88 : 1.14), 0.5, 5)));
     this.unsub.push(subscribe(() => this.syncSiege(getState())));
     this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
+    this.time.addEvent({ delay: 3500, loop: true, callback: () => this.siegeMood() });
     this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; for (const b of this.bImgs) if (b.img.visible) b.img.setTexture(bTex(this, b.kind, b.level, this.frame % 2).key); for (const w of this.waterImgs) w.img.setTexture(waterTex(this, w.land, this.frame % 3)); for (const f of this.fires) f.setTexture(`fire${this.frame % 2}`); } });
     this.time.addEvent({ delay: 6500, loop: true, callback: () => this.chat() });
     this.time.addEvent({ delay: 4200, loop: true, callback: () => this.volley() });
@@ -88,6 +89,40 @@ export class RivalScene extends Phaser.Scene {
     const once = (k: string, draw: () => HTMLCanvasElement) => { if (!T.exists(k)) T.addCanvas(k, hdify(withoutOutline(draw), { grain: 3 })); };
     once('pavise', pavise); once('mine', mineEntrance); once('barricade', barricade); for (const f of [0, 1]) { once(`fire${f}`, () => campfire(f)); once(`wagon${f}`, () => wagon(f)); }
     for (const e of ENGINE_IDS) for (const f of [0, 1]) if (!T.exists(`eng_${e}${f}`)) T.addCanvas(`eng_${e}${f}`, hdify(withoutOutline(() => engineArt(e, f))));
+  }
+  /** The state of the siege made visible: when morale sinks soldiers desert the camp, when food runs out they sit hungry by cold fires;
+   *  a despairing garrison slips away from the walls. Cosmetic: the campaign's real losses are handled by the siege rules. */
+  private siegeMood() {
+    const s = getState(), c = s.world.campaign; if (!c || c.target !== this.r.id || c.phase !== 'siege') return;
+    this.figs = this.figs.filter((f) => f.img.active);
+    const mine = this.figs.filter((f) => f.side === 'you' && !f.leave), soldiers = campaignSquads(s).reduce((a, q) => a + q.count, 0), daysLeft = c.supplies / consumption(Math.max(1, soldiers));
+    const say = (f: Fig, lines: string[], delay = 0) => this.chatter.say({ get x() { return f.x; }, get y() { return f.y; }, h: 16, alive: () => f.img.active }, lines[Math.floor(Math.random() * lines.length)], delay, 320);
+    // desertion: the lower the morale, the more often someone slips away from the back of the host
+    if (mine.length > 6 && c.morale < 45 && Math.random() < (45 - c.morale) / 45) {
+      const f = [...mine].sort((a, b) => b.y - a.y)[Math.floor(Math.random() * Math.min(6, mine.length))], left = f.x < (this.L.gate.x + 1) * TILE;
+      f.leave = { x: left ? -20 : RW * TILE + 20, y: Math.min(RH * TILE - 10, f.y + 80 + Math.random() * 80) };
+      say(f, ['I\'ve had enough of this siege!', 'I\'m going home to my farm.', 'This war isn\'t worth dying for.', 'They don\'t pay us enough...']);
+      const mate = mine.find((m) => m !== f && Math.hypot(m.x - f.x, m.y - f.y) < 40); if (mate && Math.random() < 0.5) say(mate, ['Come back, coward!', 'Deserter!', 'Let him go...'], 1400);
+    }
+    // hunger: once food is almost gone the soldiers sit, pale and weak, and the cookfires burn low
+    const hungry = daysLeft < 2;
+    for (const f of mine) { const want = hungry && (f.ph % 3 === 0 || daysLeft < 0.5); if (want !== !!f.starving) { f.starving = want; f.img.setTint(want ? 0xd8cfa8 : 0xffffff).setAngle(want ? (f.img.flipX ? -12 : 12) : 0); } }
+    for (const fl of this.fires) fl.setAlpha(hungry ? 0.35 : 1);
+    if (hungry && Math.random() < 0.5) { const f = mine.filter((m) => m.starving)[Math.floor(Math.random() * Math.max(1, mine.filter((m) => m.starving).length))]; if (f) say(f, ['So hungry...', 'Not even a rat left to eat.', 'When do the supply wagons come?', 'I\'d trade my sword for bread.']); }
+    // a despairing garrison: defenders slip down from the walls
+    if (c.garrisonMorale < 35 && Math.random() < 0.3) { const d = this.figs.find((f) => f.side === 'foe' && f.onWall && !f.leave); if (d) { this.tweens.add({ targets: d.img, alpha: 0, y: d.img.y - 6, duration: 1600, onComplete: () => d.img.destroy() }); d.leave = { x: d.x, y: d.y }; } }
+  }
+  /** Just conquered: your soldiers march up the high street, through the gate, into the castle. */
+  private triumph() {
+    const r = getState().world.rivals.find((x) => x.id === this.r.id) ?? this.r; if (!r.conquered || Date.now() - r.conquered > 15 * 60_000) return;
+    const T = TILE, start = { x: (this.L.gate.x + 1) * T, y: Math.min(RH - 2, this.L.box.y1 + 16) * T }, keep = this.L.buildings.find((b) => b.kind === 'keep'), inner = this.L.inner ?? this.L.box;
+    const goal = keep ? { x: (keep.x + 2) * T, y: (keep.y + 4) * T + 4 } : { x: ((inner.x0 + inner.x1) / 2) * T, y: (inner.y1 - 1) * T };
+    const kinds = ['knight', 'swordsman', 'spearman', 'spearman', 'archer', 'swordsman'];
+    for (let i = 0; i < 18; i++) this.time.delayedCall(i * 650, () => {
+      const f = this.fig(kinds[i % kinds.length], 1 + (i % 2), start.x + (i % 2 ? 6 : -6), start.y + 30, 'you');
+      f.path = this.nav.path(f, goal) ?? [goal]; f.triumph = true;
+      if (i === 0) this.chatter.say({ get x() { return f.x; }, get y() { return f.y; }, h: 16, alive: () => f.img.active }, 'The castle is ours!', 600, 330);
+    });
   }
   private occupied() {
     const o = new Set<string>();
@@ -147,7 +182,7 @@ export class RivalScene extends Phaser.Scene {
       this.doors.push({ x: (m.x + m.w / 2) * TILE, y: by + 4 });
     }
     // the rival's banners over the keep and gate
-    for (const [x, y] of [[(L.gate.x + 1) * TILE - 18, (L.box.y1 + 1) * TILE - 4], [(L.gate.x + 1) * TILE + 18, (L.box.y1 + 1) * TILE - 4]]) this.add.image(x, y, bannerTex(this, this.r.color, this.r.emblem, 0)).setOrigin(0.2, 1).setScale(S).setDepth(y + 1);
+    for (const [x, y] of [[(L.gate.x + 1) * TILE - 18, (L.box.y1 + 1) * TILE - 4], [(L.gate.x + 1) * TILE + 18, (L.box.y1 + 1) * TILE - 4]]) this.add.image(x, y, this.r.status === 'vassal' ? bannerTex(this, getState().battalions[0]?.color ?? 0xb3242a, getState().battalions[0]?.emblem ?? 'lion', 0) : bannerTex(this, this.r.color, this.r.emblem, 0)).setOrigin(0.2, 1).setScale(S).setDepth(y + 1);
   }
   private fig(cls: string, rank: number, x: number, y: number, side: Fig['side'], flip = false) {
     const img = this.add.image(x, y, 'soldiers', sFrame(cls, rank, 0)).setOrigin(0.5, 1).setScale(S).setFlipX(flip).setDepth(y);
@@ -184,7 +219,7 @@ export class RivalScene extends Phaser.Scene {
       return h < 45 ? 'whole' : h < 80 ? 'damaged' : 'ablaze';
     };
     for (const b of [...this.bImgs, ...this.marks]) if (b.suburb) { const f = c ? fate(b) : 'whole'; b.img.setVisible(f !== 'razed').setTint(f === 'damaged' ? 0xa89888 : f === 'ablaze' ? 0x8a6a58 : 0xffffff); }
-    this.figs = this.figs.filter((f) => { if (f.side === 'you' || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); return false; } return true; });
+    this.figs = this.figs.filter((f) => { if ((f.side === 'you' && !f.triumph) || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); return false; } return true; });
     if (this.sheltering !== !!c) for (const f of this.figs) if (f.side === 'folk') { f.path = undefined; f.wait = Math.random() * 1500; }
     this.sheltering = !!c;
     const add = <T extends Phaser.GameObjects.GameObject>(o: T) => { this.siegeObjs.push(o); return o; };
@@ -295,7 +330,14 @@ export class RivalScene extends Phaser.Scene {
           else f.path = this.nav.path(f, { x: (b.x0 + 2 + Math.random() * (b.x1 - b.x0 - 3)) * T, y: (b.y1 - 1 - Math.random() * 3) * T }) ?? [];
         } else if (f.path) { f.path = undefined; f.wait = 1500 + Math.random() * 4000; }
         else { const d = pick(this.doors); f.path = this.nav.path(f, { x: d.x + (Math.random() - 0.5) * 14, y: d.y + Math.random() * 6 }) ?? []; if (!f.path.length) f.wait = 2000; }
-      } else if ((tick + f.ph) % 30 === 0) fr = 2;
+      } else if (f.triumph) { // marching into the conquered castle
+        if (f.path?.length) { const dir = follow(f, dt, 24); if (dir) f.img.setFlipX(dir < 0); fr = (tick + f.ph) % 4; }
+        else { f.triumph = false; this.tweens.add({ targets: f.img, alpha: 0, duration: 500, onComplete: () => f.img.destroy() }); }
+      } else if (f.leave) { // deserting: off toward the edge of the map
+        const dx = f.leave.x - f.x, dy = f.leave.y - f.y, d = Math.hypot(dx, dy), k = Math.min(1, ((dt / 1000) * 20) / Math.max(1, d)); f.x += dx * k; f.y += dy * k; f.img.setFlipX(dx < 0); fr = (tick + f.ph) % 4;
+        if (d < 4) { f.img.destroy(); continue; }
+      } else if (f.starving) fr = 2;
+      else if ((tick + f.ph) % 30 === 0) fr = 2;
       if (f.side !== 'foe' || f.img.frame.name.endsWith('|0') || f.img.frame.name.endsWith('|2')) f.img.setFrame(sFrame(f.cls, f.rank, fr));
       f.img.setPosition(Math.round(f.x), Math.round(f.y)).setDepth(f.y);
     }
