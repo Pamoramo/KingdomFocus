@@ -45,3 +45,20 @@ test('far kingdoms barely concern you: they never invade, rarely write, and thei
     assert.ok(!w.inbox.some((m) => m.kind === 'tribute_demand' && farIds.has(m.rival)), 'nor tribute demands');
   }
 });
+
+test('spoils and tribute grow with the strength of the realm; great prizes are paid within the cloud limits', async () => {
+  const { conquestSpoils, fieldSpoils, defenceSpoils, vassalGold } = await import('./war.ts');
+  const weak = { level: 1, power: 100 }, mid = { level: 3, power: 1400 }, great = { level: 5, power: 9000 };
+  for (const f of [conquestSpoils, fieldSpoils, defenceSpoils]) { assert.ok(f(mid).gold > f(weak).gold && f(great).gold > f(mid).gold, 'stronger realm, bigger spoils'); assert.ok(f(great).renown > f(weak).renown); }
+  assert.ok(conquestSpoils({ level: 4, power: 50 }).gold >= conquestSpoils({ level: 4, power: 1 }).gold && conquestSpoils({ level: 4, power: 50 }).gold > 3000, 'a battered great castle still holds its treasury');
+  assert.ok(vassalGold({ level: 5 }) > vassalGold({ level: 1 }), 'greater vassals pay more tribute');
+  // conquering a great power: spoils above the per-row loot limit are split, so the cloud accepts them
+  let w = initWorld(5); const r = { ...w.rivals.find((x) => tierOf(x) === 'far')!, power: 9000, level: 5, status: 'war' as const, known: true };
+  w = { ...w, rivals: w.rivals.map((x) => (x.id === r.id ? r : x)) };
+  S._with({ ...S.newGame(), world: { ...w, campaign: { target: r.id, battalions: [], engines: { ram: 0, tower: 0, mangonel: 0, ballista: 0, trebuchet: 0 }, supplies: 0, phase: 'siege', day: 9, progressMin: 0, wallHp: 0, wallMax: 100, garrison: 0, garrisonMorale: 0, morale: 100, stance: 'bombard', allies: [], log: [], started: Date.now() } } });
+  const g0 = S.getState().res.gold;
+  for (let i = 0; i < 50 && S.getState().world.campaign; i++) WA.demandSurrender(); // a starved, wall-less castle yields
+  const loot = conquestSpoils(r), rows = S.getState().outbox.ledger.filter((l) => l.kind === 'loot');
+  assert.equal(S.getState().res.gold - g0, loot.gold, 'paid in full');
+  assert.ok(rows.length >= 2 && rows.every((l) => l.amt.gold <= 10000 && l.amt.stone <= 3000 && l.amt.renown <= 400), 'in rows the cloud accepts');
+});

@@ -46,7 +46,9 @@ export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'retur
 export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown>; to?: { x: number; y: number } }
 /** A small bandit camp on the road: easy prey with a small purse. */
 export interface Outpost { id: string; name: string; x: number; y: number; power: number; loot: Res; biome: 'grassland' | 'forest' | 'highlands' | 'swamp' }
-export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number }
+export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
+  /** until when the town celebrates a victory */ festival?: number;
+  /** buildings damaged in a lost battle, shown blackened and smoking until `until` */ scars?: { ids: string[]; until: number } }
 
 export const SIEGE_DAY_MIN = 20;          // verified study minutes per siege day
 export const SUPPLY_COST = { gold: 15, wood: 5 }; // buys 10 supplies
@@ -306,14 +308,17 @@ export const yourPower = (units: Unit[]) => sidePower(units);
 
 // ---------------- spoils of war (one source of truth for what victories pay and what the UI promises) ----------------
 const lv = (r: Pick<Rival, 'level'>) => Math.max(1, r.level);
-/** Winning the field battle before a siege. */
-export const fieldSpoils = (r: Pick<Rival, 'level'>): Res => ({ gold: 0, wood: 0, stone: 0, renown: 10 * lv(r) });
-/** Taking the castle by assault or surrender: its treasury and quarried stone. */
-export const conquestSpoils = (r: Pick<Rival, 'level'>): Res => ({ gold: 300 * lv(r) ** 2, wood: 0, stone: 80 * lv(r) ** 2, renown: 60 * lv(r) });
-/** Breaking an enemy host that attacks your castle. */
-export const defenceSpoils = (r: Pick<Rival, 'level'>): Res => ({ gold: 150 * lv(r), wood: 0, stone: 0, renown: 30 * lv(r) });
-/** Lasting tribute from each vassal, applied to every study session. */
-export const VASSAL_GOLD = 0.05, VASSAL_GOLD_MAX = 0.3, VASSAL_RENOWN = 0.02;
+/** A realm's strength for its spoils: its army, but never less than its castle's size (beating their field army first does not shrink the prize). */
+export const strengthOf = (r: Pick<Rival, 'level' | 'power'>) => Math.max(r.power, 120 * lv(r) ** 2.2 * 0.8);
+/** Winning the field battle before a siege: renown and a share of their baggage, more for a stronger realm. */
+export const fieldSpoils = (r: Pick<Rival, 'level' | 'power'>): Res => { const p = strengthOf(r); return { gold: Math.round(p * 0.4), wood: 0, stone: 0, renown: Math.round(6 + p / 50) }; };
+/** Taking the castle by assault or surrender: its treasury, timber and quarried stone; great powers are rich prizes. */
+export const conquestSpoils = (r: Pick<Rival, 'level' | 'power'>): Res => { const p = strengthOf(r); return { gold: Math.round(p * 2.2), wood: Math.round(p * 0.4), stone: Math.round(p * 0.6), renown: Math.round(30 + p / 15) }; };
+/** Breaking an enemy host that attacks your castle: the stronger the attacker, the richer its abandoned camp. */
+export const defenceSpoils = (r: Pick<Rival, 'level' | 'power'>): Res => { const p = strengthOf(r); return { gold: Math.round(p * 0.5), wood: 0, stone: 0, renown: Math.round(10 + p / 40) }; };
+/** Lasting tribute from each vassal, applied to every study session: a greater realm pays more (4% gold at castle level 1, 8% at level 5). */
+export const vassalGold = (r: Pick<Rival, 'level'>) => 0.03 + 0.01 * lv(r), vassalRenown = (r: Pick<Rival, 'level'>) => 0.01 + 0.004 * lv(r);
+export const VASSAL_GOLD_MAX = 0.4;
 
 // ---------------- bandit outposts ----------------
 const OUTPOST_NAMES = ['Cutthroat Camp', 'Wolf Hollow', 'Raven Rock', 'Smugglers\' Ford', 'Black Thicket', 'Gallows Hill', 'Rat\'s Nest', 'Old Mill Hideout', 'Crooked Bridge', 'Poacher\'s Den', 'Thieves\' Copse', 'Broken Tower'];

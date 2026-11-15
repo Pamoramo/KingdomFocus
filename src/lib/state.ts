@@ -7,7 +7,7 @@ import type { Biome } from './realms.ts';
 import { traitsFor, has as hasTrait, type TraitId } from './commanders.ts';
 import { courtOf, courtFx } from './politics.ts';
 import { sitesFor, settlementFx } from './expansion.ts';
-import { type WorldState, type Engines, initWorld, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, travelMs, type Journey } from './war.ts';
+import { type WorldState, type Engines, initWorld, vassalGold, vassalRenown, VASSAL_GOLD_MAX, travelMs, type Journey } from './war.ts';
 import type { Unit, BattleResult } from './battle.ts';
 
 // ---------------- types ----------------
@@ -25,7 +25,7 @@ export interface Ledger { kind: LedgerKind; ref: string; amt: Res; at: number }
 export interface KEvent { id: string; t: number; type: string; text: string; n?: number }
 export type Table = 'buildings' | 'battalions' | 'squads' | 'habits' | 'sessions' | 'completions';
 /** hiddenSubjects: subjects you removed (the cloud keeps every subject ever used, so removals are remembered here). */
-export interface Settings { hiddenSubjects?: string[]; rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean; music: number; sfx: number; ambience: boolean }
+export interface Settings { hiddenSubjects?: string[]; ambVol?: number; rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean; music: number; sfx: number; ambience: boolean }
 export interface GameState {
   v: 2; owner: string | null; updatedAt: number; res: Res; lifetime: Res;
   buildings: Building[]; battalions: Battalion[]; squads: Squad[]; techs: TechId[];
@@ -142,11 +142,11 @@ export function townOrder(s: GameState) {
 }
 /** Study multipliers: buildings, vassal tribute (+5% gold each, max 30%), and an enemy blockade (-25% gold). */
 export const studyMult = (s: GameState): Res => {
-  const e = effects(s), w = s.world, vassals = w ? w.rivals.filter((r) => r.status === 'vassal').length : 0;
+  const e = effects(s), w = s.world, vs = w ? w.rivals.filter((r) => r.status === 'vassal') : [], tribute = vs.reduce((t, r) => t + vassalGold(r), 0), tributeRenown = vs.reduce((t, r) => t + vassalRenown(r), 0);
   const safe = townOrder(s).ratio >= 1 && townOrder(s).needed > 2 ? 0.03 : 0;
   // the court's decrees and moods, and the settlements you hold
   const c = w ? courtFx(courtOf(w)) : null, st = w ? settlementFx(w.settlements, sitesFor(w.seed)) : null;
-  return { gold: Math.max(0.5, 1 + e.gold + safe + Math.min(VASSAL_GOLD_MAX, vassals * VASSAL_GOLD) - (w?.threat ? 0.25 : 0) + (c?.gold ?? 0) + (st?.gold ?? 0)), wood: 1 + e.wood + (st?.wood ?? 0), stone: 1 + e.stone + (st?.stone ?? 0), renown: Math.max(0.5, 1 + e.renown + vassals * VASSAL_RENOWN + (c?.renown ?? 0) + (st?.renown ?? 0)) };
+  return { gold: Math.max(0.5, 1 + e.gold + safe + Math.min(VASSAL_GOLD_MAX, tribute) - (w?.threat ? 0.25 : 0) + (c?.gold ?? 0) + (st?.gold ?? 0)), wood: 1 + e.wood + (st?.wood ?? 0), stone: 1 + e.stone + (st?.stone ?? 0), renown: Math.max(0.5, 1 + e.renown + tributeRenown + (c?.renown ?? 0) + (st?.renown ?? 0)) };
 };
 export function costOf(s: GameState, kind: BKind, lvlIdx: number): Res {
   const d = BUILDINGS[kind], c = full(d.levels[lvlIdx].cost);

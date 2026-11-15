@@ -11,6 +11,7 @@ import { withoutOutline } from './art/px.ts';
 import { wallWalk } from './art/buildings.ts';
 import { bTex, tileTex, waterTex, sFrame, bannerTex, S } from './textures.ts';
 import { Chatter } from './chatter.ts';
+import { NavGrid, follow, realmNav, type Pt } from './paths.ts';
 import { WeatherFx, weatherAt, biomeWeather } from './weather.ts';
 import { nightFactor } from './KingdomScene.ts';
 import { audio } from './audio.ts';
@@ -29,13 +30,14 @@ const FOLK: Record<Biome, string[]> = {
 };
 /** Weather leans on the biome: deserts stay dry, the tundra snows, swamps fog over. */
 
-interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; onWall?: boolean; tx?: number; ty?: number; wait?: number; ph: number }
+interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; onWall?: boolean; path?: Pt[]; tx?: number; ty?: number; wait?: number; ph: number }
 
 /** A rival kingdom up close: its biome, castle and town, and your siege camp when you march on it. */
 export class RivalScene extends Phaser.Scene {
   private r!: Rival; private L!: RealmLayout; private frame = 0;
   private bImgs: { img: Phaser.GameObjects.Image; kind: BKind; level: number; suburb?: boolean }[] = [];
   private marks: { img: Phaser.GameObjects.Image; suburb?: boolean }[] = [];
+  private nav = new NavGrid(RW, RH);
   private wallImgs: { img: Phaser.GameObjects.Image; x: number; y: number }[] = [];
   private fires: Phaser.GameObjects.Image[] = []; private smoke: [number, number][] = []; private sheltering = false;
   private waterImgs: { img: Phaser.GameObjects.Image; land: number }[] = [];
@@ -48,6 +50,7 @@ export class RivalScene extends Phaser.Scene {
 
   create() {
     const s = getState(); this.L = realmLayout(s.world, this.r);
+    this.nav = realmNav(this.L);
     this.makeTextures(); this.drawGround(); this.placeBuildings(); this.spawnFolk();
     this.chatter = new Chatter(this);
     this.weather = new WeatherFx(this, WW, WH);
@@ -153,7 +156,7 @@ export class RivalScene extends Phaser.Scene {
   }
   private spawnFolk() {
     const n = Math.min(26, 6 + this.L.buildings.length);
-    for (let i = 0; i < n; i++) { const d = this.doors[i % this.doors.length]; const f = this.fig(i % 3 ? 'villager' : 'worker', 0, d.x, d.y, 'folk'); f.wait = Math.random() * 4000; }
+    for (let i = 0; i < n; i++) { const d = this.doors[i % this.doors.length], t = this.nav.nearestFree(this.nav.tileOf(d), 4) ?? this.nav.tileOf(d); const f = this.fig(i % 3 ? 'villager' : 'worker', 0, (t.x + 0.5) * TILE, (t.y + 0.75) * TILE, 'folk'); f.wait = Math.random() * 4000; } // on open ground by their door
     // sentries on the gate wall
     const south = this.L.walls.filter((t) => t.y === this.L.box.y1 && Math.abs(t.x - this.L.gate.x) > 2).sort((a, b) => a.x - b.x);
     const n2 = Math.min(6, Math.max(2, Math.floor(south.length / 3)));
@@ -175,7 +178,7 @@ export class RivalScene extends Phaser.Scene {
     // before a siege, defenders burn the suburbs in front of the gate so the enemy finds no shelter there
     for (const b of [...this.bImgs, ...this.marks]) if (b.suburb) b.img.setVisible(!c);
     this.figs = this.figs.filter((f) => { if (f.side === 'you' || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); return false; } return true; });
-    if (this.sheltering !== !!c) for (const f of this.figs) if (f.side === 'folk') { f.tx = undefined; f.wait = Math.random() * 1500; }
+    if (this.sheltering !== !!c) for (const f of this.figs) if (f.side === 'folk') { f.path = undefined; f.wait = Math.random() * 1500; }
     this.sheltering = !!c;
     const add = <T extends Phaser.GameObjects.GameObject>(o: T) => { this.siegeObjs.push(o); return o; };
     // the burnt suburbs: charred rubble where houses stood, some still smoking
@@ -275,15 +278,15 @@ export class RivalScene extends Phaser.Scene {
     for (const f of this.figs) {
       let fr = 0;
       if (f.side === 'folk') {
+        // townsfolk keep to streets and gates: they walk around walls, houses and water
         if ((f.wait ?? 0) > 0) f.wait! -= dt;
-        else { if (f.tx == null || Math.hypot(f.tx - f.x, (f.ty ?? 0) - f.y) < 1) {
-            if (this.sheltering) {
-              const b = this.L.inner ?? this.L.box, B = this.L.box, inside = f.x > B.x0 * TILE && f.x < B.x1 * TILE && f.y > B.y0 * TILE && f.y < B.y1 * TILE + 4;
-              const gate = { x: (this.L.gate.x + 1) * TILE, y: (B.y1 + 1) * TILE + 6 };
-              if (!inside && Math.hypot(f.x - gate.x, f.y - gate.y) > 6) { f.tx = gate.x + (Math.random() - 0.5) * 8; f.ty = gate.y; f.wait = 0; } // in through the gate, not through the walls
-              else { f.tx = (b.x0 + 2 + Math.random() * (b.x1 - b.x0 - 3)) * TILE; f.ty = (b.y1 - 1 - Math.random() * 3) * TILE; f.wait = 6000 + Math.random() * 8000; } }
-            else { const d = pick(this.doors); f.tx = d.x + (Math.random() - 0.5) * 14; f.ty = d.y + Math.random() * 6; f.wait = 1500 + Math.random() * 4000; } }
-          else { const dx = f.tx - f.x, dy = f.ty! - f.y, d = Math.hypot(dx, dy), k = Math.min(1, ((dt / 1000) * (this.sheltering ? 34 : 14)) / d); f.x += dx * k; f.y += dy * k; f.img.setFlipX(dx < 0); fr = (tick + f.ph) % 4; } }
+        else if (f.path?.length) { const dir = follow(f, dt, this.sheltering ? 34 : 14); if (dir) f.img.setFlipX(dir < 0); fr = (tick + f.ph) % 4; }
+        else if (this.sheltering) {
+          const b = this.L.inner ?? this.L.box, T = TILE, B = this.L.box, inside = f.x > B.x0 * T && f.x < B.x1 * T && f.y > B.y0 * T && f.y < B.y1 * T;
+          if (inside && f.path) { f.path = undefined; f.wait = 6000 + Math.random() * 8000; } // safe in the bailey: wait, then shuffle about
+          else f.path = this.nav.path(f, { x: (b.x0 + 2 + Math.random() * (b.x1 - b.x0 - 3)) * T, y: (b.y1 - 1 - Math.random() * 3) * T }) ?? [];
+        } else if (f.path) { f.path = undefined; f.wait = 1500 + Math.random() * 4000; }
+        else { const d = pick(this.doors); f.path = this.nav.path(f, { x: d.x + (Math.random() - 0.5) * 14, y: d.y + Math.random() * 6 }) ?? []; if (!f.path.length) f.wait = 2000; }
       } else if ((tick + f.ph) % 30 === 0) fr = 2;
       if (f.side !== 'foe' || f.img.frame.name.endsWith('|0') || f.img.frame.name.endsWith('|2')) f.img.setFrame(sFrame(f.cls, f.rank, fr));
       f.img.setPosition(Math.round(f.x), Math.round(f.y)).setDepth(f.y);

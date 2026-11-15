@@ -1,7 +1,8 @@
 // Walkable-ground map of the kingdom and A* paths across it, so townsfolk, patrols and thieves walk around
 // buildings, walls and water instead of through them. Pure (no Phaser), so it can be unit-tested.
 import { MAP_W, MAP_H, TILE, isRiver, footprint, type Building } from '../lib/state.ts';
-import type { BKind } from '../lib/economy.ts';
+import { BUILDINGS, type BKind } from '../lib/economy.ts';
+import { RW, RH, type RealmLayout } from '../lib/realms.ts';
 
 export type Pt = { x: number; y: number };
 /** Ground you can walk on, or through: roads and courtyards, gates, and farm fields (workers tend them). */
@@ -9,10 +10,18 @@ const OPEN = new Set<BKind>(['road', 'courtyard', 'gate', 'farm']);
 const ROAD = new Set<BKind>(['road', 'courtyard', 'gate']);
 
 export class NavGrid {
-  readonly w = MAP_W; readonly h = MAP_H;
-  private block = new Uint8Array(MAP_W * MAP_H);
-  private road = new Uint8Array(MAP_W * MAP_H);
+  private block: Uint8Array; private road: Uint8Array;
   sig: string | null = null; // null until first built
+  /** Defaults to the kingdom map; rival realms pass their own size. */
+  readonly w: number; readonly h: number;
+  constructor(w = MAP_W, h = MAP_H) { this.w = w; this.h = h; this.block = new Uint8Array(w * h); this.road = new Uint8Array(w * h); }
+  /** Builds the grid from explicit lists of blocked and road tiles (used for rival realms). */
+  setTiles(blocked: Iterable<Pt>, roads: Iterable<Pt> = []) {
+    this.block.fill(0); this.road.fill(0);
+    for (const t of blocked) if (this.inside(t.x, t.y)) this.block[t.y * this.w + t.x] = 1;
+    for (const t of roads) if (this.inside(t.x, t.y)) { this.block[t.y * this.w + t.x] = 0; this.road[t.y * this.w + t.x] = 1; }
+    this.sig = 'tiles';
+  }
 
   /** Rebuilds the map when the buildings change. Returns true if it changed. */
   update(buildings: Building[]) {
@@ -48,14 +57,15 @@ export class NavGrid {
   }
   /** True if a straight walk between two tiles crosses nothing blocked (used to smooth paths). */
   private clear(a: Pt, b: Pt) {
-    const n = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y)) * 3;
+    // the line people actually walk: through each tile's footing point (x + 0.5, y + 0.75), checked finely with the walker's width
+    const ax = a.x + 0.5, ay = a.y + 0.75, bx = b.x + 0.5, by = b.y + 0.75, n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) * 8));
     for (let i = 0; i <= n; i++) {
-      const fx = a.x + 0.5 + ((b.x - a.x) * i) / Math.max(1, n), fy = a.y + 0.5 + ((b.y - a.y) * i) / Math.max(1, n);
-      // check the walker's body width too, so smoothed paths don't clip corners
-      for (const [ox, oy] of [[-0.3, 0], [0.3, 0], [0, -0.3]]) if (!this.free(Math.floor(fx + ox), Math.floor(fy + oy))) return false;
+      const fx = ax + ((bx - ax) * i) / n, fy = ay + ((by - ay) * i) / n;
+      for (const [ox, oy] of [[0, 0], [-0.3, 0], [0.3, 0], [0, -0.35], [0, 0.2]]) if (!this.free(Math.floor(fx + ox), Math.floor(fy + oy - 1 / 16))) return false;
     }
     return true;
   }
+
   /** A* from one pixel point to another; returns pixel waypoints (ending at the goal), or null if unreachable.
    *  Roads cost a little less, so people keep to the streets. Diagonals never cut a blocked corner. */
   path(from: Pt, to: Pt, maxNodes = 4000): Pt[] | null {
@@ -91,6 +101,8 @@ export class NavGrid {
     for (let i = 1; i < tiles.length; i++) { const last = keep[keep.length - 1]; if (!this.clear(last, tiles[i]) || onRoad(tiles[i]) !== onRoad(last)) keep.push(tiles[i - 1]); } // never smooth a route off the road it chose
     keep.push(tiles[tiles.length - 1]);
     const pts = keep.slice(1).map((t) => ({ x: (t.x + 0.5) * TILE, y: (t.y + 0.75) * TILE }));
+    // someone standing off their tile's footing point steps onto it first, so the straightened legs hold
+    const home = { x: (s0.x + 0.5) * TILE, y: (s0.y + 0.75) * TILE }; if (Math.hypot(home.x - from.x, home.y - from.y) > 3) pts.unshift(home);
     const goalFree = this.free(this.tileOf(to).x, this.tileOf(to).y);
     if (goalFree) pts[pts.length - 1] = { x: to.x, y: to.y }; // finish exactly where asked when that spot is walkable
     return pts;
@@ -107,3 +119,16 @@ export function follow(m: { x: number; y: number; path?: Pt[] }, dt: number, spe
   }
   return dirX;
 }
+
+/** Walkable ground of a rival realm: walls, buildings, the church, stalls and water are solid; gates, streets and bridges are open. */
+export function realmNav(L: RealmLayout): NavGrid {
+  const nav = new NavGrid(RW, RH), blocked: Pt[] = [], open: Pt[] = [...L.streets, ...L.plaza, ...L.bridges];
+  for (const b of L.buildings) { const d = BUILDINGS[b.kind];
+    for (let i = 0; i < d.w; i++) for (let j = 0; j < d.h; j++) (b.kind === 'gate' || (b.kind === 'gatehouse' && i === 1) ? open : b.kind === 'well' || b.kind === 'farm' ? [] : blocked).push({ x: b.x + i, y: b.y + j }); }
+  blocked.push(...L.walls, ...L.water.filter((w) => !L.bridges.some((b) => b.x === w.x && b.y === w.y)));
+  for (const m of L.landmarks) for (let i = 0; i < m.w; i++) for (let j = 0; j < m.h; j++) blocked.push({ x: m.x + i, y: m.y + j });
+  for (const x of [L.gate.x, L.gate.x + 1]) open.push({ x, y: L.gate.y }); // the gap cut in the curtain wall
+  nav.setTiles(blocked, open);
+  return nav;
+}
+

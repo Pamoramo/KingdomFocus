@@ -125,7 +125,7 @@ export default function Game() {
     const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, RivalScene, BattleScene, ParadeScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
     gameRef.current = game;
     worldTick(); courtTick(); const wt = setInterval(() => { worldTick(); courtTick(); }, 60000); const jt = setInterval(() => { journeysTick(); assignmentsTick(); }, 2000);
-    const wake = () => { audio.start(); const st = getState().settings; audio.setVolumes({ music: st.music ?? 0.5, sfx: st.sfx ?? 0.7, ambience: st.ambience ?? true }); };
+    const wake = () => { audio.start(); const st = getState().settings; audio.setVolumes({ music: st.music ?? 0.5, sfx: st.sfx ?? 0.7, ambience: st.ambience ?? true, ambVol: st.ambVol ?? 0.7 }); };
     addEventListener('pointerdown', wake); addEventListener('keydown', wake);
     const click = (e: MouseEvent) => { if ((e.target as HTMLElement).closest?.('.btn')) audio.play('click'); };
     addEventListener('click', click, true);
@@ -149,7 +149,7 @@ export default function Game() {
     return () => { game.destroy(true); removeEventListener('keydown', keys); clearInterval(wt); clearInterval(jt); removeEventListener('pointerdown', wake); removeEventListener('keydown', wake); removeEventListener('click', click, true); fxBus.removeEventListener('fx', onFx); };
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = s.settings.theme; }, [s.settings.theme]);
-  useEffect(() => { audio.setVolumes({ music: s.settings.sound ? s.settings.music ?? 0.5 : 0, sfx: s.settings.sound ? s.settings.sfx ?? 0.7 : 0, ambience: s.settings.sound && (s.settings.ambience ?? true) }); }, [s.settings.music, s.settings.sfx, s.settings.ambience, s.settings.sound]);
+  useEffect(() => { audio.setVolumes({ music: s.settings.sound ? s.settings.music ?? 0.5 : 0, sfx: s.settings.sound ? s.settings.sfx ?? 0.7 : 0, ambience: s.settings.sound && (s.settings.ambience ?? true), ambVol: s.settings.ambVol ?? 0.7 }); }, [s.settings.ambVol, s.settings.music, s.settings.sfx, s.settings.ambience, s.settings.sound]);
   // the parade ground: start the scene when a review or parade is called, stop it when dismissed
   useEffect(() => { const g = gameRef.current; if (!g) return;
     if (ui.parade) { g.scene.start('parade', { mode: ui.parade.mode }); g.scene.bringToTop('parade'); } else if (g.scene.isActive('parade')) g.scene.stop('parade');

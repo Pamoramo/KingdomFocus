@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { type GameState, type Building, footprint, TILE, count } from '../lib/state.ts';
+import { type GameState, type Building, footprint, TILE, count, getState } from '../lib/state.ts';
 import { sFrame, S } from './textures.ts';
 import { wallWalk } from './art/buildings.ts';
 import { UNIT_K, dutySoldiers } from './army.ts';
@@ -13,10 +13,10 @@ type Mode = 'walk' | 'patrol' | 'archer' | 'spar' | 'tilt';
 const RANGED = new Set(['archer', 'longbow', 'crossbow', 'royalarcher']);
 interface Duty { img: Phaser.GameObjects.Image; cls: string; rank: number; kind: 'patrol' | 'post'; x: number; y: number; tx: number; ty: number; wait: number; ph: number; leader?: Duty; chasing?: boolean; onWall?: boolean; hx: number; hy: number; path?: Pt[]; repath?: number }
 interface Thief { img: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; path?: Pt[]; state: 'run' | 'caught' | 'gone'; t: number; warned: boolean }
-interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number]; path?: Pt[]; dest?: Place; act?: Act }
+interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number]; path?: Pt[]; dest?: Place; act?: Act; carry?: Phaser.GameObjects.Image }
 /** A place townsfolk go: its doorstep (or a spot in the field) and what they do there. */
-interface Place { kind: BKind; b: Building; at: Pt; cx: number }
-type Act = 'inside' | 'browse' | 'draw' | 'hammer' | 'hoe' | 'chat' | 'rest';
+interface Place { kind: BKind; b: Building; at: Pt; cx: number; home?: boolean }
+type Act = 'inside' | 'browse' | 'draw' | 'hammer' | 'hoe' | 'chat' | 'rest' | 'cheer';
 /** What people say while busy at each kind of place. */
 const PLACE_LINES: Partial<Record<Act, string[]>> = {
   browse: ['How much for the apples?', 'Two loaves, please.', 'That price is robbery!', 'Fresh fish today?', 'A fine bolt of cloth.', 'I\'ll take a dozen eggs.', 'Any honey left?'],
@@ -26,6 +26,8 @@ const PLACE_LINES: Partial<Record<Act, string[]>> = {
   rest: ['Home at last.', 'Supper time!', 'My feet ache.'],
 };
 
+/** Hour of the day (respecting the always-day / always-night setting). */
+const clockHour = () => { const m = getState().settings.dayNight; return m === 'day' ? 12 : m === 'night' ? 23 : new Date().getHours(); };
 /** Villagers going about their day, sentries on patrol, archers at practice, knights training. */
 export class Ambient {
   actors: Actor[] = [];
@@ -36,10 +38,16 @@ export class Ambient {
   private posts: { x: number; y: number }[] = [];
   private waypoints: { x: number; y: number }[] = [];
   private places: Place[] = [];
+  /** enemies at the gates: townsfolk shelter indoors */ alarm = false;
+  /** a victory festival: crowds gather at the market */ festival = false;
   /** Walkable ground: everyone walks around buildings, walls and water. */
   readonly nav = new NavGrid();
   thief: Thief | null = null;
-  constructor(private scene: Phaser.Scene, private chatter: Chatter) {}
+  constructor(private scene: Phaser.Scene, private chatter: Chatter) {
+    const T = scene.textures; // a crate and a grain sack for workers to carry
+    if (!T.exists('carry0')) { const c = document.createElement('canvas'); c.width = 6; c.height = 5; const x = c.getContext('2d')!; x.fillStyle = '#5e3b1c'; x.fillRect(0, 0, 6, 5); x.fillStyle = '#b07a42'; x.fillRect(1, 1, 4, 3); x.fillStyle = '#5e3b1c'; x.fillRect(1, 2, 4, 1); T.addCanvas('carry0', c); }
+    if (!T.exists('carry1')) { const c = document.createElement('canvas'); c.width = 6; c.height = 6; const x = c.getContext('2d')!; x.fillStyle = '#8a6a3a'; x.fillRect(1, 1, 4, 5); x.fillRect(0, 2, 6, 3); x.fillStyle = '#d8c090'; x.fillRect(1, 2, 3, 3); x.fillStyle = '#5a3a1e'; x.fillRect(2, 0, 2, 1); T.addCanvas('carry1', c); }
+  }
 
   sync(s: GameState) {
     if (this.nav.update(s.buildings)) { for (const a of this.actors) a.path = undefined; for (const d of this.duty) d.path = undefined; if (this.thief) this.thief.path = undefined; } // the town changed: plan new routes
@@ -50,7 +58,7 @@ export class Ambient {
   private syncBase(s: GameState) {
     const sig = s.buildings.filter((b) => !['road', 'wall', 'palisade', 'courtyard', 'moat'].includes(b.kind)).map((b) => b.id + b.level + b.x + b.y).join();
     if (sig === this.sig) return; this.sig = sig;
-    this.actors.forEach((a) => a.img.destroy()); this.actors = [];
+    this.actors.forEach((a) => { a.img.destroy(); a.carry?.destroy(); }); this.actors = [];
     const B = s.buildings.filter((b) => !['road', 'wall', 'palisade', 'courtyard', 'moat'].includes(b.kind));
     const door = (b: Building) => { const [w, h] = footprint(b.kind); return { x: (b.x + w / 2) * TILE, y: (b.y + h) * TILE + 3 }; };
     this.doors = B.map(door);
@@ -69,7 +77,7 @@ export class Ambient {
     for (const b of B) {
       const [w, h] = footprint(b.kind), x0 = b.x * TILE, y1 = (b.y + h) * TILE;
       if (['watchtower', 'guardhouse', 'tower', 'gatehouse', 'gate'].includes(b.kind) && guards++ < 40) {
-        const a = this.add(b.level >= 2 ? 'halberdier' : 'spearman', Math.min(2, b.level - 1), 'patrol', x0 + w * 8, y1 + 4); a.a = x0 - 20; a.b = x0 + w * TILE + 20;
+        const a = this.add(b.level >= 2 ? 'halberdier' : 'spearman', Math.min(2, b.level - 1), 'patrol', x0 + w * 8, y1 + 4); [a.a, a.b] = this.beat(x0 + w * 8, y1 + 4, 20); // paces only over open ground, never through a wall
       }
       if (b.kind === 'range') for (let i = 0; i < 1 + b.level; i++) { const a = this.add(b.level >= 3 ? 'royalarcher' : b.level === 2 ? 'longbow' : 'archer', 0, 'archer', x0 + 6 + i * 12, y1 - 6); a.target = [x0 + 9 + i * 14, b.y * TILE + 11]; a.ph = i * 7; }
       if (b.kind === 'trainfield') {
@@ -161,8 +169,8 @@ export class Ambient {
       }
       if (g.kind === 'patrol' && !g.leader) { // walk the beat from doorstep to street corner, around the buildings
         g.repath = undefined;
-        if (g.path?.length) { const dir = follow(g, dt, 11); if (dir) g.img.setFlipX(dir < 0); f = (tick + g.ph) % 4; }
-        else if ((g.wait -= dt) < 0) { const w = this.waypoints[Math.floor(Math.random() * this.waypoints.length)]; if (w) g.path = this.nav.path(g, { x: w.x + (Math.random() - 0.5) * 10, y: w.y }) ?? undefined; g.wait = 1200 + Math.random() * 2500; }
+        if (g.path?.length) { const dir = follow(g, dt, this.alarm ? 28 : 11); if (dir) g.img.setFlipX(dir < 0); f = (tick + g.ph) % 4; }
+        else if ((g.wait -= dt) < 0) { const w = this.alarm && this.posts.length ? this.posts[Math.floor(Math.random() * Math.min(6, this.posts.length))] : this.waypoints[Math.floor(Math.random() * this.waypoints.length)]; /* to the gates and towers when the enemy comes */ if (w) g.path = this.nav.path(g, { x: w.x + (Math.random() - 0.5) * 10, y: w.y }) ?? undefined; g.wait = 1200 + Math.random() * 2500; }
         g.img.setFrame(sFrame(g.cls, g.rank, f)).setPosition(Math.round(g.x), Math.round(g.y)).setDepth(this.depthAt(g.x, g.y)); continue;
       }
       if (g.leader) { const L = g.leader, dir = L.img.flipX ? 1 : -1; tx = L.x + dir * 9; ty = L.y + 3; sp = 13; }
@@ -202,14 +210,17 @@ export class Ambient {
   }
   // ---------------- townsfolk: walk the streets to a place, do something there, move on ----------------
   private walker(a: Actor, dt: number, tick: number): number {
+    a.carry?.setPosition(Math.round(a.x + (a.img.flipX ? -3 : 3)), Math.round(a.y - 9)).setDepth(a.y + 0.1).setVisible(a.img.visible);
+    if (this.alarm && a.act !== 'inside' && !a.dest?.home) { this.shelter(a); }
     if (a.act) {
-      a.wait -= dt;
+      if (!(this.alarm && a.act === 'inside')) a.wait -= dt; // indoors until the danger passes
       let f = 0;
       const cyc = (tick + a.ph) % 12;
       if (a.act === 'browse') { f = cyc < 2 ? 4 : 0; if (cyc === 6 && Math.random() < 0.01) a.img.setFlipX(!a.img.flipX); } // points at the wares, looks around
       else if (a.act === 'draw') f = cyc % 6 < 3 ? 4 : 5; // winds the windlass
       else if (a.act === 'hammer') { f = cyc % 4 < 2 ? 4 : 5; if (cyc % 4 === 2 && Math.random() < 0.15) this.spark(a.x + (a.img.flipX ? -6 : 6), a.y - 8); }
       else if (a.act === 'hoe') f = cyc % 8 < 4 ? 4 : 5;
+      else if (a.act === 'cheer') { f = cyc % 4 < 2 ? 4 : 0; a.img.setY(Math.round(a.y) - (cyc % 4 < 2 ? 2 : 0)); }
       if (a.wait <= 0) {
         if (a.act === 'inside') { a.img.setVisible(true); this.scene.tweens.add({ targets: a.img, alpha: 1, duration: 300 }); } // steps back out of the door
         a.act = undefined; a.dest = undefined; this.goSomewhere(a);
@@ -217,7 +228,7 @@ export class Ambient {
       return f;
     }
     if (!a.path) { if ((a.wait -= dt) > 0) return 0; this.goSomewhere(a); return 0; }
-    if (a.path.length) { const dir = follow(a, dt, 14); if (dir) a.img.setFlipX(dir < 0); return (tick + a.ph) % 4; }
+    if (a.path.length) { const dir = follow(a, dt, this.alarm ? 30 : 14); if (dir) a.img.setFlipX(dir < 0); return (tick + a.ph) % 4; }
     // arrived
     a.path = undefined; this.arrive(a); return 0;
   }
@@ -226,10 +237,33 @@ export class Ambient {
     for (const p of this.places) if (p.kind === 'farm') { const b = p.b, [w, h] = footprint('farm'); if (x >= b.x * TILE && x < (b.x + w) * TILE && y >= b.y * TILE && y <= (b.y + h) * TILE) return (b.y + h) * TILE + 0.5 + y / 1000; }
     return y;
   }
+  /** Enemies at the gates: hurry indoors to the nearest home and stay there. */
+  private shelter(a: Actor) {
+    if (a.act === 'inside' || a.dest?.home) return;
+    const homes = this.places.filter((p) => ['house', 'hut', 'keep', 'greathall', 'palace', 'camp'].includes(p.kind)).sort((x, y) => Math.hypot(x.at.x - a.x, x.at.y - a.y) - Math.hypot(y.at.x - a.x, y.at.y - a.y));
+    for (const p of homes.slice(0, 3)) { const path = this.nav.path(a, p.at); if (path) { a.act = undefined; a.path = path; a.dest = { ...p, home: true }; a.img.setVisible(true).setAlpha(1); return; } }
+    if (homes[0]) { a.dest = { ...homes[0], home: true }; a.path = undefined; a.act = 'rest'; a.wait = 8000; } // nowhere to run: cower where they stand
+  }
+  /** The stretch of open ground a sentry may pace (left and right of a point), stopping at walls and buildings. */
+  private beat(x: number, y: number, reach: number): [number, number] {
+    const t = this.nav.tileOf({ x, y }); if (!this.nav.free(t.x, t.y)) return [x, x];
+    let l = t.x, r = t.x; const max = Math.ceil(reach / TILE) + 1;
+    while (l > t.x - max && this.nav.free(l - 1, t.y)) l--; while (r < t.x + max && this.nav.free(r + 1, t.y)) r++;
+    return [Math.max(x - reach, l * TILE + 4), Math.min(x + reach, (r + 1) * TILE - 4)];
+  }
+  /** The doorstep of a random building of these kinds (for carts and travellers). */
+  placeOf(kinds: BKind[]): Pt | null { const l = this.places.filter((p) => kinds.includes(p.kind)); return l.length ? l[Math.floor(Math.random() * l.length)].at : null; }
   /** Chooses where to go next: workers to fields, forge and stores; everyone to market, well and home. */
   private goSomewhere(a: Actor) {
     if (!this.places.length) { a.wait = 3000; return; }
-    const worker = a.cls === 'worker', weight = (p: Place) => ({ market: 5, well: 3, house: 3, hut: 3, farm: worker ? 5 : 0.5, blacksmith: worker ? 3 : 1, storehouse: worker ? 3 : 0.5, camp: 1, keep: 0.5, greathall: 1, stable: 1, palace: 0.5 } as Partial<Record<BKind, number>>)[p.kind] ?? 0.2;
+    if (this.alarm) { this.shelter(a); return; }
+    // daily routine: fields in the morning, market in the evening, home at night; a festival draws everyone to the square
+    const hr = clockHour(), night = hr >= 21 || hr < 5, morning = hr >= 6 && hr < 11, evening = hr >= 17 && hr < 21, carrying = !!a.carry;
+    const base = { market: 5, well: 3, house: 3, hut: 3, farm: a.cls === 'worker' ? 5 : 0.5, blacksmith: a.cls === 'worker' ? 3 : 1, storehouse: a.cls === 'worker' ? 3 : 0.5, camp: 1, keep: 0.5, greathall: 1, stable: 1, palace: 0.5 } as Partial<Record<BKind, number>>;
+    const weight = (p: Place) => { let w = base[p.kind] ?? 0.2; const home = p.kind === 'house' || p.kind === 'hut' || p.kind === 'camp';
+      if (carrying) return p.kind === 'storehouse' || p.kind === 'market' ? 10 : 0.05; // deliver the load first
+      if (this.festival) return p.kind === 'market' || p.kind === 'keep' || p.kind === 'camp' ? w * 8 : w * 0.3;
+      if (night) return home ? w * 6 : w * 0.12; if (morning && p.kind === 'farm') w *= 2; if (evening && (p.kind === 'market' || p.kind === 'well')) w *= 2; return w; };
     for (let tries = 0; tries < 4; tries++) {
       const total = this.places.reduce((t, p) => t + weight(p), 0); let r = Math.random() * total;
       const p = this.places.find((x) => (r -= weight(x)) <= 0) ?? this.places[0];
@@ -237,7 +271,7 @@ export class Ambient {
       if (p.kind === 'farm') { const [w, h] = footprint('farm'); at = { x: (p.b.x + 0.5 + Math.random() * (w - 1)) * TILE, y: (p.b.y + 0.8 + Math.random() * (h - 1)) * TILE }; }
       else at = { x: at.x + (Math.random() - 0.5) * (p.kind === 'market' ? 30 : 10), y: at.y + Math.random() * 3 };
       const path = this.nav.path(a, at); if (!path) continue;
-      a.path = path; a.dest = { ...p, at }; return;
+      a.path = path; a.dest = { ...p, at, home: ['house', 'hut', 'keep', 'greathall', 'palace', 'camp'].includes(p.kind) }; return;
     }
     a.wait = 2000 + Math.random() * 3000; // nowhere reachable just now
   }
@@ -246,9 +280,13 @@ export class Ambient {
     const p = a.dest; if (!p) { a.wait = 1500; return; }
     const worker = a.cls === 'worker', home = ['house', 'hut', 'keep', 'greathall', 'palace', 'camp', 'stable', 'storehouse'].includes(p.kind);
     const act: Act = p.kind === 'market' ? 'browse' : p.kind === 'well' ? 'draw' : p.kind === 'blacksmith' ? (worker ? 'hammer' : 'browse') : p.kind === 'farm' ? 'hoe' : home ? (Math.random() < 0.75 ? 'inside' : 'rest') : 'rest';
-    a.act = act;
-    a.wait = { inside: 5000 + Math.random() * 9000, browse: 4000 + Math.random() * 5000, draw: 2500 + Math.random() * 1500, hammer: 4000 + Math.random() * 3000, hoe: 5000 + Math.random() * 5000, chat: 3000, rest: 2000 + Math.random() * 2500 }[act];
+    const act1: Act = this.alarm && p.home ? 'inside' : act;
+    const act2: Act = this.festival && (p.kind === 'market' || p.kind === 'keep' || p.kind === 'camp') ? 'cheer' : act1;
+    if (a.carry && (p.kind === 'storehouse' || p.kind === 'market')) { a.carry.destroy(); a.carry = undefined; } // load delivered
+    a.act = act2;
+    a.wait = act2 === 'cheer' ? 6000 + Math.random() * 6000 : { inside: 5000 + Math.random() * 9000, browse: 4000 + Math.random() * 5000, draw: 2500 + Math.random() * 1500, hammer: 4000 + Math.random() * 3000, hoe: 5000 + Math.random() * 5000, chat: 3000, rest: 2000 + Math.random() * 2500, cheer: 6000 }[act] * (act === 'inside' && (clockHour() >= 21 || clockHour() < 5) ? 5 : 1); // a night's sleep
     if (act !== 'hoe') a.img.setFlipX(p.cx < a.x); // face the building
+    if (a.cls === 'worker' && !a.carry && (act === 'hoe' || act === 'hammer') && Math.random() < 0.6 && this.places.some((x) => x.kind === 'storehouse' || x.kind === 'market')) this.scene.time.delayedCall(a.wait, () => { if (a.img.active && !a.carry) a.carry = this.scene.add.image(a.x, a.y, act === 'hoe' ? 'carry1' : 'carry0').setOrigin(0.5, 1); }); // the harvest or the forge's work goes to market
     if (act === 'inside') this.scene.tweens.add({ targets: a.img, alpha: 0, duration: 300, onComplete: () => { if (a.act === 'inside') a.img.setVisible(false); } });
     const lines = PLACE_LINES[act];
     if (lines && this.chatter.count < 3 && Math.random() < 0.3) this.chatter.say({ get x() { return a.x; }, get y() { return a.y; }, h: 16, alive: () => a.img.active && a.img.visible }, lines[Math.floor(Math.random() * lines.length)], 300, this.chatter.voice(worker ? 'worker' : 'villager'));

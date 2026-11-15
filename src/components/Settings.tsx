@@ -64,7 +64,8 @@ export function SettingsPanel() {
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.sound} onChange={(e) => setSettings({ sound: e.target.checked })} /> All sound</label>
       <label className="flex items-center gap-2 text-sm">Music<input type="range" min={0} max={1} step={0.05} className="flex-1" value={st.music ?? 0.5} onChange={(e) => setSettings({ music: +e.target.value })} /></label>
       <label className="flex items-center gap-2 text-sm">Effects<input type="range" min={0} max={1} step={0.05} className="flex-1" value={st.sfx ?? 0.7} onChange={(e) => setSettings({ sfx: +e.target.value })} /></label>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.ambience ?? true} onChange={(e) => setSettings({ ambience: e.target.checked })} /> Ambience (birdsong by day, crickets at night)</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.ambience ?? true} onChange={(e) => setSettings({ ambience: e.target.checked })} /> Ambience (birdsong, wind, the forge, the market, crickets at night)</label>
+      <label className="flex items-center gap-2 text-sm">Ambience volume <input type="range" className="flex-1" min={0} max={1} step={0.05} value={st.ambVol ?? 0.7} disabled={!(st.ambience ?? true)} onChange={(e) => setSettings({ ambVol: +e.target.value })} /></label>
       <p className="text-xs opacity-75">All music is generated live: a lute, recorder and drum play in a medieval mode that shifts with day, night and war.</p>
     </Section>
     <Section title="Appearance">

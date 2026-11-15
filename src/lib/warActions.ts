@@ -28,6 +28,20 @@ const TROOPS_CAV = new Set(['lightcav', 'knight', 'mknight', 'vetcav']), TROOPS_
 const commanderOf = (s: GameState, bats: string[], kind: BattleKind = 'field', units: Unit[] = [], vsBandits = false) => { const b = leadOf(s, bats); return b ? rating(b.commander, kind, mixOf(units), vsBandits) + courtFx(courtOf(s.world)).command : 0; }; // loyal nobles fight harder
 /** How much of their host the leading commander may lose (cautious and lucky captains lose fewer men). */
 const lossCap = (s: GameState, bats: string[], frac: number) => { const b = leadOf(s, bats); return Math.min(0.9, frac * (b ? lossFactor(b.commander) : 1)); };
+/** Pays spoils as one or more 'loot' ledger rows, each within the cloud's per-row limits, so great prizes are never rejected. */
+const LOOT_CAP: Res = { gold: 10000, wood: 3000, stone: 3000, renown: 400 };
+function payLoot(o: GameState, r: Partial<Res>): GameState {
+  let left: Res = { ...ZERO, ...r };
+  while (left.gold > 0 || left.wood > 0 || left.stone > 0 || left.renown > 0) {
+    const part: Res = { gold: Math.min(left.gold, LOOT_CAP.gold), wood: Math.min(left.wood, LOOT_CAP.wood), stone: Math.min(left.stone, LOOT_CAP.stone), renown: Math.min(left.renown, LOOT_CAP.renown) };
+    o = ledger(o, 'loot', uid(), part); left = { gold: left.gold - part.gold, wood: left.wood - part.wood, stone: left.stone - part.stone, renown: left.renown - part.renown };
+  }
+  return o;
+}
+/** The town celebrates a victory for a while (bunting, crowds, music). Purely for show. */
+const celebrate = (o: GameState, minutes: number): GameState => W(o, { ...o.world, festival: Math.max(o.world.festival ?? 0, Date.now() + minutes * 60_000) });
+/** A lost battle at home leaves a few buildings blackened and smoking for an hour. Purely for show. */
+const scar = (o: GameState, n: number): GameState => { const pool = o.buildings.filter((b) => !['road', 'wall', 'palisade', 'courtyard', 'moat', 'camp'].includes(b.kind)).sort(() => Math.random() - 0.5); return W(o, { ...o.world, scars: { ids: pool.slice(0, n).map((b) => b.id), until: Date.now() + 60 * 60_000 } }); };
 /** The leading commander's opening line for the battle film. */
 const cryOf = (s: GameState, bats: string[], kind: BattleKind) => { const b = leadOf(s, bats); return b ? battleCry(b.commander, OFFICERS[b.commander.rank]?.name ?? '', kind) : undefined; };
 /** Records a battle for every commander present; announces when one has earned praise. */
@@ -354,8 +368,9 @@ export const fieldBattle = (tactic: Tactic) => update((s) => {
   const killed = sidePower(foe.map((u, i) => ({ ...u, count: res.lossB[i] })));
   const w = { ...o.world, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.max(10, Math.round(x.power - killed * 1.4)), beaten: res.winner === 'a' ? 1 : x.beaten } : x)) };
   if (res.winner === 'a') o = W(o, { ...w, campaign: { ...c, phase: 'siege', log: [...c.log, `Victory in the field! The siege of ${r.name} begins.`] } });
+  if (res.winner === 'a') o = celebrate(o, 3);
   else o = goHome(W(o, { ...w, campaign: null, engines: addEngines(w.engines, c.engines), supplies: w.supplies + c.supplies }), r, c.battalions, `Your host retreating from ${r.name}`);
-  o = ledger(o, 'loot', uid(), res.winner === 'a' ? fieldSpoils(r) : ZERO);
+  o = res.winner === 'a' ? payLoot(o, fieldSpoils(r)) : o;
   o = report(o, `Battle before ${r.name}`, res.winner === 'a', res, a, foe, res.winner === 'a' ? fieldSpoils(r) : undefined);
   play(`Battle before ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color, undefined, { biome: biomeOf(s.world, r), cry: cryOf(s, c.battalions, 'field') });
   return event(o, 'war', res.winner === 'a' ? `Defeated ${r.name}'s army in the field.` : `Defeated in the field by ${r.name}; the host retreats.`);
@@ -373,7 +388,7 @@ export const liftSiege = () => update((s) => {
 function conquer(s: GameState, r: Rival): GameState {
   const loot = conquestSpoils(r);
   const c = s.world.campaign!;
-  let o = ledger(s, 'loot', uid(), loot);
+  let o = payLoot(s, loot);
   // the spoils go on the latest report of this siege (the assault), or a new surrender report
   const last = o.world.reports?.[0];
   if (last && Date.now() - last.t < 5000 && last.title.includes(r.name)) o = W(o, { ...o.world, reports: [{ ...last, loot }, ...o.world.reports.slice(1)] });
@@ -381,6 +396,7 @@ function conquer(s: GameState, r: Rival): GameState {
   const w = { ...o.world, campaign: null, engines: addEngines(o.world.engines, c.engines), supplies: o.world.supplies + c.supplies, conquests: o.world.conquests + 1,
     rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, status: 'vassal' as const, power: Math.round(x.power * 0.3), garrison: 0, relation: 20 } : r.friends.includes(x.id) ? { ...x, relation: Math.max(-100, x.relation - 20) } : x)) };
   o = goHome(W(o, w), r, c.battalions, `Your victorious host returning from ${r.name}`);
+  o = celebrate(o, 10);
   emit({ kind: 'stage', text: `${r.name} has fallen! It is now your vassal.`, res: loot, big: true });
   return event(o, 'war', `Conquered ${r.name}. Its lord swears fealty to you.`);
 }
@@ -436,10 +452,10 @@ export const defend = (tactic: Tactic) => update((s) => {
   play(`Defence of your castle`, a, foe, flipped, 'Your garrison', r.name, 0xb3242a, r.color, undefined, { biome: 'grassland', walls: count(s, 'wall') + count(s, 'gatehouse') > 0 ? { side: 0, kind: 'wall' } : count(s, 'palisade') > 0 ? { side: 0, kind: 'palisade' } : undefined, cry: cryOf(s, homeBats, 'defend') });
   o = report(o, `Defence against ${r.name}`, won, flipped, a, foe, won ? defenceSpoils(r) : undefined);
   let w = { ...o.world, threat: null, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.round(x.power * (won ? 0.6 : 0.9)), relation: Math.min(100, x.relation + 10), beaten: won ? 1 : x.beaten } : x)) };
-  if (won) { o = ledger(W(o, w), 'loot', uid(), defenceSpoils(r)); emit({ kind: 'achieve', text: `${r.name}'s host is broken before your walls!` }); }
+  if (won) { o = celebrate(payLoot(W(o, w), defenceSpoils(r)), 6); emit({ kind: 'achieve', text: `${r.name}'s host is broken before your walls!` }); }
   else {
     const take = { gold: Math.min(5000, Math.floor(o.res.gold * 0.15)), wood: Math.floor(o.res.wood * 0.1), stone: Math.floor(o.res.stone * 0.1) };
-    o = spend(W(o, w), take); emit({ kind: 'war', text: `${r.name} breaks in and carries off ${take.gold} gold before withdrawing. Your buildings stand.` });
+    o = scar(spend(W(o, w), take), 4); emit({ kind: 'war', text: `${r.name} breaks in and carries off ${take.gold} gold before withdrawing. Fires smoulder in the town.` });
   }
   void w;
   return event(o, 'war', won ? `Repelled ${r.name}'s siege.` : `${r.name} plundered your stores and withdrew.`);

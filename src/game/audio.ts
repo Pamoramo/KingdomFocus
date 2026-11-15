@@ -13,7 +13,8 @@ class Engine {
   private noiseBuf!: AudioBuffer; private drone: OscillatorNode[] = [];
   private mood: Mood = 'day'; private nextT = 0; private step = 0; private timer: ReturnType<typeof setInterval> | null = null;
   private weather = 'clear'; private rain: { g: GainNode; f: BiquadFilterNode } | null = null;
-  private melody = { deg: 4, rest: 0 }; private ambT = 0; private vol = { music: 0.5, sfx: 0.7, ambience: true };
+  private melody = { deg: 4, rest: 0 }; private ambT = 0; private vol = { music: 0.5, sfx: 0.7, ambience: true, ambVol: 0.7 };
+  private wind: { g: GainNode; f: BiquadFilterNode } | null = null; private windLevel = 0.03;
 
   /** Must be called from a user gesture (browsers block audio until then). */
   start() {
@@ -33,8 +34,8 @@ class Engine {
     this.timer = setInterval(() => this.schedule(), 90);
     this.startDrone(); this.setWeather(this.weather as never);
   }
-  setVolumes(v: { music?: number; sfx?: number; ambience?: boolean }) { this.vol = { music: v.music ?? this.vol.music, sfx: v.sfx ?? this.vol.sfx, ambience: v.ambience ?? this.vol.ambience }; this.apply(); }
-  private apply() { if (!this.ctx) return; const t = this.ctx.currentTime; this.music.gain.setTargetAtTime(this.vol.music * 0.55, t, 0.3); this.sfx.gain.setTargetAtTime(this.vol.sfx, t, 0.05); this.amb.gain.setTargetAtTime(this.vol.ambience ? 0.35 : 0, t, 0.3); }
+  setVolumes(v: { music?: number; sfx?: number; ambience?: boolean; ambVol?: number }) { this.vol = { music: v.music ?? this.vol.music, sfx: v.sfx ?? this.vol.sfx, ambience: v.ambience ?? this.vol.ambience, ambVol: v.ambVol ?? this.vol.ambVol }; this.apply(); }
+  private apply() { if (!this.ctx) return; const t = this.ctx.currentTime; this.music.gain.setTargetAtTime(this.vol.music * 0.55, t, 0.3); this.sfx.gain.setTargetAtTime(this.vol.sfx, t, 0.05); this.amb.gain.setTargetAtTime((this.vol.ambience ? 0.35 : 0) * this.vol.ambVol * 1.4, t, 0.3); }
   /** Weather ambience: a looping filtered-noise bed (rain hiss, storm downpour or winter wind). */
   setWeather(w: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog' | 'snow') {
     this.weather = w; if (!this.ctx) return; const c = this.ctx, t = c.currentTime;
@@ -44,6 +45,9 @@ class Engine {
     }
     const cfg: Record<string, [number, BiquadFilterType, number]> = { clear: [0, 'lowpass', 400], cloudy: [0.05, 'lowpass', 350], fog: [0.03, 'lowpass', 300], rain: [0.22, 'bandpass', 1400], storm: [0.36, 'bandpass', 1000], snow: [0.08, 'lowpass', 500] };
     const [vol, type, freq] = cfg[w]; this.rain.f.type = type; this.rain.f.frequency.setTargetAtTime(freq, t, 0.5); this.rain.g.gain.setTargetAtTime(vol, t, 1.2);
+    // wind: a low, slowly gusting rush under every sky, strongest in storms and snow
+    if (!this.wind) { const src = c.createBufferSource(); src.buffer = this.noiseBuf; src.loop = true; src.playbackRate.value = 0.5; const f = c.createBiquadFilter(), g = c.createGain(); f.type = 'lowpass'; f.frequency.value = 380; g.gain.value = 0; src.connect(f).connect(g).connect(this.amb); src.start(); this.wind = { g, f }; }
+    this.windLevel = ({ clear: 0.025, cloudy: 0.05, fog: 0.02, rain: 0.05, storm: 0.12, snow: 0.09 } as Record<string, number>)[w] ?? 0.03;
   }
   setMood(m: Mood) { if (m === this.mood) return; this.mood = m; this.startDrone(); }
 
@@ -116,6 +120,7 @@ class Engine {
   }
   private ambience() {
     const c = this.ctx!, t = c.currentTime;
+    if (this.wind) { this.wind.g.gain.setTargetAtTime(this.windLevel * (0.5 + Math.random()), t, 1.5); this.wind.f.frequency.setTargetAtTime(260 + Math.random() * 300, t, 2); } // gusts
     if (this.mood === 'night') { for (let i = 0; i < 6; i++) this.osc('sine', 4300 + Math.random() * 300, t + i * 0.06, 0.02, 0.005, 0.03, this.amb); this.ambT = t + 1.2 + Math.random() * 2; }
     else if (this.mood === 'day') {
       const n = 2 + Math.floor(Math.random() * 4), base = 2400 + Math.random() * 1600;
@@ -124,6 +129,25 @@ class Engine {
     } else { this.noise(t, 1.6, 0.02, this.amb, 'lowpass', 400); this.ambT = t + 2; }
   }
 
+  /** Sounds of the world placed in space: `gain` 0..1 by distance, `pan` -1 (left) .. 1 (right). */
+  spatial(kind: 'hammer' | 'chatter' | 'drill' | 'neigh' | 'hooves' | 'crackle' | 'water' | 'steps' | 'bell' | 'cheer' | 'chop' | 'alarm', gain: number, pan = 0) {
+    if (!this.ctx || !this.vol.ambience || gain <= 0.02) return;
+    const c = this.ctx, t = c.currentTime + 0.02, out = c.createGain(), p = c.createStereoPanner(); out.gain.value = Math.min(1, gain); p.pan.value = Math.max(-1, Math.min(1, pan)); out.connect(p).connect(this.amb);
+    setTimeout(() => { out.disconnect(); p.disconnect(); }, 4000);
+    switch (kind) {
+      case 'hammer': for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) { const tt = t + i * 0.42; this.osc('square', 1650 + Math.random() * 200, tt, 0.05, 0.002, 0.14, out); this.osc('sine', 3300, tt, 0.03, 0.002, 0.3, out); this.noise(tt, 0.05, 0.06, out, 'highpass', 2500); } break;
+      case 'chatter': for (let i = 0; i < 3; i++) { const f = 300 + Math.random() * 260; for (let k = 0; k < 4; k++) this.osc('triangle', f * (0.85 + Math.random() * 0.3), t + i * 0.35 + k * 0.08, 0.02, 0.01, 0.06, out); } break;
+      case 'drill': for (let i = 0; i < 4; i++) { const tt = t + i * 0.5; this.osc('sawtooth', i % 2 ? 150 : 175, tt, 0.035, 0.01, 0.16, out); this.noise(tt + 0.25, 0.08, 0.05, out, 'lowpass', 220); } break;
+      case 'neigh': { const o = this.osc('sawtooth', 620, t, 0.03, 0.05, 0.7, out); o.frequency.setValueAtTime(620, t); o.frequency.linearRampToValueAtTime(900, t + 0.2); o.frequency.linearRampToValueAtTime(380, t + 0.7); break; }
+      case 'hooves': for (let i = 0; i < 6; i++) this.noise(t + i * 0.13 + (i % 2) * 0.04, 0.05, 0.07, out, 'bandpass', 500, 3); break;
+      case 'crackle': for (let i = 0; i < 7; i++) this.noise(t + Math.random() * 0.8, 0.015, 0.08, out, 'highpass', 2000 + Math.random() * 2500); this.noise(t, 0.9, 0.03, out, 'lowpass', 300); break;
+      case 'water': this.noise(t, 1.2, 0.05, out, 'bandpass', 900 + Math.random() * 500, 4); break;
+      case 'steps': for (let i = 0; i < 3; i++) this.noise(t + i * 0.32, 0.04, 0.05, out, 'lowpass', 700); break;
+      case 'chop': for (let i = 0; i < 2; i++) { this.noise(t + i * 0.6, 0.07, 0.1, out, 'lowpass', 900); this.osc('sine', 180, t + i * 0.6, 0.05, 0.002, 0.12, out); } break;
+      case 'bell': case 'alarm': { const n = kind === 'alarm' ? 3 : 1; for (let i = 0; i < n; i++) { const tt = t + i * 0.55, f = kind === 'alarm' ? 740 : 523; this.osc('sine', f, tt, 0.09, 0.005, 2.6, out); this.osc('sine', f * 2.76, tt, 0.03, 0.005, 1.2, out); this.osc('sine', f * 5.4, tt, 0.015, 0.005, 0.6, out); } break; }
+      case 'cheer': for (let i = 0; i < 4; i++) this.noise(t + i * 0.12, 1.3, 0.05, out, 'bandpass', 900 + i * 300, 1.5); for (let i = 0; i < 10; i++) this.osc('triangle', 380 + Math.random() * 400, t + Math.random() * 1.1, 0.015, 0.02, 0.12, out); break;
+    }
+  }
   /** Murmured speech: a few soft blips at a voice-specific pitch (like distant chatter). */
   babble(chars: number, base = 440) {
     if (!this.ctx || this.vol.sfx <= 0) return; const t0 = this.ctx.currentTime + 0.02, n = Math.min(7, Math.max(2, Math.ceil(chars / 6)));

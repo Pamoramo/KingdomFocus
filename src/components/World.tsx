@@ -6,7 +6,7 @@ import { setUI, toggleWorldView } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res, canAfford } from '../lib/rewards.ts';
 import { TACTICS, TERRAINS, tacticLock, sidePower, type Tactic, type Terrain } from '../lib/battle.ts';
-import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, type Rival, type Engines, type Stance } from '../lib/war.ts';
+import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, vassalGold, vassalRenown, VASSAL_GOLD_MAX, type Rival, type Engines, type Stance } from '../lib/war.ts';
 import * as WA from '../lib/warActions.ts';
 import { courtOf, courtFx } from '../lib/politics.ts';
 import { engineArt } from '../game/art/war.ts';
@@ -102,7 +102,7 @@ function RivalDetail({ r }: { r: Rival }) {
         <div className="text-xs opacity-80">{TIER[tierOf(r)].name}, {leagues(r).toFixed(1)} leagues away: {TIER[tierOf(r)].desc}</div>
         <button className="btn btn-gold !py-0.5 mt-1" onClick={() => setUI({ view: 'rival', visit: r.id, panel: mobile() ? null : 'world' })}>Visit {r.name}</button>
         {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}</div></div>
-    {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +{Math.round(VASSAL_GOLD * 100)}% gold and +{Math.round(VASSAL_RENOWN * 100)}% renown from every study session (all vassals together give at most +{Math.round(VASSAL_GOLD_MAX * 100)}% gold).</p> : <>
+    {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +{Math.round(vassalGold(r) * 100)}% gold and +{(vassalRenown(r) * 100).toFixed(1)}% renown from every study session (a greater realm pays more) (all vassals together give at most +{Math.round(VASSAL_GOLD_MAX * 100)}% gold).</p> : <>
       {r.status === 'war' && <Spoils r={r} />}
       {!r.bandits && r.status !== 'war' && <Section title="Trade">
         <div className="flex flex-wrap gap-1 items-center text-sm">Give <input type="number" className="inp !w-20" min={10} value={amt} onChange={(e) => setAmt(+e.target.value)} />
@@ -150,13 +150,13 @@ function Intelligence() {
 /** What a war against this realm pays, step by step, so the stakes are clear before you march. */
 function Spoils({ r, phase }: { r: Rival; phase?: 'march' | 'field' | 'siege' }) {
   const s = useGame(), vassals = s.world.rivals.filter((x) => x.status === 'vassal').length;
-  const goldNow = Math.min(VASSAL_GOLD_MAX, vassals * VASSAL_GOLD), goldThen = Math.min(VASSAL_GOLD_MAX, (vassals + 1) * VASSAL_GOLD), pct = (x: number) => `${Math.round(x * 100)}%`;
+  const tribute = s.world.rivals.filter((x) => x.status === 'vassal').reduce((t, x) => t + vassalGold(x), 0), goldNow = Math.min(VASSAL_GOLD_MAX, tribute), goldThen = Math.min(VASSAL_GOLD_MAX, tribute + vassalGold(r)), pct = (x: number) => `${Math.round(x * 100)}%`;
   const friends = r.friends.map((f) => s.world.rivals.find((x) => x.id === f)?.name).filter(Boolean);
   const step = (done: boolean, title: string, body: React.ReactNode) => <div className={`flex gap-2 text-sm ${done ? 'opacity-50 line-through' : ''}`}><span className="w-4 shrink-0">{done ? '✓' : '•'}</span><div className="flex-1"><b>{title}</b> {body}</div></div>;
   return <Section title="Spoils of war">
     {step(phase === 'siege', 'Win the field battle:', <Cost cost={fieldSpoils(r)} plus />)}
     {step(false, `Take ${r.name} (assault or surrender):`, <Cost cost={conquestSpoils(r)} plus />)}
-    {step(false, 'It becomes your vassal:', <>study gold +{pct(goldThen - goldNow)} (vassal tribute {pct(goldNow)} → {pct(goldThen)}, max {pct(VASSAL_GOLD_MAX)}) and +{pct(VASSAL_RENOWN)} renown on every session, for good.</>)}
+    {step(false, 'It becomes your vassal:', <>study gold +{pct(goldThen - goldNow)} (vassal tribute {pct(goldNow)} → {pct(goldThen)}, max {pct(VASSAL_GOLD_MAX)}) and +{(vassalRenown(r) * 100).toFixed(1)}% renown on every session, for good. Spoils and tribute grow with the strength of the realm.</>)}
     <p className="text-xs opacity-75">Your engines and unused supplies come home with the army. Three conquests earn the title of Emperor.{friends.length ? ` ${friends.join(', ')} will think less of you (−20 relations).` : ''}</p>
   </Section>;
 }

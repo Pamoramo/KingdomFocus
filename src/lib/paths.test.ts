@@ -50,3 +50,33 @@ test('a hemmed-in doorstep still gets a path to the nearest open ground', () => 
   assert.ok(p && p.length, 'reaches next to it');
   const end = nav.tileOf(p![p!.length - 1]); assert.ok(nav.free(end.x, end.y));
 });
+
+test('in rival realms, townsfolk reach the castle only through its gates, never over a wall', async () => {
+  const { realmNav } = await import('../game/paths.ts'), { realmLayout } = await import('./realms.ts'), { initWorld } = await import('./war.ts');
+  const w = initWorld(31);
+  for (const r0 of w.rivals) for (const level of [1, 3, 5]) {
+    const r = { ...r0, level, power: 120 * level ** 2.2 }, L = realmLayout(w, r), nav = realmNav(L), walls = new Set(L.walls.map((t) => `${t.x},${t.y}`));
+    const from = { x: (L.gate.x + 0.5) * TILE, y: (L.box.y1 + 8.75) * TILE }, inner = L.inner ?? L.box, to = { x: ((inner.x0 + inner.x1) / 2) * TILE, y: (inner.y1 - 1.25) * TILE };
+    const p = nav.path(from, to); assert.ok(p, `${r.name} L${level} ${L.type}: a way in`);
+    const touched = tiles(nav, from, p!);
+    for (const t of touched) assert.ok(!walls.has(t), `${r.name} L${level} ${L.type}: walked over the wall at ${t}`);
+    assert.ok([...touched].some((t) => t === `${L.gate.x},${L.gate.y}` || t === `${L.gate.x + 1},${L.gate.y}`), `${r.name} L${level}: in through the gate`);
+  }
+});
+
+test('random walks in palisaded camps and walled towns never cut through a wall or a building', async () => {
+  const { realmNav } = await import('../game/paths.ts'), { realmLayout, RW, RH } = await import('./realms.ts'), { initWorld } = await import('./war.ts');
+  let walks = 0;
+  for (let seed = 1; seed <= 12; seed++) {
+    const w = initWorld(seed * 31);
+    for (const r of w.rivals.filter((x) => x.bandits || x.id === 'k0' || x.id === 'k3')) {
+      const L = realmLayout(w, r), nav = realmNav(L); let h = seed; const R = () => ((h = (h * 1664525 + 1013904223) >>> 0) / 4294967296);
+      for (let k = 0; k < 25; k++) {
+        const a = nav.nearestFree({ x: Math.floor(R() * RW), y: Math.floor(R() * RH) }, 6), b = nav.nearestFree({ x: Math.floor(R() * RW), y: Math.floor(R() * RH) }, 6); if (!a || !b) continue;
+        const from = { x: (a.x + 0.3 + R() * 0.4) * TILE, y: (a.y + 0.4 + R() * 0.5) * TILE }, p = nav.path(from, { x: (b.x + 0.5) * TILE, y: (b.y + 0.75) * TILE }); if (!p) continue;
+        walks++; for (const t of tiles(nav, from, p)) { const [x, y] = t.split(',').map(Number); assert.ok(nav.free(x, y), `${r.name}: walked through ${t}`); }
+      }
+    }
+  }
+  assert.ok(walks > 500);
+});

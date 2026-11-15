@@ -186,6 +186,7 @@ export function realmLayout(w: Pick<WorldState, 'seed' | 'rivals'>, r: Rival): R
     for (let y = box.y1 - 1; y > inner.y1 + 1; y--) { pave(sx, y); pave(sx + 1, y); ys.push(y); }
     const midY = Math.round((inner.y1 + box.y1) / 2), xs: number[] = [];
     for (let x = box.x0 + 1; x < box.x1 - 1; x++) if (pave(x, midY)) xs.push(x);
+    if (innerGate) for (let y = innerGate.y + 1; y < midY; y++) { pave(innerGate.x, y); pave(innerGate.x + 1, y); } // a street up to the citadel's own gate
     const plots: [number, number][] = [];
     for (const y of ys.filter((y) => (box.y1 - y) % 2 === 1)) plots.push([sx - 2, y - 1], [sx + 2, y - 1]);
     for (const x of xs.filter((x) => x % 2 === 0)) plots.push([x, midY - 2], [x, midY + 1]);

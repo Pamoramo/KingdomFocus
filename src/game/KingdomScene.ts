@@ -6,6 +6,7 @@ import { makeTextures } from './textures.ts';
 import { World } from './world.ts';
 import { Army } from './army.ts';
 import { Ambient } from './ambient.ts';
+import { Life, season } from './life.ts';
 import { Chatter } from './chatter.ts';
 import { WeatherFx, weatherAt } from './weather.ts';
 import { TownEvents } from './events.ts';
@@ -37,7 +38,7 @@ export class KingdomScene extends Phaser.Scene {
 
   create() {
     makeTextures(this);
-    this.world = new World(this); this.army = new Army(this); this.chatter = new Chatter(this); this.ambient = new Ambient(this, this.chatter);
+    this.world = new World(this); this.army = new Army(this); this.chatter = new Chatter(this); this.ambient = new Ambient(this, this.chatter); this.life = new Life(this, this.world, this.ambient);
     this.ghost = this.add.rectangle(0, 0, 16, 16, 0x44ff66, 0.3).setOrigin(0).setStrokeStyle(1, 0xffffff, 0.9).setDepth(40000).setVisible(false);
     this.selRect = this.add.rectangle(0, 0, 16, 16).setOrigin(0).setStrokeStyle(1, 0xffe27a, 1).setDepth(40001).setVisible(false);
     this.shade = this.add.rectangle(-WW, -WH, WW * 3, WH * 3, 0xffffff).setOrigin(0).setDepth(20000).setBlendMode(Phaser.BlendModes.MULTIPLY);
@@ -49,7 +50,7 @@ export class KingdomScene extends Phaser.Scene {
 
     this.input.addPointer(2);
     this.input.on('pointerdown', this.onDown, this); this.input.on('pointermove', this.onMove, this); this.input.on('pointerup', this.onUp, this);
-    this.input.on('wheel', (p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => this.zoomAt(cam.zoom * (dy > 0 ? 0.88 : 1.14), p.x, p.y));
+    this.input.on('wheel', (p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => { const z = (this.zoomGoal?.z ?? cam.zoom) * (dy > 0 ? 0.85 : 1.18); this.zoomGoal = { z: Phaser.Math.Clamp(z, this.minZoom(), 6), sx: p.x, sy: p.y }; });
     this.scale.on('resize', () => cam.setZoom(Math.max(cam.zoom, this.minZoom())));
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,Q,E,PLUS,MINUS,SHIFT', false) as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on('keydown-ESC', () => setUI({ placing: null, moving: null, selBat: null, selArmy: null, selBuilding: null, inspect: null }));
@@ -73,6 +74,7 @@ export class KingdomScene extends Phaser.Scene {
     this.sync();
   }
 
+  private life!: Life; private zoomGoal: { z: number; sx: number; sy: number } | null = null; private glide: { vx: number; vy: number } | null = null; private lastMove: { x: number; y: number; t: number } | null = null;
   private minZoom() { return Math.max(this.scale.width / (WW * 1.4), this.scale.height / (WH * 1.4), 0.35); }
   zoomAt(z: number, sx: number, sy: number) {
     const cam = this.cameras.main, before = cam.getWorldPoint(sx, sy);
@@ -82,19 +84,23 @@ export class KingdomScene extends Phaser.Scene {
 
   private sync() {
     const s = getState();
-    this.world.drawTerrain(s); this.world.syncBuildings(s); this.army.sync(s, this.frame); this.ambient.sync(s); this.syncUI(); this.applyNight();
+    this.life?.sync(s); this.world.drawTerrain(s); this.world.syncBuildings(s); this.army.sync(s, this.frame); this.ambient.sync(s); this.life?.sync(s); this.syncUI(); this.applyNight();
   }
   applyNight() {
     const { n, warm } = nightFactor(getState().settings.dayNight);
     this.night = n;
-    const tint = lerpColor(lerpColor(0xffffff, 0xffc890, warm * 0.6), 0x3a4a8a, n * 0.85);
-    this.shade.setFillStyle(tint, 1).setVisible(n > 0.01 || warm > 0.01);
+    const seasonTint = { winter: 0xe8eef8, spring: 0xf8fff0, summer: 0xffffff, autumn: 0xfff0dc }[season()]; // a cool winter light, a golden autumn
+    const tint = lerpColor(lerpColor(seasonTint, 0xffc890, warm * 0.6), 0x3a4a8a, n * 0.85);
+    this.shade.setFillStyle(tint, 1).setVisible(n > 0.01 || warm > 0.01 || season() !== 'summer');
     if (Math.abs(getUI().night - n) > 0.05) setUI({ night: n });
   }
 
   update(time: number, dt: number) {
     const s = getState(), ui = getUI(), cam = this.cameras.main;
-    this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.chatter.update(); this.weather?.update(cam); this.happenings?.update();
+    this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.life.update(dt, Math.floor(time / 150));
+    // smooth zoom toward the wheel's target, and a glide after a drag
+    if (this.zoomGoal) { const z = cam.zoom + (this.zoomGoal.z - cam.zoom) * Math.min(1, dt / 90); this.zoomAt(z, this.zoomGoal.sx, this.zoomGoal.sy); if (Math.abs(z - this.zoomGoal.z) < 0.002) this.zoomGoal = null; }
+    if (this.glide && !this.drag) { cam.scrollX -= this.glide.vx * dt / cam.zoom; cam.scrollY -= this.glide.vy * dt / cam.zoom; const k = Math.pow(0.9, dt / 16); this.glide.vx *= k; this.glide.vy *= k; if (Math.hypot(this.glide.vx, this.glide.vy) < 0.01) this.glide = null; } this.chatter.update(); this.weather?.update(cam); this.happenings?.update();
     if (this.night > 0.05) for (const l of this.world.lights) l.setAlpha(this.night * (0.55 + Math.random() * 0.15));
     else if (this.world.lights[0]?.alpha) for (const l of this.world.lights) l.setAlpha(0);
     const k = this.keys, sp = ((k.SHIFT.isDown ? 900 : 400) * dt) / 1000 / cam.zoom;
@@ -129,11 +135,13 @@ export class KingdomScene extends Phaser.Scene {
     if (!this.drag || !p.isDown) return;
     if (Math.hypot(p.x - this.drag.x, p.y - this.drag.y) > 6) this.drag.moved = true;
     if (this.drag.paint) { this.tryPlace(p); return; }
-    if (this.drag.moved) { const z = this.cameras.main.zoom; this.cameras.main.setScroll(this.drag.sx - (p.x - this.drag.x) / z, this.drag.sy - (p.y - this.drag.y) / z); }
+    if (this.drag.moved) { const z = this.cameras.main.zoom; this.cameras.main.setScroll(this.drag.sx - (p.x - this.drag.x) / z, this.drag.sy - (p.y - this.drag.y) / z); const now = this.time.now, last = this.lastMove; if (last && now > last.t) this.glide = { vx: (p.x - last.x) / (now - last.t), vy: (p.y - last.y) / (now - last.t) }; this.lastMove = { x: p.x, y: p.y, t: now }; }
   }
   private onUp(p: Phaser.Input.Pointer) {
     if (this.pinch) { if (!this.input.pointer1.isDown && !this.input.pointer2.isDown) this.pinch = null; this.drag = null; return; }
     const d = this.drag; this.drag = null;
+    if (!d?.moved || this.time.now - (this.lastMove?.t ?? 0) > 80) this.glide = null; // a flick keeps the camera gliding; a pause stops it
+    this.lastMove = null;
     if (!d || d.moved || d.paint) return;
     this.tap(p);
   }
@@ -188,6 +196,7 @@ export class KingdomScene extends Phaser.Scene {
     this.tweens.add({ targets: m, scale: 0.2, alpha: 0, duration: 600, onComplete: () => m.destroy() });
   }
   private smoke() {
+    for (const [x, y] of this.life?.smoke ?? []) for (let i = 0; i < 3; i++) { const p = this.add.image(x + (Math.random() - 0.5) * 10, y, 'px').setTint(0x4a4440).setAlpha(0.8).setDepth(19000).setScale(2.5); this.tweens.add({ targets: p, y: y - 40 - Math.random() * 20, x: p.x + 8, alpha: 0, scale: 6, duration: 3200, onComplete: () => p.destroy() }); } // damaged buildings still smoulder
     const pts = this.world.smokePts; if (!pts.length) return;
     for (let i = 0; i < Math.min(18, pts.length); i++) {
       const [x, y] = pts[Math.floor(Math.random() * pts.length)];

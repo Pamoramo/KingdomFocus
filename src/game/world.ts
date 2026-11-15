@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { type GameState, type Building, MAP_W, MAP_H, TILE, isRiver, footprint } from '../lib/state.ts';
 import { BUILDINGS, CONNECTS, type BKind } from '../lib/economy.ts';
+import { audio } from './audio.ts';
 import { bTex, tileTex, waterTex, scaffoldTex, sFrame, HD, S } from './textures.ts';
 import type { Art } from './art/buildings.ts';
 
@@ -13,6 +14,8 @@ interface BView { img: Phaser.GameObjects.Image; key: string; b: Building; light
 
 /** Terrain, river, buildings, construction effects and building lights. */
 export class World {
+  /** ids of buildings damaged in a lost battle (set by Life) */
+  scarred = new Set<string>();
   terrain: Phaser.GameObjects.RenderTexture;
   private water: { img: Phaser.GameObjects.Image; land: number }[] = [];
   private views = new Map<string, BView>();
@@ -99,6 +102,7 @@ export class World {
       if (!v) { v = { img: this.scene.add.image(0, 0, tex).setOrigin(0, 1).setScale(S), key: '', b, lights: [] }; this.views.set(b.id, v); }
       const changed = v.key !== key;
       v.b = b; v.art = art;
+      v.img.setTint(this.scarred.has(b.id) ? 0x8a7a72 : 0xffffff); // blackened after a lost battle
       const by = (b.y + h) * TILE;
       v.img.setPosition(b.x * TILE, by).setDepth(GROUND.has(b.kind) ? (b.kind === 'road' && isRiver(b.x, b.y) ? -8 : -6) : by).setData('id', b.id);
       if (changed) {
@@ -125,10 +129,12 @@ export class World {
     const workers = [0, 1].map((i) => sc.add.image(x + (i ? W - 4 : 4), y + 2, 'soldiers', sFrame('worker', 0, 4)).setOrigin(0.5, 1).setDepth(img.depth + 2).setFlipX(!!i).setScale(S * 0.75));
     v.building = 1;
     const prog = { p: rise ? 0 : 0.6 };
-    sc.tweens.add({ targets: prog, p: 1, duration: 2400, ease: 'Sine.InOut',
+    const dur = 3600 + 1400 * Math.min(4, v.b.level); // bigger works take longer to raise
+    const knock = sc.time.addEvent({ delay: 700, loop: true, callback: () => { const cam = sc.cameras.main, d = Math.hypot(x - cam.midPoint.x, y - cam.midPoint.y); if (d < 500) audio.spatial(Math.random() < 0.7 ? 'hammer' : 'chop', (1 - d / 500) * 0.8, (x - cam.midPoint.x) / 500); } });
+    sc.tweens.add({ targets: prog, p: 1, duration: dur, ease: 'Sine.InOut',
       onUpdate: () => { const ph = Math.floor(H * prog.p); img.setCrop(0, H - ph, img.width, ph); workers.forEach((wk, i) => wk.setFrame(sFrame('worker', 0, (Math.floor(sc.time.now / 160) + i) % 2 ? 4 : 5))); },
-      onComplete: () => { img.setCrop(); scaff.destroy(); workers.forEach((wk) => wk.destroy()); v.building = undefined; this.dust(x + W / 2, y - 6, 30); } });
-    const t = sc.time.addEvent({ delay: 300, repeat: 7, callback: () => this.dust(x + Math.random() * W, y - Math.random() * 10, 6) });
+      onComplete: () => { knock.remove(); img.setCrop(); scaff.destroy(); workers.forEach((wk) => wk.destroy()); v.building = undefined; this.dust(x + W / 2, y - 6, 30); } });
+    const t = sc.time.addEvent({ delay: 300, repeat: Math.round(dur / 300) - 1, callback: () => this.dust(x + Math.random() * W, y - Math.random() * 10, 6) });
     void t; void h; void w;
   }
   dust(x: number, y: number, n: number) {

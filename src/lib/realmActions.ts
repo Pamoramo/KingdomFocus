@@ -88,6 +88,7 @@ export const holdParade = () => update((s) => {
   const away = awayBats(o); o = { ...o, squads: o.squads.map((q) => (away.has(q.bat) ? q : { ...q, xp: q.xp + r.xp })) }; for (const q of o.squads) if (!away.has(q.bat)) o = mark(o, 'squads', q.id);
   o = W(o, { ...o.world, warnings: (o.world.warnings ?? []).map((w) => ({ ...w, chance: Math.round(w.chance * (1 - r.deter) * 100) / 100 })) });
   o = withCourt(o, (x) => adjust({ ...x, lastParade: today }, { commons: r.commons, nobles: r.nobles }));
+  o = W(o, { ...o.world, festival: Math.max(o.world.festival ?? 0, Date.now() + 3 * 60_000) }); // the town celebrates
   emit({ kind: 'reward', text: `${n} soldiers parade through the streets! The realm cheers.`, res: { renown: r.renown } });
   return event(o, 'command', `A military parade of ${n} soldiers marched before the court.`);
 });
