@@ -317,7 +317,7 @@ export class BattleScene extends Phaser.Scene {
     const res = this.play.result; let t = 2300;
     audio.play('horn');
     const at = (ms: number, fn: () => void) => this.time.delayedCall(ms, () => { if (getUI().battle?.phase === 'playing') fn(); });
-    at(200, () => this.caption(this.play.title));
+    at(200, () => this.caption(this.play.site?.cry ? `${this.play.title}\n${this.play.site.cry}` : this.play.title)); // with the commander's own flourish
     // both hosts march into place (the castle's holders are already on their walls)
     for (const f of this.figs) if (f.state === 'move') { f.tx = f.hx; f.ty = f.hy; }
     for (const rd of res.rounds) {

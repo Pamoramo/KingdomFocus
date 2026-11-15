@@ -5,10 +5,14 @@ import { KingdomScene } from '../game/KingdomScene.ts';
 import { WorldScene } from '../game/WorldScene.ts';
 import { BattleScene } from '../game/BattleScene.ts';
 import { RivalScene } from '../game/RivalScene.ts';
+import { ParadeScene } from '../game/ParadeScene.ts';
 import { audio, type Sfx } from '../game/audio.ts';
 import { WEATHER_NAME, type Weather } from '../game/weather.ts';
 import { worldTick, journeysTick } from '../lib/warActions.ts';
 import { WorldPanel, BattleReport, worldBadge } from './World.tsx';
+import { AssignmentsPanel, assignmentBadge } from './Assignments.tsx';
+import { assignmentsTick } from '../lib/assignments.ts';
+import { courtTick } from '../lib/realmActions.ts';
 import { initPersistence } from '../lib/sync.ts';
 import { getState, setState, studyTick, fxBus, neglect, idleDays, type Fx } from '../lib/state.ts';
 import { isAwaiting, dueAt } from '../lib/study.ts';
@@ -24,8 +28,8 @@ import { RealmPanel } from './Realm.tsx';
 import { ChroniclePanel } from './Chronicle.tsx';
 import { SettingsPanel, useSync } from './Settings.tsx';
 
-const TABS = [['study', 'Study', 'study'], ['build', 'Build', 'build'], ['army', 'Army', 'army'], ['world', 'War', 'map'], ['habits', 'Habits', 'habits'], ['realm', 'Realm', 'realm'], ['chronicle', 'Chronicle', 'stats'], ['settings', 'Settings', 'account']] as const;
-const PANELS: Record<string, () => React.ReactNode> = { world: WorldPanel, study: StudyPanel, build: BuildPanel, army: ArmyPanel, habits: HabitsPanel, realm: RealmPanel, chronicle: ChroniclePanel, settings: SettingsPanel };
+const TABS = [['study', 'Study', 'study'], ['build', 'Build', 'build'], ['army', 'Army', 'army'], ['world', 'War', 'map'], ['habits', 'Habits', 'habits'], ['tasks', 'Tasks', 'calendar'], ['realm', 'Realm', 'realm'], ['chronicle', 'Chronicle', 'stats'], ['settings', 'Settings', 'account']] as const;
+const PANELS: Record<string, () => React.ReactNode> = { world: WorldPanel, study: StudyPanel, build: BuildPanel, army: ArmyPanel, habits: HabitsPanel, tasks: AssignmentsPanel, realm: RealmPanel, chronicle: ChroniclePanel, settings: SettingsPanel };
 
 /** Ticks the study timer, and alerts (sound, vibration, notification) when a check-in is due, even from a background tab. */
 function useStudyAlerts() {
@@ -118,9 +122,9 @@ export default function Game() {
   useStudyAlerts();
   useEffect(() => {
     initPersistence();
-    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, RivalScene, BattleScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
+    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, RivalScene, BattleScene, ParadeScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
     gameRef.current = game;
-    worldTick(); const wt = setInterval(worldTick, 60000); const jt = setInterval(() => journeysTick(), 2000);
+    worldTick(); courtTick(); const wt = setInterval(() => { worldTick(); courtTick(); }, 60000); const jt = setInterval(() => { journeysTick(); assignmentsTick(); }, 2000);
     const wake = () => { audio.start(); const st = getState().settings; audio.setVolumes({ music: st.music ?? 0.5, sfx: st.sfx ?? 0.7, ambience: st.ambience ?? true }); };
     addEventListener('pointerdown', wake); addEventListener('keydown', wake);
     const click = (e: MouseEvent) => { if ((e.target as HTMLElement).closest?.('.btn')) audio.play('click'); };
@@ -146,6 +150,10 @@ export default function Game() {
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = s.settings.theme; }, [s.settings.theme]);
   useEffect(() => { audio.setVolumes({ music: s.settings.sound ? s.settings.music ?? 0.5 : 0, sfx: s.settings.sound ? s.settings.sfx ?? 0.7 : 0, ambience: s.settings.sound && (s.settings.ambience ?? true) }); }, [s.settings.music, s.settings.sfx, s.settings.ambience, s.settings.sound]);
+  // the parade ground: start the scene when a review or parade is called, stop it when dismissed
+  useEffect(() => { const g = gameRef.current; if (!g) return;
+    if (ui.parade) { g.scene.start('parade', { mode: ui.parade.mode }); g.scene.bringToTop('parade'); } else if (g.scene.isActive('parade')) g.scene.stop('parade');
+  }, [ui.parade?.mode, !!ui.parade]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { audio.setMood(s.world.campaign || s.world.threat || ui.battle ? 'war' : ui.night > 0.5 ? 'night' : 'day'); }, [!!s.world.campaign, !!s.world.threat, !!ui.battle, ui.night]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const g = gameRef.current; if (!g) return;
@@ -171,8 +179,9 @@ export default function Game() {
     </aside>}
     <nav className="absolute bottom-0 inset-x-0 z-30 flex justify-center pb-[env(safe-area-inset-bottom)]">
       <div className="wood rounded-t-md flex max-w-full overflow-x-auto">{TABS.map(([k, label, icon]) => <button key={k} onClick={() => setUI({ panel: ui.panel === k ? null : k, placing: null, moving: null, selArmy: null })}
-        className={`relative flex flex-col items-center px-2 sm:px-3.5 py-1 text-xs sm:text-sm ${ui.panel === k ? 'bg-black/30' : ''}`} aria-pressed={ui.panel === k}><Icon name={icon} size={24} />{label}{k === 'world' && worldBadge(s) > 0 && <span className="absolute top-0 right-1 bg-blood text-parch rounded-full text-[10px] px-1">{worldBadge(s)}</span>}</button>)}</div>
+        className={`relative flex flex-col items-center px-2 sm:px-3.5 py-1 text-xs sm:text-sm ${ui.panel === k ? 'bg-black/30' : ''}`} aria-pressed={ui.panel === k}><Icon name={icon} size={24} />{label}{k === 'world' && worldBadge(s) > 0 && <span className="absolute top-0 right-1 bg-blood text-parch rounded-full text-[10px] px-1">{worldBadge(s)}</span>}{k === 'tasks' && assignmentBadge(s) > 0 && <span className="absolute top-0 right-1 bg-blood text-parch rounded-full text-[10px] px-1">{assignmentBadge(s)}</span>}</button>)}</div>
     </nav>
+    {ui.parade && <button className="absolute z-[72] bottom-20 right-3 btn btn-gold" onClick={() => (gameRef.current?.scene.getScene('parade') as ParadeScene | undefined)?.finish()}>{ui.parade.mode === 'review' ? 'Dismiss the army' : 'Leave the parade'}</button>}
     {ui.battle?.phase === 'playing' && <button className="absolute z-[72] bottom-20 right-3 btn btn-gold" onClick={() => (gameRef.current?.scene.getScene('battle') as BattleScene | undefined)?.finish()}>Skip battle</button>}
     <BattleReport />
     <SoldierCard />

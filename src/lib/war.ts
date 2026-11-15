@@ -1,5 +1,8 @@
 // Rival kingdoms, diplomacy, siege engines, campaigns and defence. Pure functions on WorldState.
 import type { Res } from './rewards.ts';
+import type { Assignment } from './assignments.ts';
+import type { Court } from './politics.ts';
+import type { Settlement } from './expansion.ts';
 import { type Unit, type Terrain, sidePower } from './battle.ts';
 import { TROOPS, type TClass } from './economy.ts';
 import { nameFor, hash } from './names.ts';
@@ -30,6 +33,8 @@ export interface Campaign {
   stance: Stance; allies: string[]; log: string[]; started: number;
 }
 export interface Threat { rival: string; power: number; since: number; allyHelp: string[] }
+/** Intelligence of a possible invasion. It may come to nothing: `chance` is how likely the attack is when `due` arrives. */
+export interface Warning { id: string; rival: string; issued: string; due: string; chance: number; source: 'scouts' | 'spies' | 'merchants' | 'refugees'; text: string }
 export interface Missive { id: string; rival: string; kind: 'tribute_demand' | 'trade_offer' | 'aid_request' | 'alliance_offer' | 'peace_offer' | 'news'; text: string; amount?: number; day: string }
 export interface Loan { bat: string; rival: string; leftMin: number }
 export interface Report { id: string; t: number; title: string; win: boolean; lines: string[]; you: number; foe: number; lostYou: number; lostFoe: number; loot?: Partial<Res> }
@@ -39,7 +44,7 @@ export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'retur
 export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown>; to?: { x: number; y: number } }
 /** A small bandit camp on the road: easy prey with a small purse. */
 export interface Outpost { id: string; name: string; x: number; y: number; power: number; loot: Res; biome: 'grassland' | 'forest' | 'highlands' | 'swamp' }
-export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string }
+export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[] }
 
 export const SIEGE_DAY_MIN = 20;          // verified study minutes per siege day
 export const SUPPLY_COST = { gold: 15, wood: 5 }; // buys 10 supplies
@@ -112,25 +117,52 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
     else if (r.relation >= 60 && r.status === 'neutral' && roll < 0.3) out.inbox.push({ id, rival: r.id, kind: 'alliance_offer', text: `${r.ruler} of ${r.name} proposes an alliance.`, day: today });
     else if (r.personality === 'aggressive' && r.relation < 0 && r.power > ctx.myPower && roll < 0.2) out.inbox.push({ id, rival: r.id, kind: 'tribute_demand', text: `${r.name} demands tribute.`, amount: Math.round(100 * r.level + ctx.stage * 80), day: today });
   }
-  // a siege on your castle: only once you are a fortress (stage 4+) and at odds, or when a kingdom truly hates you
+  // invasions come with warning: scouts and spies report hosts gathering; some reports come to nothing
+  let warnings = (out.warnings ?? []).filter((x) => x.due >= dayStr(new Date(now.getTime() - 2 * 864e5)));
+  for (const wr of warnings.filter((x) => x.due <= today)) {
+    const foe = out.rivals.find((r) => r.id === wr.rival); if (!foe) continue;
+    // a gift or treaty since the warning can stay their hand; strong walls and a fearsome host deter them
+    const calm = foe.status === 'ally' || foe.status === 'vassal' ? 0 : foe.relation > -20 ? 0.4 : 1, p = wr.chance * calm * (ctx.fort > 0.5 ? 0.85 : 1);
+    if (!out.threat && !out.campaign && R() < p) {
+      out.threat = { rival: foe.id, power: Math.round(foe.power * 0.6), since: Date.now(), allyHelp: [] }; foe.status = 'war';
+      out.inbox.push({ id: `${today}-siege`, rival: foe.id, kind: 'news', text: `The warning was true: ${foe.name} marches on your castle! Their host surrounds your walls.`, day: today });
+    } else out.inbox.push({ id: `${today}-calm-${foe.id}`, rival: foe.id, kind: 'news', text: calm < 1 ? `${foe.name}'s host has stood down. Your diplomacy kept the peace.` : `False alarm: ${foe.name}'s host turned back from your border.`, day: today });
+  }
+  warnings = warnings.filter((x) => x.due > today);
   if (!out.threat && !out.campaign) {
-    const angry = out.rivals.filter((r) => !r.bandits && r.status !== 'vassal' && r.status !== 'ally' && (r.relation <= -50 || (ctx.stage >= 4 && (r.status === 'war' || (r.personality === 'aggressive' && r.relation < -20)))));
+    // the real danger: a kingdom at odds with you (only once you are a fortress), or one that truly hates you
+    const angry = out.rivals.filter((r) => !r.bandits && r.status !== 'vassal' && r.status !== 'ally' && !warnings.some((x) => x.rival === r.id) && (r.relation <= -50 || (ctx.stage >= 4 && (r.status === 'war' || (r.personality === 'aggressive' && r.relation < -20)))));
     const foe = angry.sort((a, b) => a.relation - b.relation)[0];
     if (foe && R() < (foe.personality === 'aggressive' ? 0.45 : 0.3)) {
-      out.threat = { rival: foe.id, power: Math.round(foe.power * 0.6), since: Date.now(), allyHelp: [] };
-      foe.status = 'war';
-      out.inbox.push({ id: `${today}-siege`, rival: foe.id, kind: 'news', text: `${foe.name} marches on your castle! Their host surrounds your walls.`, day: today });
+      if (R() < 0.06) { // rarely, no one sees them coming
+        out.threat = { rival: foe.id, power: Math.round(foe.power * 0.6), since: Date.now(), allyHelp: [] }; foe.status = 'war';
+        out.inbox.push({ id: `${today}-siege`, rival: foe.id, kind: 'news', text: `Without warning, ${foe.name} marches on your castle! Their host surrounds your walls.`, day: today });
+      } else warnings.push(warning(foe, today, 0.45 + R() * 0.4, R));
     }
+    // rumours: some reports are about kingdoms that merely mistrust you
+    const uneasy = out.rivals.filter((r) => !r.bandits && r.status !== 'vassal' && r.status !== 'ally' && r.relation < 10 && !warnings.some((x) => x.rival === r.id));
+    if (uneasy.length && R() < 0.12) warnings.push(warning(uneasy[Math.floor(R() * uneasy.length)], today, 0.1 + R() * 0.2, R));
   }
+  for (const wr of warnings) if (wr.issued === today && !(w.warnings ?? []).some((x) => x.id === wr.id)) out.inbox.push({ id: `${wr.id}-news`, rival: wr.rival, kind: 'news', text: wr.text, day: today });
+  out.warnings = warnings;
   return out;
+}
+
+const SOURCES: Warning['source'][] = ['scouts', 'spies', 'merchants', 'refugees'];
+/** How sure the realm is of a report, in words. */
+export const likelihood = (p: number) => (p >= 0.7 ? 'very likely' : p >= 0.5 ? 'likely' : p >= 0.3 ? 'possible' : 'doubtful');
+function warning(foe: Rival, today: string, chance: number, R: () => number): Warning {
+  const src = SOURCES[Math.floor(R() * SOURCES.length)], inDays = 1 + Math.floor(R() * 2), due = dayStr(new Date(new Date(today).getTime() + inDays * 864e5));
+  const what = { scouts: `Scouts report ${foe.name}'s banners gathering on the border`, spies: `A spy in ${foe.name} whispers that ${foe.ruler} plans an invasion`, merchants: `Merchants say ${foe.name} is buying up grain and spears`, refugees: `Villagers flee ahead of ${foe.name}'s riders` }[src];
+  return { id: `warn-${today}-${foe.id}`, rival: foe.id, issued: today, due, chance: Math.round(chance * 100) / 100, source: src, text: `${what}. An attack is ${likelihood(chance)} within ${inDays === 1 ? 'a day' : `${inDays} days`}.` };
 }
 
 // ---------------- diplomacy ----------------
 const VALUE: Record<keyof Res, number> = { gold: 1, wood: 1.5, stone: 2.5, renown: 10 };
 export const valueOf = (r: Partial<Res>) => (Object.keys(r) as (keyof Res)[]).reduce((a, k) => a + (r[k] ?? 0) * VALUE[k], 0);
 /** Trade: give one resource, receive another at a rate that improves with relations and merchants. */
-export function tradeQuote(r: Rival, give: keyof Res, amount: number, want: keyof Res) {
-  const rate = 0.75 + Math.max(0, r.relation) / 400 + (r.personality === 'mercantile' ? 0.15 : 0) + (r.status === 'ally' ? 0.05 : 0);
+export function tradeQuote(r: Rival, give: keyof Res, amount: number, want: keyof Res, bonus = 0) {
+  const rate = 0.75 + Math.max(0, r.relation) / 400 + (r.personality === 'mercantile' ? 0.15 : 0) + (r.status === 'ally' ? 0.05 : 0) + bonus;
   const got = Math.floor((amount * VALUE[give] * rate) / VALUE[want]);
   const rel = Math.min(8, 1 + Math.round((amount * VALUE[give]) / (150 * r.level)));
   return { got, rel, rate };

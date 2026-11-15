@@ -2,10 +2,15 @@
 import { useState } from 'react';
 import { useGame, useUI, hex, fmt, mobile } from './hooks.ts';
 import { TROOPS, TCLASSES, RANKS, OFFICERS, SQUADS_PER_COMPANY, COLORS, HERALD_COLORS, EMBLEMS, HERALD_EMBLEMS, PRESTIGE_EMBLEMS, type TClass, type Formation } from '../lib/economy.ts';
-import { townOrder, DUTY_CAP, type Orders, recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, splitBattalion, mergeBattalion, musterOf, companiesOf, awayFromHome, type SplitHow, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
+import { recruitCost, townOrder, DUTY_CAP, type Orders, recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, splitBattalion, mergeBattalion, musterOf, companiesOf, awayFromHome, type SplitHow, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
 import { nameFor } from '../lib/names.ts';
 import { hash } from '../lib/names.ts';
 import { setUI, focusOn } from '../game/ui.ts';
+import { paradeSoldiers, paradeCost, paradeReward, holdParade } from '../lib/realmActions.ts';
+import { courtOf } from '../lib/politics.ts';
+import { dayStr } from '../lib/war.ts';
+import { TRAITS, HONORS, traitsOf, honorsOf, praiseReady, styled } from '../lib/commanders.ts';
+import { praiseCommander } from '../lib/warActions.ts';
 import { soldierSheet, frameRect, FW, FH } from '../game/art/soldiers.ts';
 import { banner, portrait, insignia } from '../game/art/misc.ts';
 import { canvas, withoutOutline } from '../game/art/px.ts';
@@ -48,9 +53,9 @@ function Recruit() {
       {TCLASSES.filter((c) => TROOPS[c].era === era).map((c) => { const d = TROOPS[c], lock = troopLock(s, c);
         return <div key={c} className={`flex items-center gap-2 border-b border-black/10 pb-1 ${lock ? 'opacity-60' : ''}`}>
           <Soldier cls={c} rank={0} />
-          <div className="flex-1 min-w-0"><div className="font-bold leading-tight">{d.name} <span className="text-xs opacity-60">power {d.power}</span></div><div className="text-xs opacity-75">{d.desc}</div><Cost cost={d.cost} have={s.res} n={qty} />
+          <div className="flex-1 min-w-0"><div className="font-bold leading-tight">{d.name} <span className="text-xs opacity-60">power {d.power}</span></div><div className="text-xs opacity-75">{d.desc}</div><Cost cost={recruitCost(s, c)} have={s.res} n={qty} />
             {lock && <div className="text-xs text-blood">{lock}</div>}</div>
-          <button className="btn shrink-0" disabled={!!lock || !canAfford(s.res, d.cost, qty)} onClick={() => recruit(c, qty, target)}>Recruit</button>
+          <button className="btn shrink-0" disabled={!!lock || !canAfford(s.res, recruitCost(s, c), qty)} onClick={() => recruit(c, qty, target)}>Recruit</button>
         </div>; })}
     </Section>)}
   </div>;
@@ -66,11 +71,22 @@ function TownWatch() {
     <div className="text-xs">{label}. Set battalions to <i>Patrol town</i> or <i>Garrison</i> in their orders.</div></div>;
 }
 
+/** Look over the army on the parade square, or pay for a grand parade that pleases the realm. */
+function ParadeGround() {
+  const s = useGame(), n = paradeSoldiers(s), cost = paradeCost(s), r = paradeReward(s), done = courtOf(s.world).lastParade === dayStr();
+  return <Section title="Parade ground">
+    <div className="flex gap-2"><button className="btn flex-1" disabled={!n} onClick={() => setUI({ parade: { mode: 'review' }, panel: null })}>Review the army</button>
+      <button className="btn btn-gold flex-1" disabled={done || n < 6 || !canAfford(s.res, cost)} onClick={() => { if (!holdParade()) setUI({ parade: { mode: 'parade' }, panel: null }); }}>Hold a parade (<Cost cost={cost} />)</button></div>
+    <p className="text-xs opacity-80">{done ? 'The town is still sweeping up the petals from today\'s parade. Another tomorrow.' : <>A parade of your {n} soldiers at home earns +{r.renown} renown, +{r.xp} experience for every soldier, the favour of the commons (+{r.commons}) and nobles (+{r.nobles}), a day free of thieves, and makes enemies who plan an invasion think twice.</>}</p>
+  </Section>;
+}
+
 function Host() {
   const s = useGame(), [name, setName] = useState('');
   const armies = [...new Set(s.battalions.map((b) => b.army))];
   if (!s.battalions.length) return <p className="text-sm italic">No soldiers yet. Recruit peasants from your camp to raise your first battalion.</p>;
   return <div className="space-y-2">
+    <ParadeGround />
     {armies.map((a) => <Section key={a} title={a} right={<button className="btn !py-0 text-sm" onClick={() => setUI({ selArmy: a, selBat: null, panel: mobile() ? null : 'army' })}>March army</button>}>
       {s.battalions.filter((b) => b.army === a).map((b) => { const n = batSize(s, b.id);
         return <button key={b.id} className="w-full flex items-center gap-2 text-left border-b border-black/10 pb-1" onClick={() => { setUI({ selBat: b.id, selArmy: null }); focusOn(b.x, b.y - 20); }}>
@@ -116,6 +132,19 @@ function SplitMerge({ bat, picked, clear }: { bat: Battalion; picked: string[]; 
   </Section>;
 }
 
+/** Traits, battle record and honours of a battalion's commander, with the chance to praise them before the court. */
+function CommanderRecord({ bat }: { bat: Battalion }) {
+  const s = useGame(), c = bat.commander, ready = praiseReady(c), honors = honorsOf(c), w = c.wins ?? 0, b = c.battles ?? 0;
+  return <div className="space-y-1.5 text-sm">
+    <div className="font-bold">{styled(c)}</div>
+    {traitsOf(c).map((t) => <div key={t} className="border-l-4 border-gold pl-2"><b>{TRAITS[t].name}</b> <span className="text-xs">{TRAITS[t].desc}</span><div className="text-xs italic opacity-75">{TRAITS[t].quirk}</div></div>)}
+    <div className="flex gap-3 text-xs"><span>Battles {b}</span><span>Victories {w}</span>{b > 0 && <span>Win rate {Math.round((w / b) * 100)}%</span>}</div>
+    {honors > 0 && <div className="text-xs">Honours: {HONORS.slice(0, honors).map((h) => h.name).join(' · ')}</div>}
+    {HONORS[honors] && <button className={`btn w-full text-sm ${ready.ok ? 'btn-gold' : ''}`} disabled={!ready.ok || !canAfford(s.res, HONORS[honors].cost)} onClick={() => praiseCommander(bat.id)}>
+      {ready.ok ? <>Praise before the court: {HONORS[honors].name} (<Cost cost={HONORS[honors].cost} />)</> : <>Next honour, {HONORS[honors].name}: {ready.why}</>}</button>}
+  </div>;
+}
+
 function BattalionDetail({ bat }: { bat: Battalion }) {
   const s = useGame(), n = batSize(s, bat.id), officer = OFFICERS[bat.commander.rank], next = OFFICERS[bat.commander.rank + 1];
   const squads = musterOf(s, bat.id), [picked, setPicked] = useState<string[]>([]), live = picked.filter((id) => squads.some((q) => q.id === id));
@@ -144,6 +173,7 @@ function BattalionDetail({ bat }: { bat: Battalion }) {
           {next && <button className="btn w-full text-sm" disabled={n < next.size || !canAfford(s.res, { renown: next.renown })} onClick={() => promoteCommander(bat.id)}>Promote to {next.name} ({next.size}+ soldiers, {next.renown} renown)</button>}
         </div>
       </div>
+      <CommanderRecord bat={bat} />
     </Section>
     <Section title="Orders">
       <div className="grid grid-cols-3 gap-1">{([['formation', 'Hold formation', 'Stand in formation where you send them.'], ['patrol', 'Patrol town', `Up to ${DUTY_CAP} soldiers walk the streets in pairs.`], ['garrison', 'Garrison', `Up to ${DUTY_CAP} soldiers guard doors, gates and towers; bowmen man the walls.`]] as [Orders, string, string][]).map(([k, n, d]) =>

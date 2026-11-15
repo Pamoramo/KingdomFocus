@@ -6,8 +6,9 @@ import { setUI } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res } from '../lib/rewards.ts';
 import { TACTICS, TERRAINS, tacticLock, sidePower, type Tactic, type Terrain } from '../lib/battle.ts';
-import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, fieldSpoils, conquestSpoils, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, type Rival, type Engines, type Stance } from '../lib/war.ts';
+import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, fieldSpoils, conquestSpoils, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, type Rival, type Engines, type Stance } from '../lib/war.ts';
 import * as WA from '../lib/warActions.ts';
+import { courtOf, courtFx } from '../lib/politics.ts';
 import { engineArt } from '../game/art/war.ts';
 import { hdify, HD } from '../game/art/hd.ts';
 import { withoutOutline } from '../game/art/px.ts';
@@ -28,6 +29,7 @@ export function WorldPanel() {
     <div className="flex gap-2"><button className="btn flex-1" onClick={() => setUI({ view: ui.view === 'world' ? 'kingdom' : 'world' })}>{ui.view === 'world' ? 'Return to your kingdom' : 'Open the world map'}</button>
       {w.campaign && <button className="btn btn-gold flex-1" onClick={() => setUI({ view: 'rival', visit: w.campaign!.target, panel: mobile() ? null : 'world' })}>Watch the siege</button>}</div>
     {w.threat && <Defense />}
+    <Intelligence />
     {w.inbox.length > 0 && <Inbox />}
     <OnTheRoad />
     <Tabs value={tab} onChange={setTab} items={[['realms', 'Realms'], ['campaign', w.campaign ? `Siege · day ${w.campaign.day}` : 'War'], ['works', 'Siege works'], ['reports', 'Reports']]} />
@@ -73,7 +75,7 @@ function Realms() {
 
 function RivalDetail({ r }: { r: Rival }) {
   const s = useGame(), mine = WA.myPower(s), [give, setGive] = useState<keyof Res>('gold'), [want, setWant] = useState<keyof Res>('stone'), [amt, setAmt] = useState(200), [giftAmt, setGift] = useState(200), [bat, setBat] = useState('');
-  const q = tradeQuote(r, give, amt, want), tradeLock = canTrade(r), away = WA.awayBats(s), homeBats = s.battalions.filter((b) => !away.has(b.id));
+  const q = tradeQuote(r, give, amt, want, courtFx(courtOf(s.world)).trade), tradeLock = canTrade(r), away = WA.awayBats(s), homeBats = s.battalions.filter((b) => !away.has(b.id));
   return <div className="space-y-2">
     <button className="btn !py-0" onClick={() => setUI({ selRival: null })}>← All realms</button>
     <div className="card p-2 flex gap-3"><Banner color={r.color} emblem={r.emblem} scale={3} />
@@ -110,6 +112,21 @@ function RivalDetail({ r }: { r: Rival }) {
       </Section>
     </>}
   </div>;
+}
+
+/** Reports of invasions that may or may not come: how likely, when, and what might stop them. */
+function Intelligence() {
+  const s = useGame(), list = s.world.warnings ?? [];
+  if (!list.length) return null;
+  return <Section title="Intelligence">
+    {list.map((wr) => { const r = s.world.rivals.find((x) => x.id === wr.rival); if (!r) return null;
+      return <div key={wr.id} className="border-l-4 border-blood/70 pl-2 space-y-1">
+        <div className="text-sm">{wr.text}</div>
+        <div className="flex items-center gap-2 text-xs"><span className="w-28"><Bar value={wr.chance * 100} max={100} color={wr.chance >= 0.5 ? 'bg-blood' : 'bg-gold'} /></span><b>{likelihood(wr.chance)} ({Math.round(wr.chance * 100)}%)</b><span className="opacity-70">expected by {wr.due}</span></div>
+        <div className="flex flex-wrap gap-1"><button className="btn !py-0 text-xs" onClick={() => setUI({ selRival: r.id })}>Appease {r.name} (gifts, trade, peace)</button><button className="btn !py-0 text-xs" onClick={() => setUI({ panel: 'army' })}>Set a garrison</button></div>
+      </div>; })}
+    <p className="text-xs opacity-70">Not every report is true. Better relations (above −20) or an alliance usually stop an attack; strong walls and a military parade make them think twice.</p>
+  </Section>;
 }
 
 /** What a war against this realm pays, step by step, so the stakes are clear before you march. */

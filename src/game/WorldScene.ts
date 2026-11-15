@@ -6,7 +6,9 @@ import { wagon } from './art/biome.ts';
 import type { Journey } from '../lib/war.ts';
 import { hdify } from './art/hd.ts';
 import { withoutOutline, hex } from './art/px.ts';
-import { bannerTex, sFrame, S } from './textures.ts';
+import { bannerTex, sFrame, bTex, S } from './textures.ts';
+import { sitesFor, SETTLE, type SettleKind } from '../lib/expansion.ts';
+import type { BKind } from '../lib/economy.ts';
 import { ENGINE_IDS } from '../lib/war.ts';
 
 const K = 4; // world units per map pixel
@@ -21,6 +23,7 @@ export class WorldScene extends Phaser.Scene {
   private pinch: { d: number; z: number } | null = null;
   private sig = ''; private unsub: (() => void)[] = []; private frame = 0;
   private camps = new Map<string, Phaser.GameObjects.GameObject[]>();
+  private lands = new Map<string, { sig: string; parts: Phaser.GameObjects.GameObject[] }>();
   private travellers = new Map<string, { parts: Phaser.GameObjects.Image[]; label: Phaser.GameObjects.Text; j: Journey }>();
   constructor() { super('world'); }
 
@@ -50,6 +53,7 @@ export class WorldScene extends Phaser.Scene {
   }
   private tap(p: Phaser.Input.Pointer) {
     const wp = this.cameras.main.getWorldPoint(p.x, p.y);
+    for (const st of sitesFor(getState().world.seed)) if (Math.hypot(wp.x - st.x * WW, wp.y - (st.y * WH - 10)) < 26) { setUI({ selRival: st.id, panel: 'realm' }); return; }
     for (const o of getState().world.outposts ?? []) if (Math.hypot(wp.x - o.x * WW, wp.y - (o.y * WH - 12)) < 30) { setUI({ selRival: o.id, panel: 'world' }); return; }
     for (const [id, v] of this.sites) if (Math.hypot(wp.x - v.icon.x, wp.y - (v.icon.y - 20)) < 40) { if (id === 'home') setUI({ view: 'kingdom' }); else setUI({ selRival: id, panel: 'world' }); return; }
   }
@@ -75,10 +79,31 @@ export class WorldScene extends Phaser.Scene {
       this.place(r.id, r.x * WW, r.y * WH, r.bandits ? 1 : r.level, r.status === 'vassal' ? 0xb3242a : r.color, r.emblem, r.name + tag);
       this.sites.get(r.id)!.label.setColor(r.status === 'war' ? '#ff9a8a' : r.status === 'ally' ? '#a8f0a0' : r.status === 'vassal' ? '#ffe27a' : '#fff4d6');
     }
-    this.outposts(s);
+    this.outposts(s); this.settlements(s);
     const sig = JSON.stringify([w.campaign?.target, w.campaign?.phase, w.campaign?.engines, w.threat?.rival, w.loans.map((l) => l.rival)]);
     if (sig !== this.sig) { this.sig = sig; this.armies(s); }
     this.highlight(); this.syncJourneys();
+  }
+  /** Your lands: a signpost on each unclaimed site, and houses that grow with each settlement's level. */
+  private settlements(s: GameState) {
+    const held = s.world.settlements ?? [], KIND: Record<SettleKind, BKind> = { village: 'house', lumber: 'hut', mine: 'storehouse', market: 'market', abbey: 'greathall' };
+    for (const site of sitesFor(s.world.seed)) {
+      const st = held.find((x) => x.site === site.id), sig = st ? `L${st.level}` : 'free', cur = this.lands.get(site.id);
+      if (cur?.sig === sig) continue;
+      cur?.parts.forEach((p) => p.destroy());
+      const x = site.x * WW, y = site.y * WH, parts: Phaser.GameObjects.GameObject[] = [];
+      if (!st) {
+        parts.push(this.add.ellipse(x, y - 6, 54, 22).setStrokeStyle(2, 0xfff4d6, 0.55).setDepth(y - 20));
+        parts.push(this.add.rectangle(x, y - 6, 2, 14, 0x5a3a1e).setOrigin(0.5, 1).setDepth(y), this.add.rectangle(x, y - 18, 14, 7, 0xb08a52).setStrokeStyle(1, 0x3a2410).setDepth(y + 1));
+        parts.push(this.add.text(x, y + 2, `${site.name} (unclaimed)`, { fontFamily: 'monospace', fontSize: '18px', color: '#e8dcc0', stroke: '#1d1716', strokeThickness: 4 }).setOrigin(0.5, 0).setScale(0.5).setAlpha(0.85).setDepth(6000));
+      } else {
+        const tex = bTex(this, KIND[site.kind], Math.min(st.level, 2), 0).key, n = st.level + 1;
+        for (let i = 0; i < n; i++) parts.push(this.add.image(x - (n - 1) * 9 + i * 18, y + (i % 2) * 6, i === 0 ? tex : bTex(this, 'house', 1, 0).key).setOrigin(0.5, 1).setScale(0.5).setDepth(y + i));
+        parts.push(this.add.image(x + n * 9 + 6, y - 4, bannerTex(this, 0xb3242a, s.battalions[0]?.emblem ?? 'lion', 0)).setOrigin(0.2, 1).setScale(S).setDepth(y + 5));
+        parts.push(this.add.text(x, y + 8, `${site.name} · ${SETTLE[site.kind].levels[st.level - 1]}`, { fontFamily: 'monospace', fontSize: '20px', color: '#ffe27a', stroke: '#1d1716', strokeThickness: 5 }).setOrigin(0.5, 0).setScale(0.5).setDepth(6000));
+      }
+      this.lands.set(site.id, { sig, parts });
+    }
   }
   /** Bandit camps: a couple of ragged tents, a campfire and a black flag. */
   private outposts(s: GameState) {

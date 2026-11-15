@@ -1,13 +1,22 @@
 'use client';
-import { useGame, fmt } from './hooks.ts';
+import { useState } from 'react';
+import { useGame, useUI, fmt } from './hooks.ts';
+import { CourtPanel, LandsPanel } from './Court.tsx';
 import { STAGES, TECHS, TECH_IDS, BUILDINGS } from '../lib/economy.ts';
 import { reqMet, research, has, canAfford, count, maxLevel, armySize, kingdomLevel, kingdomScore } from '../lib/state.ts';
-import { Cost, Section, Bar } from './Cost.tsx';
+import { Cost, Section, Bar, Tabs } from './Cost.tsx';
 import { Preview } from './Build.tsx';
 
 const ICON_KIND = ['camp', 'hut', 'barracks', 'keep', 'tower', 'palace'] as const;
 
 export function RealmPanel() {
+  const ui = useUI(), [tab, setTab] = useState<'kingdom' | 'court' | 'lands'>(ui.selRival?.startsWith('site') ? 'lands' : 'kingdom');
+  return <div className="space-y-3">
+    <Tabs value={tab} onChange={setTab} items={[['kingdom', 'Kingdom'], ['court', 'Court'], ['lands', 'Lands']]} />
+    {tab === 'kingdom' && <Progress />}{tab === 'court' && <CourtPanel />}{tab === 'lands' && <LandsPanel />}
+  </div>;
+}
+function Progress() {
   const s = useGame(), next = STAGES[s.stage];
   return <div className="space-y-3">
     <div className="card p-2.5 flex items-center gap-3">

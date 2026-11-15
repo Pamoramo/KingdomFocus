@@ -1,6 +1,7 @@
 // Town life: thieves strike under-guarded towns; patrols catch them for a bounty.
 import { _internal, getState, emit, townOrder, neglect, type GameState } from './state.ts';
 import { dayStr } from './war.ts';
+import { courtOf, courtFx } from './politics.ts';
 import { uid } from './study.ts';
 import { ZERO } from './rewards.ts';
 
@@ -11,12 +12,13 @@ const town = (s: GameState) => { const t = s.world.town, d = dayStr(); return t 
 export function thiefCanStrike(s = getState()) {
   const o = townOrder(s), n = neglect(s);
   // a neglected realm breeds crime: thieves dare even moderately guarded towns, and come more often
+  if (courtOf(s.world).lastParade === dayStr()) return false; // the day of a parade, the streets are full of soldiers
   return o.pop >= 6 && o.ratio < (n > 0 ? 1 : 0.5) && town(s).thefts + town(s).caught < maxThefts(s) && !s.world.threat;
 }
 export const maxThefts = (s: GameState) => MAX_THEFTS_PER_DAY + Math.min(2, Math.ceil(neglect(s) / 2));
 /** Chance per check (every 90s) that a thief appears. */
 export const THIEF_CHECK_MS = 90_000;
-export const thiefChance = (s = getState()) => Math.min(0.45, 0.12 + neglect(s) * 0.08);
+export const thiefChance = (s = getState()) => Math.min(0.6, (0.12 + neglect(s) * 0.08) * courtFx(courtOf(s.world)).crime); // content commons halve it, unrest doubles it
 /** A thief escaped: a small loss (1% of gold, at most 40). */
 export const theft = () => update((s) => {
   const t = town(s); if (t.thefts >= maxThefts(s)) return;

@@ -1,11 +1,13 @@
 // Player actions for diplomacy and war. Every resource change goes through the ledger.
 import { neglect, type GameState, type Squad, _internal, studyHooks, emit, getState, setState, count, maxLevel, has, armySize, canAfford, TILE, CAMP_X, CAMP_Y, type BattleSite } from './state.ts';
 import { biomeOf, realmLayout } from './realms.ts';
+import { courtOf, courtFx, adjust } from './politics.ts';
+import { rating, lossFactor, has as hasTrait, praiseReady, styled, battleCry, type BattleKind } from './commanders.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
 import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
-import { RANKS } from './economy.ts';
+import { RANKS, OFFICERS } from './economy.ts';
 
 const { update, ledger, spend, mark, kill, event } = _internal;
 const W = (s: GameState, w: WorldState): GameState => ({ ...s, world: w });
@@ -18,7 +20,26 @@ export const unitsOf = (squads: Squad[]): Unit[] => squads.map((q) => ({ cls: q.
 export const campaignSquads = (s: GameState) => s.squads.filter((q) => s.world.campaign?.battalions.includes(q.bat));
 export const fortOf = (s: GameState) => castleFort({ wall: count(s, 'wall'), palisade: count(s, 'palisade'), tower: count(s, 'tower'), gatehouse: count(s, 'gatehouse'), gate: count(s, 'gate'), moat: count(s, 'moat'), keep: maxLevel(s, 'keep'), watchtower: count(s, 'watchtower') });
 export const myPower = (s: GameState) => sidePower(unitsOf(s.squads));
-const commanderOf = (s: GameState, bats: string[]) => Math.max(0, ...s.battalions.filter((b) => bats.includes(b.id)).map((b) => b.commander.rank));
+/** The battalion whose commander leads: highest rank, then most honours, then most victories. */
+export const leadOf = (s: GameState, bats: string[]) => s.battalions.filter((b) => bats.includes(b.id)).sort((a, b) => b.commander.rank - a.commander.rank || (b.commander.honors ?? 0) - (a.commander.honors ?? 0) || (b.commander.wins ?? 0) - (a.commander.wins ?? 0))[0];
+const mixOf = (units: Unit[]) => { const n = Math.max(1, units.reduce((a, u) => a + u.count, 0)); return { cav: units.reduce((a, u) => a + (TROOPS_CAV.has(u.cls) ? u.count : 0), 0) / n, ranged: units.reduce((a, u) => a + (TROOPS_RANGED.has(u.cls) ? u.count : 0), 0) / n }; };
+const TROOPS_CAV = new Set(['lightcav', 'knight', 'mknight', 'vetcav']), TROOPS_RANGED = new Set(['archer', 'longbow', 'crossbow', 'royalarcher']);
+/** The leading commander's battle rating for this fight: rank, honours and the traits that apply. */
+const commanderOf = (s: GameState, bats: string[], kind: BattleKind = 'field', units: Unit[] = [], vsBandits = false) => { const b = leadOf(s, bats); return b ? rating(b.commander, kind, mixOf(units), vsBandits) + courtFx(courtOf(s.world)).command : 0; }; // loyal nobles fight harder
+/** How much of their host the leading commander may lose (cautious and lucky captains lose fewer men). */
+const lossCap = (s: GameState, bats: string[], frac: number) => { const b = leadOf(s, bats); return Math.min(0.9, frac * (b ? lossFactor(b.commander) : 1)); };
+/** The leading commander's opening line for the battle film. */
+const cryOf = (s: GameState, bats: string[], kind: BattleKind) => { const b = leadOf(s, bats); return b ? battleCry(b.commander, OFFICERS[b.commander.rank]?.name ?? '', kind) : undefined; };
+/** Records a battle for every commander present; announces when one has earned praise. */
+function record(s: GameState, bats: string[], won: boolean): GameState {
+  let o = s;
+  for (const b of s.battalions.filter((x) => bats.includes(x.id))) {
+    const before = praiseReady(b.commander).ok, c = { ...b.commander, battles: (b.commander.battles ?? 0) + 1, wins: (b.commander.wins ?? 0) + (won ? 1 : 0) };
+    o = mark({ ...o, battalions: o.battalions.map((x) => (x.id === b.id ? { ...x, commander: c } : x)) }, 'battalions', b.id);
+    if (!before && praiseReady(c).ok) emit({ kind: 'achieve', text: `${styled(c)} has earned the realm's praise! Honour them in the Army panel.` });
+  }
+  return o;
+}
 const allyUnits = (s: GameState, ids: string[], share: number) => ids.flatMap((id) => { const r = rival(s, id); return r ? armyOf(r, r.power * share).map((u) => ({ ...u, ref: undefined })) : []; });
 
 /** Applies casualties to the player's squads (only units with a squad ref). */
@@ -69,7 +90,9 @@ studyHooks.push((s, minutes) => {
     const r = siegeProgress(w.campaign, minutes, soldiers, has(s, 'engineering'));
     w = { ...w, campaign: r.c };
     if (r.days) emit({ kind: 'war', text: `Siege day ${r.c.day}: ${r.c.log[r.c.log.length - 1]}` });
-    if (r.desert) { o = W(o, w); const sq = campaignSquads(o); o = applyLosses(o, unitsOf(sq), sq.map((q) => Math.min(q.count, Math.ceil(q.count * 0.03)))); w = o.world; }
+    const lead = leadOf(s, w.campaign!.battalions);
+    if (lead && hasTrait(lead.commander, 'beloved') && r.desert) w = { ...w, campaign: { ...w.campaign!, log: [...w.campaign!.log, `${styled(lead.commander)} talks the hungry men out of deserting.`] } };
+    else if (r.desert) { o = W(o, w); const sq = campaignSquads(o); o = applyLosses(o, unitsOf(sq), sq.map((q) => Math.min(q.count, Math.ceil(q.count * 0.03)))); w = o.world; }
   }
   // loaned battalions come home after enough study
   const back = w.loans.filter((l) => l.leftMin - minutes <= 0);
@@ -90,7 +113,7 @@ export const trade = (id: string, give: keyof Res, amount: number, want: keyof R
   const r = rival(s, id); if (!r) return; const why = canTrade(r); if (why) return why;
   amount = Math.floor(amount); if (amount <= 0 || give === want) return 'Choose an amount and two different goods';
   if (!canAfford(s.res, { [give]: amount })) return 'Not enough to trade';
-  const q = tradeQuote(r, give, amount, want), today = dayStr();
+  const q = tradeQuote(r, give, amount, want, courtFx(courtOf(s.world)).trade), today = dayStr();
   let o = spend(s, { [give]: amount });
   o = W(o, { ...o.world, rivals: o.world.rivals.map((x) => (x.id === id ? { ...x, trades: x.lastTradeDay === today ? x.trades + 1 : 1, lastTradeDay: today } : x)) });
   o = send(o, 'caravan', r, `Caravan to ${r.name}`, { data: { give, amount, want, got: q.got, rel: q.rel } });
@@ -110,7 +133,7 @@ export const sendAid = (id: string, batId: string) => update((s) => {
   if (r.relation < -10) return 'They do not trust you enough to accept troops';
   if (awayBats(s).has(batId)) return 'That battalion is already away';
   const sq = s.squads.filter((q) => q.bat === batId), p = sidePower(unitsOf(sq)); if (!sq.length) return 'That battalion has no soldiers';
-  const rel = Math.min(25, 4 + Math.round((p / Math.max(50, r.power)) * 80));
+  const lent = s.battalions.find((b) => b.id === batId), rel = Math.round(Math.min(25, 4 + Math.round((p / Math.max(50, r.power)) * 80)) * (lent && hasTrait(lent.commander, 'diplomat') ? 1.5 : 1));
   let o = send(s, 'aid', r, `${s.battalions.find((b) => b.id === batId)?.name ?? 'Troops'} marching to ${r.name}`, { bats: [batId], data: { rel } });
   o = { ...o, world: { ...o.world, inbox: o.world.inbox.filter((m) => !(m.rival === id && m.kind === 'aid_request')) } };
   emit({ kind: 'info', text: `Your troops march to aid ${r.name}. They arrive in ${mins(travelMs('aid', r))}.` });
@@ -191,15 +214,16 @@ function raidArrives(o: GameState, j: Journey): GameState {
   if (!op || !b) { emit({ kind: 'info', text: 'The bandits had already fled their camp.' }); return home(o, `${b?.name ?? 'Your soldiers'} returning`); }
   const mine = unitsOf(o.squads.filter((q) => q.bat === bat)), foe = armyOf({ id: op.id, level: 1, power: op.power }), seed = Date.now() % 100000;
   if (!mine.length) return W(o, { ...o.world });
-  let res = simulate({ name: b.name, units: mine, commander: b.commander.rank, tactic: 'assault' }, { name: op.name, units: foe, commander: 0, tactic: 'assault' }, op.biome === 'forest' ? 'forest' : op.biome === 'highlands' ? 'hills' : op.biome === 'swamp' ? 'marsh' : 'plains', seed);
-  res = capLosses(res, 'a', 0.4);
-  o = applyLosses(o, mine, res.lossA);
+  let res = simulate({ name: b.name, units: mine, commander: rating(b.commander, 'raid', mixOf(mine), true), tactic: 'assault' }, { name: op.name, units: foe, commander: 0, tactic: 'assault' }, op.biome === 'forest' ? 'forest' : op.biome === 'highlands' ? 'hills' : op.biome === 'swamp' ? 'marsh' : 'plains', seed);
+  res = capLosses(res, 'a', Math.min(0.9, 0.4 * lossFactor(b.commander)));
   const won = res.winner === 'a';
-  o = report(o, `Raid on ${op.name}`, won, res, mine, foe, won ? op.loot : undefined);
-  play(`Raid on ${op.name}`, mine, foe, res, b.name, op.name, b.color, 0x2a2a2a, undefined, { biome: op.biome });
+  o = record(applyLosses(o, mine, res.lossA), [bat], won);
+  const spoils = hasTrait(b.commander, 'raider') ? scale(op.loot, 1.5) : op.loot;
+  o = report(o, `Raid on ${op.name}`, won, res, mine, foe, won ? spoils : undefined);
+  play(`Raid on ${op.name}`, mine, foe, res, b.name, op.name, b.color, 0x2a2a2a, undefined, { biome: op.biome, cry: battleCry(b.commander, '', 'raid').trim() });
   if (won) {
-    o = ledger(W(o, { ...o.world, outposts: (o.world.outposts ?? []).filter((x) => x.id !== op.id) }), 'loot', uid(), { ...ZERO, ...op.loot });
-    emit({ kind: 'reward', text: `${op.name} is cleared!`, res: op.loot });
+    o = ledger(W(o, { ...o.world, outposts: (o.world.outposts ?? []).filter((x) => x.id !== op.id) }), 'loot', uid(), { ...ZERO, ...spoils });
+    emit({ kind: 'reward', text: `${op.name} is cleared!`, res: spoils });
     o = event(o, 'war', `${b.name} cleared the bandit camp at ${op.name}.`);
   } else { emit({ kind: 'error', text: `The bandits of ${op.name} drove off your soldiers.` }); o = event(o, 'war', `${b.name} was beaten back from ${op.name}.`); }
   return o.squads.some((q) => q.bat === bat) ? home(o, `${b.name} returning from ${op.name}`) : o;
@@ -289,18 +313,19 @@ export const startCampaign = (id: string, bats: string[], engines: Engines, supp
 export const fieldBattle = (tactic: Tactic) => update((s) => {
   const c = s.world.campaign; if (!c || c.phase !== 'field') return 'No field battle to fight';
   const r = rival(s, c.target)!, mine = unitsOf(campaignSquads(s)), allies = allyUnits(s, c.allies, 0.25), a = [...mine, ...allies];
-  const lock = tacticLock(a, tactic, r.terrain, commanderOf(s, c.battalions)); if (lock) return lock;
+  const cmd = commanderOf(s, c.battalions, 'field', a, !!r.bandits);
+  const lock = tacticLock(a, tactic, r.terrain, cmd); if (lock) return lock;
   const foe = armyOf(r, r.power * 0.6), seed = Date.now() % 100000;
-  let res = simulate({ name: 'Your host', units: a, commander: commanderOf(s, c.battalions), tactic, engines: { ballista: c.engines.ballista } }, { name: r.name, units: foe, commander: Math.min(4, r.level - 1), tactic: enemyTactic(r, seed) }, r.terrain, seed);
-  res = capLosses(res, 'a', 0.6);
-  let o = applyLosses(s, a, res.lossA);
+  let res = simulate({ name: 'Your host', units: a, commander: cmd, tactic, engines: { ballista: c.engines.ballista } }, { name: r.name, units: foe, commander: Math.min(4, r.level - 1), tactic: enemyTactic(r, seed) }, r.terrain, seed);
+  res = capLosses(res, 'a', lossCap(s, c.battalions, 0.6));
+  let o = record(applyLosses(s, a, res.lossA), c.battalions, res.winner === 'a');
   const killed = sidePower(foe.map((u, i) => ({ ...u, count: res.lossB[i] })));
   const w = { ...o.world, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.max(10, Math.round(x.power - killed * 1.4)), beaten: res.winner === 'a' ? 1 : x.beaten } : x)) };
   if (res.winner === 'a') o = W(o, { ...w, campaign: { ...c, phase: 'siege', log: [...c.log, `Victory in the field! The siege of ${r.name} begins.`] } });
   else o = goHome(W(o, { ...w, campaign: null, engines: addEngines(w.engines, c.engines), supplies: w.supplies + c.supplies }), r, c.battalions, `Your host retreating from ${r.name}`);
   o = ledger(o, 'loot', uid(), res.winner === 'a' ? fieldSpoils(r) : ZERO);
   o = report(o, `Battle before ${r.name}`, res.winner === 'a', res, a, foe, res.winner === 'a' ? fieldSpoils(r) : undefined);
-  play(`Battle before ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color, undefined, { biome: biomeOf(s.world, r) });
+  play(`Battle before ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color, undefined, { biome: biomeOf(s.world, r), cry: cryOf(s, c.battalions, 'field') });
   return event(o, 'war', res.winner === 'a' ? `Defeated ${r.name}'s army in the field.` : `Defeated in the field by ${r.name}; the host retreats.`);
 });
 const addEngines = (a: Engines, b: Engines): Engines => { const o = { ...a }; for (const e of ENGINE_IDS) o[e] += b[e]; return o; };
@@ -332,18 +357,19 @@ export const assault = (tactic: Tactic) => update((s) => {
   const c = s.world.campaign; if (!c || c.phase !== 'siege') return 'No siege under way';
   const r = rival(s, c.target)!, mine = unitsOf(campaignSquads(s)), a = [...mine, ...allyUnits(s, c.allies, 0.2)];
   if (!mine.length) return 'No soldiers left in the siege camp';
-  const lock = tacticLock(a, tactic, r.terrain, commanderOf(s, c.battalions)); if (lock) return lock;
+  const cmd = commanderOf(s, c.battalions, 'assault', a, !!r.bandits);
+  const lock = tacticLock(a, tactic, r.terrain, cmd); if (lock) return lock;
   const garrisonPower = Math.max(5, c.garrison) * (0.6 + c.garrisonMorale / 250), foe = armyOf(r, garrisonPower), seed = Date.now() % 100000;
-  let res = simulate({ name: 'Your host', units: a, commander: commanderOf(s, c.battalions), tactic, engines: { ram: c.engines.ram, tower: c.engines.tower, ballista: c.engines.ballista } },
+  let res = simulate({ name: 'Your host', units: a, commander: cmd, tactic, engines: { ram: c.engines.ram, tower: c.engines.tower, ballista: c.engines.ballista } },
     { name: `${r.name} garrison`, units: foe, commander: Math.min(4, r.level - 1), tactic: 'shieldwall', fort: wallFort(c) }, r.terrain, seed, true);
-  res = capLosses(res, 'a', 0.5);
-  let o = applyLosses(s, a, res.lossA);
-  play(`Assault on ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color, c.engines, { biome: biomeOf(s.world, r), walls: { side: 1, kind: realmLayout(s.world, r).wallKind } });
+  res = capLosses(res, 'a', lossCap(s, c.battalions, 0.5));
+  let o = record(applyLosses(s, a, res.lossA), c.battalions, res.winner === 'a');
+  play(`Assault on ${r.name}`, a, foe, res, 'Your host', r.name, s.battalions.find((b) => b.id === c.battalions[0])?.color ?? 0xb3242a, r.color, c.engines, { biome: biomeOf(s.world, r), walls: { side: 1, kind: realmLayout(s.world, r).wallKind }, cry: cryOf(s, c.battalions, 'assault') });
   o = report(o, `Assault on ${r.name}`, res.winner === 'a', res, a, foe);
   if (res.winner === 'a') return conquer(o, r);
   const killed = sidePower(foe.map((u, i) => ({ ...u, count: res.lossB[i] })));
   const left = campaignSquads(o).length;
-  o = W(o, { ...o.world, campaign: left ? { ...c, garrison: Math.max(0, Math.round(c.garrison - killed)), morale: Math.max(0, c.morale - 20), log: [...c.log, 'The assault was thrown back from the walls.'] } : null });
+  o = W(o, { ...o.world, campaign: left ? { ...c, garrison: Math.max(0, Math.round(c.garrison - killed)), morale: Math.max(0, c.morale - (leadOf(s, c.battalions) && hasTrait(leadOf(s, c.battalions)!.commander, 'beloved') ? 10 : 20)), log: [...c.log, 'The assault was thrown back from the walls.'] } : null });
   if (!left) o = goHome(W(o, { ...o.world, engines: addEngines(o.world.engines, c.engines) }), r, c.battalions, `Survivors returning from ${r.name}`);
   return event(o, 'war', `The assault on ${r.name} failed.`);
 });
@@ -367,14 +393,15 @@ export const defend = (tactic: Tactic) => update((s) => {
   const t = s.world.threat; if (!t) return; const r = rival(s, t.rival)!;
   const mine = unitsOf(homeSquads(s)), a = [...mine, ...allyUnits(s, t.allyHelp, 0.35)], foe = armyOf(r, t.power), seed = Date.now() % 100000;
   const homeBats = s.battalions.filter((b) => !awayBats(s).has(b.id)).map((b) => b.id);
-  const lock = a.length ? tacticLock(a, tactic, 'hills', commanderOf(s, homeBats)) : null; if (lock) return lock;
+  const cmd = commanderOf(s, homeBats, 'defend', a);
+  const lock = a.length ? tacticLock(a, tactic, 'hills', cmd) : null; if (lock) return lock;
   // simulate with the enemy as attacker and you behind your walls
-  let res = simulate({ name: r.name, units: foe, commander: Math.min(4, r.level - 1), tactic: enemyTactic(r, seed) }, { name: 'Your garrison', units: a.length ? a : [{ cls: 'peasant', count: 5, rank: 0 }], commander: commanderOf(s, homeBats), tactic, fort: fortOf(s) }, 'hills', seed, true);
-  res = capLosses(res, 'b', 0.25);
-  let o = applyLosses(s, a, res.lossB);
+  let res = simulate({ name: r.name, units: foe, commander: Math.min(4, r.level - 1), tactic: enemyTactic(r, seed) }, { name: 'Your garrison', units: a.length ? a : [{ cls: 'peasant', count: 5, rank: 0 }], commander: cmd, tactic, fort: fortOf(s) }, 'hills', seed, true);
+  res = capLosses(res, 'b', lossCap(s, homeBats, 0.25));
   const won = res.winner === 'b';
+  let o = record(applyLosses(s, a, res.lossB), homeBats.filter((id) => s.squads.some((q) => q.bat === id)), won);
   const flipped: BattleResult = { ...res, winner: won ? 'a' : 'b', lossA: res.lossB, lossB: res.lossA, startA: res.startB, startB: res.startA, moraleA: res.moraleB, moraleB: res.moraleA };
-  play(`Defence of your castle`, a, foe, flipped, 'Your garrison', r.name, 0xb3242a, r.color, undefined, { biome: 'grassland', walls: count(s, 'wall') + count(s, 'gatehouse') > 0 ? { side: 0, kind: 'wall' } : count(s, 'palisade') > 0 ? { side: 0, kind: 'palisade' } : undefined });
+  play(`Defence of your castle`, a, foe, flipped, 'Your garrison', r.name, 0xb3242a, r.color, undefined, { biome: 'grassland', walls: count(s, 'wall') + count(s, 'gatehouse') > 0 ? { side: 0, kind: 'wall' } : count(s, 'palisade') > 0 ? { side: 0, kind: 'palisade' } : undefined, cry: cryOf(s, homeBats, 'defend') });
   o = report(o, `Defence against ${r.name}`, won, flipped, a, foe, won ? defenceSpoils(r) : undefined);
   let w = { ...o.world, threat: null, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.round(x.power * (won ? 0.6 : 0.9)), relation: Math.min(100, x.relation + 10), beaten: won ? 1 : x.beaten } : x)) };
   if (won) { o = ledger(W(o, w), 'loot', uid(), defenceSpoils(r)); emit({ kind: 'achieve', text: `${r.name}'s host is broken before your walls!` }); }
@@ -392,3 +419,19 @@ export const payTribute = () => update((s) => {
   return event(W(o, { ...shiftRelations(o.world, r.id, 20, false), threat: null }), 'diplomacy', `Paid ${gold} gold tribute to ${r.name}.`);
 });
 export { TACTICS, NO_ENGINES };
+
+/** Publicly praise a successful commander: they gain an honour (and rating), the realm hears of it. */
+export const praiseCommander = (batId: string) => update((s) => {
+  const b = s.battalions.find((x) => x.id === batId); if (!b) return;
+  const ready = praiseReady(b.commander); if (!ready.ok) return ready.why;
+  if (!canAfford(s.res, ready.honor.cost)) return 'Not enough to pay for the ceremony';
+  const c = { ...b.commander, honors: (b.commander.honors ?? 0) + 1 };
+  let o = mark(spend({ ...s, battalions: s.battalions.map((x) => (x.id === batId ? { ...x, commander: c } : x)) }, ready.honor.cost), 'battalions', batId);
+  o = { ...o, squads: o.squads.map((q) => (q.bat === batId ? { ...q, xp: q.xp + 25 } : q)) }; for (const q of o.squads) if (q.bat === batId) o = mark(o, 'squads', q.id);
+  o = W(o, praiseEffects(o.world));
+  emit({ kind: 'achieve', text: `${styled(c)} is named ${ready.honor.name}!`, big: true });
+  return event(o, 'command', `${styled(c)} of the ${b.name} was named ${ready.honor.name} before the court.`);
+});
+/** Nobles and commons approve of honoured heroes. */
+const praiseEffects = (w: WorldState): WorldState => ({ ...w, court: adjust(courtOf(w), { nobles: 6, commons: 3 }) });
+

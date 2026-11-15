@@ -119,6 +119,7 @@ const ICONS: Record<string, string[]> = {
   study: ['..........', '.bb....bb.', 'bWWbb.bWWb', 'bWkWWbWkWb', 'bWWWWbWWWb', 'bWkkWbWkWb', 'bWWWWbWWWb', 'bWkWWbWkkb', 'bbbbbbbbbb', '....rr....'],
   build: ['..ssss....', '.sSSSSs...', '.sSdddSs..', '..ss.bSs..', '.....bb...', '....bb....', '...bb.....', '..bb......', '.bb.......', '..........'],
   army: ['........sS', '.......sS.', '......sS..', '.....sS...', '..y.sS....', '..yyS.....', '...yy.....', '..b.yy....', '.b........', 'b.........'],
+  calendar: ['.k....k...', 'rrrrrrrrrr', 'rRRRRRRRRr', 'wWWWWWWWWw', 'wWkWkWkWWw', 'wWWWWWWWgw', 'wWkWkWWgWw', 'wWWWgWgWWw', 'wWWWWgWWWw', 'wwwwwwwwww'],
   habits: ['.wwwwwwww.', 'wWWWWWWWWw', '.wkkkkkkw.', '.wWWWWWWw.', '.wkkkkWWw.', '.wWWWWWWw.', '.wkkkkkkw.', '.wWWWWWWw.', 'wWWWWWWWWw', '.wwwwwwww.'],
   stats: ['..........', '........y.', '.......yy.', '....r..yy.', '...rr..yy.', '.g.rr..yy.', 'gg.rr..yy.', 'gg.rr..yy.', 'dddddddddd', '..........'],
   tech: ['....y.....', '...yYy....', '..yYYYy...', '.wwwwwwww.', 'wWWWWWWWWw', 'wWkkkkkkWw', 'wWWWWWWWWw', 'wWkkkkWWWw', 'wWWWWWWWWw', '.wwwwwwww.'],

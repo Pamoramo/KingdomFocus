@@ -4,12 +4,16 @@ import { type Habit, type Freq, progress, streak, habitReward, MILESTONES, dayKe
 import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, SQUADS_PER_COMPANY, TCLASSES, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
 import { nameFor } from './names.ts';
 import type { Biome } from './realms.ts';
+import { traitsFor, has as hasTrait, type TraitId } from './commanders.ts';
+import { courtOf, courtFx } from './politics.ts';
+import { sitesFor, settlementFx } from './expansion.ts';
 import { type WorldState, type Engines, initWorld, VASSAL_GOLD, VASSAL_GOLD_MAX, VASSAL_RENOWN, travelMs, type Journey } from './war.ts';
 import type { Unit, BattleResult } from './battle.ts';
 
 // ---------------- types ----------------
 export interface Building { id: string; kind: BKind; x: number; y: number; level: number; at: number }
-export interface Commander { name: string; rank: number; seed: string }
+/** traits/wins/battles/honors are optional so older saves load; traits default from the seed (see commanders.ts). */
+export interface Commander { name: string; rank: number; seed: string; traits?: TraitId[]; wins?: number; battles?: number; honors?: number }
 export type Orders = 'formation' | 'patrol' | 'garrison';
 export interface Battalion { id: string; name: string; army: string; color: number; emblem: string; formation: Formation; orders?: Orders; x: number; y: number; commander: Commander }
 export interface Squad { id: string; cls: TClass; count: number; xp: number; rank: number; bat: string }
@@ -53,7 +57,7 @@ let state: GameState = newGame();
 const listeners = new Set<L>();
 export const fxBus = new EventTarget();
 /** Where a battle is fought: the biome, and which side (0 = left, 1 = right) holds walls of stone or a palisade. */
-export interface BattleSite { biome: Biome; walls?: { side: 0 | 1; kind: 'wall' | 'palisade' } }
+export interface BattleSite { biome: Biome; walls?: { side: 0 | 1; kind: 'wall' | 'palisade' }; cry?: string }
 export interface BattlePlay { title: string; a: Unit[]; b: Unit[]; result: BattleResult; aName: string; bName: string; aColor: number; bColor: number; engines?: Engines; site?: BattleSite }
 export type Fx = { kind: 'reward' | 'build' | 'error' | 'info' | 'achieve' | 'stage' | 'promote' | 'battle' | 'war'; text: string; res?: Partial<Res>; x?: number; y?: number; id?: string; big?: boolean; battle?: BattlePlay };
 export const emit = (fx: Fx) => fxBus.dispatchEvent(new CustomEvent('fx', { detail: fx }));
@@ -107,6 +111,7 @@ export function effects(s: GameState): Required<Effects> {
   for (const b of s.buildings) { const f = BUILDINGS[b.kind].fx(b.level); for (const k of Object.keys(f) as (keyof Effects)[]) if (k !== 'green') e[k] += f[k] ?? 0; }
   if (has(s, 'veterancy')) e.xp += 0.25;
   e.discount = Math.min(0.3, e.discount);
+  if (s.world) { const st = settlementFx(s.world.settlements, sitesFor(s.world.seed)); e.cap = Math.round((e.cap + st.cap) * (1 + courtFx(courtOf(s.world)).cap)); }
   return e;
 }
 export const armyCap = (s: GameState) => effects(s).cap;
@@ -138,7 +143,9 @@ export function townOrder(s: GameState) {
 export const studyMult = (s: GameState): Res => {
   const e = effects(s), w = s.world, vassals = w ? w.rivals.filter((r) => r.status === 'vassal').length : 0;
   const safe = townOrder(s).ratio >= 1 && townOrder(s).needed > 2 ? 0.03 : 0;
-  return { gold: Math.max(0.5, 1 + e.gold + safe + Math.min(VASSAL_GOLD_MAX, vassals * VASSAL_GOLD) - (w?.threat ? 0.25 : 0)), wood: 1 + e.wood, stone: 1 + e.stone, renown: 1 + e.renown + vassals * VASSAL_RENOWN };
+  // the court's decrees and moods, and the settlements you hold
+  const c = w ? courtFx(courtOf(w)) : null, st = w ? settlementFx(w.settlements, sitesFor(w.seed)) : null;
+  return { gold: Math.max(0.5, 1 + e.gold + safe + Math.min(VASSAL_GOLD_MAX, vassals * VASSAL_GOLD) - (w?.threat ? 0.25 : 0) + (c?.gold ?? 0) + (st?.gold ?? 0)), wood: 1 + e.wood + (st?.wood ?? 0), stone: 1 + e.stone + (st?.stone ?? 0), renown: Math.max(0.5, 1 + e.renown + vassals * VASSAL_RENOWN + (c?.renown ?? 0) + (st?.renown ?? 0)) };
 };
 export function costOf(s: GameState, kind: BKind, lvlIdx: number): Res {
   const d = BUILDINGS[kind], c = full(d.levels[lvlIdx].cost);
@@ -261,13 +268,16 @@ function ensureBattalion(s: GameState): [GameState, string] {
 }
 function newBat(s: GameState, name: string): Battalion {
   const i = s.battalions.length, id = uid();
-  return { id, name, army: 'Royal Army', color: COLORS[i % COLORS.length], emblem: 'lion', formation: 'block', orders: 'formation', x: (CAMP_X + 2 + (i % 4) * 7) * TILE, y: (CAMP_Y + 9 + Math.floor(i / 4) * 6) * TILE, commander: { name: nameFor(id), rank: 0, seed: id } };
+  return { id, name, army: 'Royal Army', color: COLORS[i % COLORS.length], emblem: 'lion', formation: 'block', orders: 'formation', x: (CAMP_X + 2 + (i % 4) * 7) * TILE, y: (CAMP_Y + 9 + Math.floor(i / 4) * 6) * TILE, commander: { name: nameFor(id), rank: 0, seed: id, traits: traitsFor(id), wins: 0, battles: 0, honors: 0 } };
 }
+/** What one soldier costs to raise, after the court's levy decree. */
+export const recruitCost = (s: GameState, cls: TClass) => { const k = 1 - (s.world ? courtFx(courtOf(s.world)).recruit : 0); return Object.fromEntries(Object.entries(TROOPS[cls].cost).map(([r, v]) => [r, Math.ceil((v ?? 0) * k)])) as Partial<Res>; };
 export const recruit = (cls: TClass, n: number, batId?: string) => update((s0) => {
   const d = TROOPS[cls]; const lock = troopLock(s0, cls); if (lock) return lock;
   if (n < 1) return;
   if (armySize(s0) + n > armyCap(s0)) return `Army capacity reached (${armySize(s0)}/${armyCap(s0)}). Build farms, huts and houses.`;
-  if (!canAfford(s0.res, d.cost, n)) return 'Not enough resources';
+  const cost = recruitCost(s0, cls); // conscription makes soldiers cheaper
+  if (!canAfford(s0.res, cost, n)) return 'Not enough resources';
   let [s, bat] = ensureBattalion(s0); if (batId && s.battalions.some((b) => b.id === batId)) bat = batId;
   // soldiers can't appear at a distant siege: recruits for a battalion that is away muster at home, and those meant for the siege march there
   let join: string | null = null;
@@ -289,7 +299,7 @@ export const recruit = (cls: TClass, n: number, batId?: string) => update((s0) =
     return q;
   });
   while (left > 0) { const t = Math.min(left, SQUAD_SIZE), id = uid(); squads.push({ id, cls, count: t, xp: 0, rank: 0, bat }); touched.push(id); left -= t; }
-  let o = spend({ ...s, squads }, d.cost, n);
+  let o = spend({ ...s, squads }, cost, n);
   if (join && target) { // they set off along the road to the siege
     const now = Date.now(), ms = travelMs('army', target), j: Journey = { id: uid(), kind: 'reinforce', rival: target.id, depart: now, arrive: now + ms, label: `Reinforcements marching to ${target.name}`, bats: [bat], data: { join } };
     o = { ...o, world: { ...o.world, journeys: [...(o.world.journeys ?? []), j] } };
@@ -417,7 +427,7 @@ export const promoteCommander = (id: string) => update((s) => {
 });
 
 // ---------------- study ----------------
-const XP_RATE = (s: GameState, bat: string) => 1 + effects(s).xp + (OFFICERS[s.battalions.find((b) => b.id === bat)?.commander.rank ?? 0]?.bonus ?? 0);
+const XP_RATE = (s: GameState, bat: string) => { const c = s.battalions.find((b) => b.id === bat)?.commander; return (1 + effects(s).xp + (OFFICERS[c?.rank ?? 0]?.bonus ?? 0)) * (c && hasTrait(c, 'drillmaster') ? 1.25 : 1); };
 function giveXp(s: GameState, minutes: number): GameState {
   if (minutes <= 0 || !s.squads.length) return s;
   let o: GameState = { ...s, squads: s.squads.map((q) => ({ ...q, xp: q.xp + minutes * XP_PER_MIN * XP_RATE(s, q.bat) })) };
