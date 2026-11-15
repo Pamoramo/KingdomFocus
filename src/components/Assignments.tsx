@@ -2,6 +2,8 @@
 import { useState } from 'react';
 import { useGame, useNow } from './hooks.ts';
 import { Cost, Section } from './Cost.tsx';
+import { currentSubject, addSubject } from '../lib/state.ts';
+import { setUI } from '../game/ui.ts';
 import { SIZE, EARLY_MS, LATE_MS, rewardFor, addAssignment, completeAssignment, removeAssignment, type Assignment, type Size } from '../lib/assignments.ts';
 
 const DAY = 864e5;
@@ -38,13 +40,20 @@ export function AssignmentsPanel() {
 }
 
 function AddForm() {
-  const s = useGame(), [title, setTitle] = useState(''), [subject, setSubject] = useState(s.subjects[0] ?? ''), [due, setDue] = useState(defaultDue()), [size, setSize] = useState<Size>('medium'), [msg, setMsg] = useState<string | null>(null);
+  const s = useGame(), [title, setTitle] = useState(''), [picked, setPicked] = useState<string | null>(null), [adding, setAdding] = useState(false), [fresh, setFresh] = useState(''), [due, setDue] = useState(defaultDue()), [size, setSize] = useState<Size>('medium'), [msg, setMsg] = useState<string | null>(null);
+  // follows whatever you are studying until you pick a subject yourself
+  const subject = picked && s.subjects.includes(picked) ? picked : currentSubject(s);
+  const addNew = () => { const n = fresh.trim().replace(/\s+/g, ' ').slice(0, 40); if (!n) return; const m = addSubject(n); if (m) { setMsg(m); return; } setPicked(s.subjects.find((x) => x.toLowerCase() === n.toLowerCase()) ?? n); setFresh(''); setAdding(false); };
   const dueMs = new Date(due).getTime(), r = rewardFor({ size, due: dueMs }, s.stage, Date.now());
   return <Section title="New assignment">
     <form className="space-y-1.5" onSubmit={(e) => { e.preventDefault(); const m = addAssignment(title, subject, dueMs, size); setMsg(m ?? null); if (!m) setTitle(''); }}>
       <input className="inp" placeholder="e.g. Chapter 4 problem set" maxLength={80} value={title} onChange={(e) => setTitle(e.target.value)} />
-      <div className="flex gap-1"><input className="inp" list="subjects" placeholder="Subject" maxLength={40} value={subject} onChange={(e) => setSubject(e.target.value)} /><datalist id="subjects">{s.subjects.map((x) => <option key={x} value={x} />)}</datalist>
+      <div className="flex gap-1">
+        <select className="inp" aria-label="Subject" value={adding ? '__new' : subject} onChange={(e) => { if (e.target.value === '__new') setAdding(true); else { setAdding(false); setPicked(e.target.value); } }}>
+          {[...new Set([...s.subjects, subject])].map((x) => <option key={x} value={x}>{x}</option>)}<option value="__new">＋ New subject…</option></select>
         <input className="inp" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} /></div>
+      {adding && <div className="flex gap-1"><input className="inp" autoFocus placeholder="e.g. Organic Chemistry" maxLength={40} value={fresh} onChange={(e) => setFresh(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addNew(); } }} />
+        <button type="button" className="btn" disabled={!fresh.trim()} onClick={addNew}>Add subject</button><button type="button" className="btn" onClick={() => setAdding(false)}>Cancel</button></div>}
       <div className="grid grid-cols-3 gap-1">{(Object.keys(SIZE) as Size[]).map((k) => <button type="button" key={k} title={SIZE[k].example} className={`btn text-sm ${size === k ? 'btn-gold' : ''}`} onClick={() => setSize(k)}>{SIZE[k].name}</button>)}</div>
       <div className="text-xs">e.g. {SIZE[size].example}. On time: <Cost cost={r} plus /> {dueMs - Date.now() > EARLY_MS && <span className="opacity-75">(+25% if done a day early)</span>}</div>
       <div className="text-xs text-blood">If missed: {SIZE[size].penalty}</div>
@@ -73,6 +82,7 @@ function Row({ a, now, stage }: { a: Assignment; now: number; stage: number }) {
     <div className="flex items-center gap-2"><span className={`w-2 h-6 rounded-sm ${SIZE_COL[a.size]}`} /><span className="flex-1 min-w-0"><b>{a.title}</b> <span className="text-xs opacity-70">{a.subject} · {SIZE[a.size].name}</span></span>
       <span className={`text-xs whitespace-nowrap ${left < 0 ? 'text-blood font-bold' : urgent ? 'font-bold' : ''}`}>{left >= 0 ? 'due ' : 'was due '}{until(left)}</span></div>
     <div className="flex items-center gap-2 text-xs"><span className="flex-1">{left > EARLY_MS ? 'Early bonus now: ' : left > 0 ? 'Reward: ' : 'Late: '}<Cost cost={r} plus /></span>
+      <button className="btn !py-0" title={`Start studying ${a.subject}`} onClick={() => setUI({ panel: 'study', studySubject: a.subject })}>Study this</button>
       <button className="btn btn-gold !py-0" onClick={() => completeAssignment(a.id)}>Done</button>
       {!a.missed && <button className="btn !py-0" title="Withdraw" onClick={() => confirm(`Withdraw "${a.title}"?`) && removeAssignment(a.id)}>✕</button>}</div>
     {!a.missed && <div className="text-xs text-blood/80">If missed: {SIZE[a.size].penalty}</div>}

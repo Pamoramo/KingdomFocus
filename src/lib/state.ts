@@ -463,6 +463,16 @@ function settle(s: GameState, sess: NonNullable<GameState['session']>): GameStat
   }
   return o;
 }
+/** The subject you are studying now, or studied last: the default everywhere a subject is asked for. */
+export const currentSubject = (s: GameState) => s.session?.subject ?? s.sessions[0]?.subject ?? s.subjects[0] ?? 'General';
+/** Adds a subject of your own to the list (kept across devices). */
+export const addSubject = (name: string) => update((s) => {
+  name = name.trim().replace(/\s+/g, ' ').slice(0, 40); if (!name) return 'Name the subject';
+  if (s.subjects.some((x) => x.toLowerCase() === name.toLowerCase())) return;
+  if (s.subjects.length >= 40) return 'Too many subjects';
+  return { ...s, subjects: [...s.subjects, name] };
+});
+export const removeSubject = (name: string) => update((s) => (s.subjects.length <= 1 ? 'Keep at least one subject' : { ...s, subjects: s.subjects.filter((x) => x !== name) }));
 export const studyStart = (subject: string) => update((s) => {
   if (s.session) return 'A session is already running';
   const subjects = s.subjects.includes(subject) ? s.subjects : [...s.subjects, subject];

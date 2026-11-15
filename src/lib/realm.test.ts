@@ -126,3 +126,13 @@ test('parade: costs gold, pays renown and favour, once a day, deters invaders an
   assert.equal(thiefCanStrike(s), false, 'no thieves on parade day');
   assert.match(RA.holdParade() ?? '', /One parade a day/);
 });
+
+test('subjects: add your own, remove them, and the one you study becomes the default', () => {
+  S._with(S.newGame());
+  assert.equal(S.currentSubject(S.getState()), 'Mathematics');
+  S.addSubject('  Organic   Chemistry '); assert.ok(S.getState().subjects.includes('Organic Chemistry'));
+  S.addSubject('organic chemistry'); assert.equal(S.getState().subjects.filter((x) => /organic/i.test(x)).length, 1, 'no duplicates');
+  S.studyStart('Organic Chemistry'); assert.equal(S.currentSubject(S.getState()), 'Organic Chemistry', 'studying sets the subject');
+  S.studyDiscard(); assert.equal(S.currentSubject(S.getState()), 'Mathematics', 'an empty session leaves no mark');
+  S.removeSubject('History'); assert.ok(!S.getState().subjects.includes('History'));
+});

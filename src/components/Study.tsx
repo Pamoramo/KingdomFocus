@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useGame, useNow, clock, fmt, hm } from './hooks.ts';
-import { idleDays, neglect, GRACE_DAYS, studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState } from '../lib/state.ts';
+import { useGame, useUI, useNow, clock, fmt, hm } from './hooks.ts';
+import { idleDays, neglect, GRACE_DAYS, studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState, currentSubject, addSubject, removeSubject } from '../lib/state.ts';
 import { pendingAt, dueAt, isAwaiting, totalMs } from '../lib/study.ts';
 import { studyReward, focusMultiplier, MANUAL_FACTOR, type Res } from '../lib/rewards.ts';
 import { TROOPS, BUILDINGS } from '../lib/economy.ts';
@@ -13,7 +13,11 @@ const Badge = ({ src }: { src: string }) => <span className={`text-xs px-1.5 rou
 
 export function StudyPanel() {
   const s = useGame(), now = useNow(), sess = s.session, cfg = s.settings.cfg;
-  const [subj, setSubj] = useState(s.subjects[0] ?? 'General'), [custom, setCustom] = useState(''), [manual, setManual] = useState(false);
+  const ui = useUI(), [subj, setSubj] = useState(ui.studySubject ?? currentSubject(s)), [custom, setCustom] = useState(''), [manual, setManual] = useState(false);
+  // "Study this" on an assignment opens the panel on that subject
+  useEffect(() => { if (ui.studySubject) { setSubj(ui.studySubject); setUI({ studySubject: undefined }); } }, [ui.studySubject]);
+  const add = () => { const n = custom.trim(); if (!n) return; addSubject(n); setSubj(s.subjects.find((x) => x.toLowerCase() === n.toLowerCase()) ?? n.replace(/\s+/g, ' ').slice(0, 40)); setCustom(''); };
+  const openWork = (s.world.assignments ?? []).filter((a) => !a.done && !a.missed).slice(0, 4);
   const mult = studyMult(s), perMin = studyReward(60000, s.settings.rates, mult);
   if (!sess) return (
     <div className="space-y-3">
@@ -23,9 +27,11 @@ export function StudyPanel() {
         <NeglectNote />
       </div>
       <Section title="Subject">
-        <div className="flex flex-wrap gap-1">{s.subjects.map((x) => <button key={x} onClick={() => setSubj(x)} className={`btn text-sm !py-0.5 ${x === subj ? 'btn-gold' : ''}`}>{x}</button>)}</div>
-        <div className="flex gap-2"><input className="inp" placeholder="Add a subject…" value={custom} maxLength={80} onChange={(e) => setCustom(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && custom.trim()) { setSubj(custom.trim()); setCustom(''); } }} />
-          <button className="btn" disabled={!custom.trim()} onClick={() => { setSubj(custom.trim()); setCustom(''); }}>Add</button></div>
+        <div className="flex flex-wrap gap-1">{s.subjects.map((x) => <span key={x} className="inline-flex"><button onClick={() => setSubj(x)} className={`btn text-sm !py-0.5 ${x === subj ? 'btn-gold' : ''}`}>{x}</button>
+          {s.subjects.length > 1 && x !== subj && <button className="text-xs opacity-50 hover:opacity-100 px-0.5" title={`Remove ${x}`} onClick={() => confirm(`Remove "${x}" from your subjects? Past sessions keep it.`) && removeSubject(x)}>✕</button>}</span>)}</div>
+        {openWork.length > 0 && <div className="text-xs flex flex-wrap gap-1 items-center">Working on: {openWork.map((a) => <button key={a.id} className={`btn !py-0 text-xs ${a.subject === subj ? 'btn-gold' : ''}`} title={`${a.subject}, due ${new Date(a.due).toLocaleString()}`} onClick={() => setSubj(a.subject)}>{a.title}</button>)}</div>}
+        <div className="flex gap-2"><input className="inp" placeholder="Add a subject…" value={custom} maxLength={80} onChange={(e) => setCustom(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
+          <button className="btn" disabled={!custom.trim()} onClick={add}>Add</button></div>
       </Section>
       <Section title="Mode">
         <div className="flex gap-1">
@@ -82,7 +88,7 @@ export function NeglectNote() {
 }
 
 function ManualEntry({ subjects }: { subjects: string[] }) {
-  const [subj, setSubj] = useState(subjects[0] ?? 'General'), [min, setMin] = useState(30), [when, setWhen] = useState(() => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)), [note, setNote] = useState('');
+  const g = useGame(), [subj, setSubj] = useState(currentSubject(g)), [min, setMin] = useState(30), [when, setWhen] = useState(() => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)), [note, setNote] = useState('');
   const s = getState(), r = studyReward(min * 60000, s.settings.rates, studyMult(s), MANUAL_FACTOR);
   return <Section title="Manual log">
     <p className="text-xs opacity-75">For study done away from the timer. Manual minutes are marked as manual and earn {MANUAL_FACTOR * 100}% of the timed reward (max 4h per entry, 8h per day).</p>
