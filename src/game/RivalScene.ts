@@ -4,7 +4,7 @@ import { realmLayout, RW, RH, type RealmLayout, type Biome } from '../lib/realms
 import { armyOf, ENGINE_IDS, type Rival } from '../lib/war.ts';
 import { BUILDINGS, CONNECTS, type BKind } from '../lib/economy.ts';
 import { campaignSquads } from '../lib/warActions.ts';
-import { biomeTile, plant, rubble, pavise, campfire, mineEntrance, barricade, wagon, BIOME_PLANTS, BIOME_DENSITY } from './art/biome.ts';
+import { biomeTile, plant, rubble, church, stall, pavise, campfire, mineEntrance, barricade, wagon, BIOME_PLANTS, BIOME_DENSITY } from './art/biome.ts';
 import { engineArt, siegeCamp } from './art/war.ts';
 import { hdify, HD } from './art/hd.ts';
 import { withoutOutline } from './art/px.ts';
@@ -34,7 +34,8 @@ interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string
 /** A rival kingdom up close: its biome, castle and town, and your siege camp when you march on it. */
 export class RivalScene extends Phaser.Scene {
   private r!: Rival; private L!: RealmLayout; private frame = 0;
-  private bImgs: { img: Phaser.GameObjects.Image; kind: BKind; level: number }[] = [];
+  private bImgs: { img: Phaser.GameObjects.Image; kind: BKind; level: number; suburb?: boolean }[] = [];
+  private marks: { img: Phaser.GameObjects.Image; suburb?: boolean }[] = [];
   private wallImgs: { img: Phaser.GameObjects.Image; x: number; y: number }[] = [];
   private fires: Phaser.GameObjects.Image[] = []; private smoke: [number, number][] = []; private sheltering = false;
   private waterImgs: { img: Phaser.GameObjects.Image; land: number }[] = [];
@@ -43,7 +44,7 @@ export class RivalScene extends Phaser.Scene {
   private doors: { x: number; y: number }[] = []; private unsub: (() => void)[] = [];
   private drag: { x: number; y: number; sx: number; sy: number } | null = null; private pinch: { d: number; z: number } | null = null;
   constructor() { super('rival'); }
-  init(data: { id: string }) { this.r = getState().world.rivals.find((x) => x.id === data.id)!; this.figs = []; this.waterImgs = []; this.bImgs = []; this.wallImgs = []; this.siegeObjs = []; this.siegeSig = ''; }
+  init(data: { id: string }) { this.r = getState().world.rivals.find((x) => x.id === data.id)!; this.figs = []; this.waterImgs = []; this.bImgs = []; this.marks = []; this.wallImgs = []; this.siegeObjs = []; this.siegeSig = ''; }
 
   create() {
     const s = getState(); this.L = realmLayout(s.world, this.r);
@@ -64,7 +65,7 @@ export class RivalScene extends Phaser.Scene {
     this.input.on('wheel', (_p: Phaser.Input.Pointer, _g: unknown, _dx: number, dy: number) => cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.88 : 1.14), 0.5, 5)));
     this.unsub.push(subscribe(() => this.syncSiege(getState())));
     this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
-    this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; for (const b of this.bImgs) b.img.setTexture(bTex(this, b.kind, b.level, this.frame % 2).key); for (const w of this.waterImgs) w.img.setTexture(waterTex(this, w.land, this.frame % 3)); for (const f of this.fires) f.setTexture(`fire${this.frame % 2}`); } });
+    this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; for (const b of this.bImgs) if (b.img.visible) b.img.setTexture(bTex(this, b.kind, b.level, this.frame % 2).key); for (const w of this.waterImgs) w.img.setTexture(waterTex(this, w.land, this.frame % 3)); for (const f of this.fires) f.setTexture(`fire${this.frame % 2}`); } });
     this.time.addEvent({ delay: 6500, loop: true, callback: () => this.chat() });
     this.time.addEvent({ delay: 4200, loop: true, callback: () => this.volley() });
     this.time.addEvent({ delay: 900, loop: true, callback: () => { for (const [x, y] of this.smoke) { const p = this.add.image(x, y, 'px').setTint(0xcfc6b8).setAlpha(0.7).setDepth(19000).setScale(1.5); this.tweens.add({ targets: p, y: y - 26, x: x + 6, alpha: 0, scale: 3.5, duration: 2600, onComplete: () => p.destroy() }); } } });
@@ -77,6 +78,8 @@ export class RivalScene extends Phaser.Scene {
     const T = this.textures, b = this.L.biome;
     for (let v = 0; v < 4; v++) { const k = `bt_${b}${v}`; if (!T.exists(k)) T.addCanvas(k, hdify(biomeTile(b, v), { rim: false, outline: false, grain: 6, seed: v })); }
     BIOME_PLANTS[b].forEach((p, i) => { for (const sd of [0, 1]) { const k = `bp_${p}${sd}`; if (!T.exists(k)) T.addCanvas(k, hdify(withoutOutline(() => plant(p, sd + i * 3)), { seed: sd })); } });
+    if (!T.exists('church')) T.addCanvas('church', hdify(withoutOutline(() => church())));
+    for (let i = 0; i < 4; i++) if (!T.exists(`stall${i}`)) T.addCanvas(`stall${i}`, hdify(withoutOutline(() => stall(i))));
     for (let i = 0; i < 3; i++) if (!T.exists(`rubble${i}`)) T.addCanvas(`rubble${i}`, hdify(withoutOutline(() => rubble(i * 7 + 1))));
     if (!T.exists('camp_icon')) T.addCanvas('camp_icon', hdify(withoutOutline(() => siegeCamp())));
     const once = (k: string, draw: () => HTMLCanvasElement) => { if (!T.exists(k)) T.addCanvas(k, hdify(withoutOutline(draw), { grain: 3 })); };
@@ -86,7 +89,8 @@ export class RivalScene extends Phaser.Scene {
   private occupied() {
     const o = new Set<string>();
     for (const b of this.L.buildings) { const d = BUILDINGS[b.kind]; for (let i = 0; i < d.w; i++) for (let j = 0; j < d.h; j++) o.add(`${b.x + i},${b.y + j}`); }
-    for (const w of [...this.L.walls, ...this.L.water, ...this.L.bridges]) o.add(`${w.x},${w.y}`);
+    for (const w of [...this.L.walls, ...this.L.water, ...this.L.bridges, ...this.L.streets, ...this.L.plaza]) o.add(`${w.x},${w.y}`);
+    for (const m of this.L.landmarks) for (let i = 0; i < m.w; i++) for (let j = 0; j < m.h; j++) o.add(`${m.x + i},${m.y + j}`);
     return o;
   }
   private drawGround() {
@@ -102,8 +106,11 @@ export class RivalScene extends Phaser.Scene {
     }
     for (const [k, x, y] of deco.sort((a, c) => a[2] - c[2])) rt.batchDraw(k, x * TILE * HD, (y * TILE - 8) * HD);
     rt.endDraw();
-    // the road from the gate down through the siege approach
-    for (let y = this.L.box.y1 + 1; y < RH; y++) for (const x of [gx, gx + 1]) if (!this.L.bridges.some((b) => b.x === x && b.y === y)) this.add.image(x * TILE, (y + 1) * TILE, tileTex(this, 'road', 1, 1 | 4 | (x === gx ? 2 : 8))).setOrigin(0, 1).setScale(S).setDepth(-6);
+    // the high street, back lanes and market square: cobbles in a prosperous town, beaten earth in a poor one
+    const pavedSet = new Set([...this.L.streets, ...this.L.plaza, ...this.L.bridges].map((t) => `${t.x},${t.y}`)), cob = this.L.wealth === 'poor' ? 1 : 2;
+    const isPaved = (x: number, y: number) => pavedSet.has(`${x},${y}`) || (y <= this.L.gate.y && x >= this.L.gate.x && x <= this.L.gate.x + 1);
+    for (const t of this.L.streets) { const m = (isPaved(t.x, t.y - 1) ? 1 : 0) | (isPaved(t.x + 1, t.y) ? 2 : 0) | (isPaved(t.x, t.y + 1) ? 4 : 0) | (isPaved(t.x - 1, t.y) ? 8 : 0); this.add.image(t.x * TILE, (t.y + 1) * TILE, tileTex(this, 'road', cob, m)).setOrigin(0, 1).setScale(S).setDepth(-6); }
+    for (const t of this.L.plaza) this.add.image(t.x * TILE, (t.y + 1) * TILE, tileTex(this, 'courtyard', 1, 15)).setOrigin(0, 1).setScale(S).setDepth(-6);
     // rivers, ponds, oases, frozen lakes and moats
     const wet = new Set(this.L.water.map((t) => `${t.x},${t.y}`)), isWet = (x: number, y: number) => wet.has(`${x},${y}`) || this.L.bridges.some((b) => b.x === x && b.y === y) || x < 0 || x >= RW || y < 0 || y >= RH;
     for (const t of this.L.water) {
@@ -126,8 +133,15 @@ export class RivalScene extends Phaser.Scene {
       const d = BUILDINGS[b.kind], by = (b.y + d.h) * TILE;
       const img = this.add.image(b.x * TILE, by, bTex(this, b.kind, b.level, 0).key).setOrigin(0, 1).setScale(S).setDepth(by);
       if (L.biome === 'tundra') img.setTint(0xeef4ff); if (L.biome === 'desert') img.setTint(0xfff2dc);
-      this.bImgs.push({ img, kind: b.kind, level: b.level });
+      this.bImgs.push({ img, kind: b.kind, level: b.level, suburb: b.suburb });
       this.doors.push({ x: (b.x + d.w / 2) * TILE, y: by + 4 });
+    }
+    // the parish church and the market stalls
+    for (const m of L.landmarks) {
+      const by = (m.y + m.h) * TILE, img = this.add.image(m.x * TILE, by, m.kind === 'church' ? 'church' : `stall${m.v % 4}`).setOrigin(0, 1).setScale(S).setDepth(by);
+      if (L.biome === 'tundra') img.setTint(0xeef4ff);
+      this.marks.push({ img, suburb: m.suburb });
+      this.doors.push({ x: (m.x + m.w / 2) * TILE, y: by + 4 });
     }
     // the rival's banners over the keep and gate
     for (const [x, y] of [[(L.gate.x + 1) * TILE - 18, (L.box.y1 + 1) * TILE - 4], [(L.gate.x + 1) * TILE + 18, (L.box.y1 + 1) * TILE - 4]]) this.add.image(x, y, bannerTex(this, this.r.color, this.r.emblem, 0)).setOrigin(0.2, 1).setScale(S).setDepth(y + 1);
@@ -158,10 +172,18 @@ export class RivalScene extends Phaser.Scene {
     const sig = c ? `${c.phase}|${c.stance}|${Math.round((c.wallHp / c.wallMax) * 20)}|${JSON.stringify(c.engines)}|${campaignSquads(s).map((q) => q.count).join()}` : 'peace';
     if (sig === this.siegeSig) return; this.siegeSig = sig;
     this.siegeObjs.forEach((o) => o.destroy()); this.siegeObjs = []; this.fires = []; this.smoke = [];
+    // before a siege, defenders burn the suburbs in front of the gate so the enemy finds no shelter there
+    for (const b of [...this.bImgs, ...this.marks]) if (b.suburb) b.img.setVisible(!c);
     this.figs = this.figs.filter((f) => { if (f.side === 'you' || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); return false; } return true; });
     if (this.sheltering !== !!c) for (const f of this.figs) if (f.side === 'folk') { f.tx = undefined; f.wait = Math.random() * 1500; }
     this.sheltering = !!c;
     const add = <T extends Phaser.GameObjects.GameObject>(o: T) => { this.siegeObjs.push(o); return o; };
+    // the burnt suburbs: charred rubble where houses stood, some still smoking
+    if (c) for (const b of [...this.bImgs, ...this.marks]) if (b.suburb) {
+      const w = b.img.displayWidth, x0 = b.img.x, y0 = b.img.y, n = Math.max(1, Math.round(w / TILE));
+      for (let i = 0; i < n; i++) add(this.add.image(x0 + i * TILE, y0, `rubble${(i + Math.round(x0 / TILE)) % 3}`).setOrigin(0, 1).setScale(S).setTint(0x5a4a42).setDepth(y0 - 1));
+      if (Math.round(x0 / TILE + y0 / TILE) % 3 === 0) this.smoke.push([x0 + w / 2, y0 - 10]);
+    }
     const img = (k: string, x: number, y: number, sc = S, frame?: string) => add(this.add.image(x, y, k, frame).setOrigin(0.5, 1).setScale(sc).setDepth(y));
     // walls crack and, near the gate, fall into rubble; defenders block the breach with barricades
     const ratio = c ? c.wallHp / c.wallMax : 1, inner = this.L.inner;

@@ -23,12 +23,17 @@ export type CastleType = 'motte' | 'keep' | 'walledtown' | 'hillfort' | 'concent
 export const CASTLE_NAME: Record<CastleType, string> = { motte: 'Motte-and-bailey', keep: 'Keep-and-bailey castle', walledtown: 'Walled town', hillfort: 'Hill castle', concentric: 'Concentric castle' };
 export type Wealth = 'poor' | 'modest' | 'prosperous' | 'rich';
 export const RW = 64, RH = 48; // realm map size in tiles
-export interface Placed { kind: BKind; x: number; y: number; level: number }
+/** suburb: stands in front of the gate, where besiegers make camp (shown burnt during a siege). */
+export interface Placed { kind: BKind; x: number; y: number; level: number; suburb?: boolean }
+/** Town features that are not player buildings: the parish church and market stalls. */
+export interface Landmark { kind: 'church' | 'stall'; x: number; y: number; w: number; h: number; v: number; suburb?: boolean }
 export interface Box { x0: number; y0: number; x1: number; y1: number }
 export interface RealmLayout {
   biome: Biome; type: CastleType; wealth: Wealth; buildings: Placed[];
   walls: { x: number; y: number }[]; wallKind: 'palisade' | 'wall'; wallLevel: number;
   gate: { x: number; y: number }; box: Box; inner: Box | null; water: { x: number; y: number }[]; frozen: boolean; bridges: { x: number; y: number }[];
+  /** the high street and lanes, and the paved market square */
+  streets: { x: number; y: number }[]; plaza: { x: number; y: number }[]; landmarks: Landmark[];
 }
 const SIZE: Partial<Record<BKind, [number, number]>> = { keep: [4, 4], greathall: [4, 3], tower: [2, 2], gatehouse: [3, 2], gate: [2, 1], house: [2, 2], hut: [2, 2], farm: [3, 3], market: [3, 3], blacksmith: [2, 2], storehouse: [2, 2], barracks: [3, 3], range: [3, 3], trainfield: [3, 3], stable: [3, 2], armory: [3, 2], guardhouse: [2, 2], well: [1, 1], watchtower: [2, 2], camp: [4, 3] };
 function rng(seed: number) { return () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296); }
@@ -60,6 +65,7 @@ function ring(b: Box, cut = 0, step = 0): { x: number; y: number }[] {
   return [...t].map((k) => { const [x, y] = k.split(',').map(Number); return { x, y }; });
 }
 
+const pers0 = (r: Rival) => r.personality;
 export function realmLayout(w: Pick<WorldState, 'seed' | 'rivals'>, r: Rival): RealmLayout {
   const R = rng(hash(r.id) + w.seed), biome = biomeOf(w, r), L = r.bandits ? 1 : Math.max(1, Math.min(5, r.level));
   const wealth = wealthOf(r), type = castleType(r, biome, wealth), bonus = { poor: -2, modest: 0, prosperous: 2, rich: 4 }[wealth];
@@ -103,7 +109,7 @@ export function realmLayout(w: Pick<WorldState, 'seed' | 'rivals'>, r: Rival): R
     if (L >= 2) scatter('barracks', 1, Math.min(3, L - 1), ix0, ix1, iy0, iy1);
     if (L >= 3) scatter('armory', 1, L >= 5 ? 2 : 1, ix0, ix1, iy0, iy1);
     scatter('well', 1, Math.min(2, L), ix0, ix1, iy0, iy1);
-    if (type === 'walledtown') { scatter('market', 1 + (wealth === 'rich' ? 1 : 0), Math.min(2, L), ix0, ix1, iy0, iy1); scatter('house', 4 + bonus, Math.min(3, L), ix0, ix1, iy0, iy1); }
+    // (a walled town's streets and houses are laid out with the rest of the town, below)
   } else put('gate', gate.x, gate.y, 1, true);
 
   // ---- landscape: rivers, ponds, an oasis, a frozen lake; a moat for concentric castles ----
@@ -119,21 +125,96 @@ export function realmLayout(w: Pick<WorldState, 'seed' | 'rivals'>, r: Rival): R
     for (const t of ring(m)) { if (t.y === m.y1 && t.x >= gate.x && t.x <= gate.x + 1) { bridges.push(t); continue; } if (!occ.has(`${t.x},${t.y}`)) { occ.add(`${t.x},${t.y}`); water.push(t); } }
   }
 
-  // ---- town and fields outside the walls, sized by wealth ----
-  const homes = r.bandits ? 2 : Math.max(3, Math.min(26, Math.round(3 + L * 2.5 + bonus * 1.5 + r.power / 900)));
-  const homeKind: BKind = L >= 3 ? 'house' : 'hut', hl = L >= 3 ? Math.min(3, L - 1 + (wealth === 'rich' ? 1 : 0)) : Math.min(2, L);
-  const lx0 = 2, lx1 = Math.max(3, box.x0 - 2), rx0 = Math.min(RW - 4, box.x1 + 3), rx1 = RW - 3, by = Math.min(RH - 6, box.y1 + 2);
+  // ---- the town: like a real medieval town it crowds the castle gate. A high street runs down from the gate,
+  // widening into a paved market square with stalls, a well and the parish church; terraced houses line the
+  // street and its back lanes, richer houses near the castle; strip fields lie beyond the last houses ----
+  const streets: { x: number; y: number }[] = [], plaza: { x: number; y: number }[] = [], landmarks: Landmark[] = [], paved = new Set<string>();
+  const inMap = (x: number, y: number) => x >= 1 && y >= 1 && x < RW - 1 && y < RH - 1;
+  const pave = (x: number, y: number, sq = false) => { const k = `${x},${y}`; if (!inMap(x, y) || paved.has(k) || water.some((t) => t.x === x && t.y === y) || bridges.some((t) => t.x === x && t.y === y)) return false; if (occ.has(k)) return false; paved.add(k); occ.add(k); (sq ? plaza : streets).push({ x, y }); return true; };
+  const room = (x: number, y: number, w: number, h: number) => { for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) if (!inMap(x + i, y + j) || occ.has(`${x + i},${y + j}`)) return false; return true; };
+  const claim = (x: number, y: number, w: number, h: number) => { for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) occ.add(`${x + i},${y + j}`); };
+  const homes = r.bandits ? 2 : Math.max(6, Math.min(48, Math.round(6 + L * 5 + bonus * 2 + r.power / 700)));
+  const gx = gate.x, street0 = gate.y + 1;
+  if (r.bandits) { for (let y = street0; y < RH - 1; y++) { pave(gx, y); pave(gx + 1, y); } scatter('hut', homes, 1, 2, RW - 4, Math.min(RH - 6, box.y1 + 3), RH - 4); }
+  else {
+    // the high street, down to the edge of the map
+    for (let y = street0; y < RH - 1; y++) { pave(gx, y); pave(gx + 1, y); }
+    // the market square just below the gate
+    const sq = { x0: gx - 3, x1: gx + 4, y0: street0 + 2, y1: street0 + 2 + (L >= 3 ? 4 : 3) };
+    for (let y = sq.y0; y <= sq.y1; y++) for (let x = sq.x0; x <= sq.x1; x++) pave(x, y, true);
+    // back lanes running east and west off the high street, longer for a bigger town
+    const laneLen = Math.min(26, 6 + Math.round(homes / 3)), lanes: number[] = [];
+    const laneX = new Map<number, Set<number>>(); // the lane tiles actually laid (a river or a farm can cut a lane short)
+    for (let y = sq.y1 + 5; y < RH - 4 && lanes.length < Math.ceil(homes / 12) + 1; y += 6) { lanes.push(y); const xs = new Set<number>(); laneX.set(y, xs); for (let i = 1; i <= laneLen; i++) { if (pave(gx - i, y)) xs.add(gx - i); else if (i > 2) break; } for (let i = 2; i <= laneLen + 1; i++) { if (pave(gx + i, y)) xs.add(gx + i); else if (i > 3) break; } }
+    // house plots: facing the square, then the high street, then the lanes, nearest the castle first
+    type Slot = { x: number; y: number; d: number };
+    const slots: Slot[] = [], d = (x: number, y: number) => Math.hypot(x - gx, (y - street0) * 1.3);
+    for (let y = sq.y0; y <= sq.y1 - 1; y += 2) { slots.push({ x: sq.x0 - 2, y, d: d(sq.x0 - 2, y) }); slots.push({ x: sq.x1 + 1, y, d: d(sq.x1 + 1, y) }); }
+    for (let x = sq.x0; x <= sq.x1 - 1; x += 2) slots.push({ x, y: sq.y1 + 1, d: d(x, sq.y1 + 1) + (Math.abs(x - gx) < 2 ? 99 : 0) });
+    const lastLane = lanes[lanes.length - 1] ?? sq.y1 + 6;
+    for (let y = sq.y1 + 1; y <= lastLane + 1; y += 2) { slots.push({ x: gx - 2, y, d: d(gx - 2, y) }); slots.push({ x: gx + 2, y, d: d(gx + 2, y) }); }
+    for (const ly of lanes) for (let i = 0; i < laneLen; i += 2) for (const x of [gx - 3 - i, gx + 3 + i]) { const xs = laneX.get(ly)!; if (!xs.has(x) && !xs.has(x + 1)) continue; slots.push({ x, y: ly - 2, d: d(x, ly - 2) }); slots.push({ x, y: ly + 1, d: d(x, ly + 1) }); }
+    slots.sort((a, b) => a.d - b.d);
+    // the parish church on the square
+    church: for (const dy of [-1, 0, 1, 2]) for (const cx of [sq.x0 - 4, sq.x1 + 1]) if (room(cx, sq.y0 + dy, 3, 4)) { claim(cx, sq.y0 + dy, 3, 4); landmarks.push({ kind: 'church', x: cx, y: sq.y0 + dy, w: 3, h: 4, v: 0 }); break church; } // facing the square (a moat may run along its top)
+    // stalls around the edge of the square, the well at its heart
+    const stalls = Math.min(6, 2 + L + (wealth === 'rich' || pers0(r) === 'mercantile' ? 2 : 0));
+    const spots = [[sq.x0, sq.y0], [sq.x1, sq.y0], [sq.x0, sq.y1], [sq.x1, sq.y1], [sq.x0 + 1, sq.y0], [sq.x1 - 1, sq.y1]];
+    spots.slice(0, stalls).forEach(([x, y], i) => landmarks.push({ kind: 'stall', x, y, w: 1, h: 1, v: i }));
+    buildings.push({ kind: 'well', x: gx + (R() < 0.5 ? -2 : 3), y: sq.y0 + 1, level: Math.min(2, L) });
+    // houses: the best near the castle, humbler further out; a forge and stables near the gate, stores by the lanes
+    const best = Math.min(3, L - 1 + (wealth === 'rich' ? 1 : 0) + (wealth === 'poor' ? -1 : 0));
+    let built = 0, smith = L >= 2, store = L >= 2 && (wealth !== 'poor'), stable = L >= 3;
+    for (const sl of slots) {
+      if (built >= homes) break;
+      if (!room(sl.x, sl.y, 2, 2)) continue;
+      const far = sl.d > 10 + L * 2, kind: BKind = smith ? 'blacksmith' : store && built > 4 ? 'storehouse' : stable && built > 8 ? 'stable' : L <= 1 || (far && wealth === 'poor') ? 'hut' : 'house';
+      const [w, h] = SIZE[kind] ?? [2, 2]; if (!room(sl.x, sl.y, w, h)) continue;
+      claim(sl.x, sl.y, w, h); buildings.push({ kind, x: sl.x, y: sl.y, level: kind === 'house' ? Math.max(1, best - (far ? 1 : 0)) : kind === 'hut' ? 1 : Math.min(2, L) });
+      if (kind === 'blacksmith') smith = false; else if (kind === 'storehouse') store = false; else if (kind === 'stable') stable = false; else built++;
+    }
+    // a lane runs only as far as its last house (and an empty lane is never laid)
+    for (const ly of lanes) {
+      const along = buildings.filter((b) => b.y === ly - 2 || b.y === ly + 1).map((b) => [b.x, b.x + (SIZE[b.kind] ?? [2, 2])[0] - 1]);
+      const lo = along.length ? Math.min(...along.map((a) => a[0])) : gx, hi = along.length ? Math.max(...along.map((a) => a[1])) : gx + 1;
+      for (const x of laneX.get(ly)!) if (x < lo || x > hi) { occ.delete(`${x},${ly}`); paved.delete(`${x},${ly}`); const k = streets.findIndex((t) => t.x === x && t.y === ly); if (k >= 0) streets.splice(k, 1); }
+    }
+  }
+  // inside a walled town: a street from the town gate up to the citadel, a cross street, houses and a market along them
+  if (type === 'walledtown' && inner) {
+    const sx = gate.x, ys: number[] = [];
+    for (let y = box.y1 - 1; y > inner.y1 + 1; y--) { pave(sx, y); pave(sx + 1, y); ys.push(y); }
+    const midY = Math.round((inner.y1 + box.y1) / 2), xs: number[] = [];
+    for (let x = box.x0 + 1; x < box.x1 - 1; x++) if (pave(x, midY)) xs.push(x);
+    const plots: [number, number][] = [];
+    for (const y of ys.filter((y) => (box.y1 - y) % 2 === 1)) plots.push([sx - 2, y - 1], [sx + 2, y - 1]);
+    for (const x of xs.filter((x) => x % 2 === 0)) plots.push([x, midY - 2], [x, midY + 1]);
+    plots.sort((a, b) => Math.hypot(a[0] - sx, a[1] - midY) - Math.hypot(b[0] - sx, b[1] - midY));
+    let n = 0, market = true;
+    for (const [x, y] of plots) {
+      if (n >= 6 + bonus * 2 + L * 2) break;
+      if (market && room(x, y, 3, 3)) { claim(x, y, 3, 3); buildings.push({ kind: 'market', x, y, level: Math.min(2, L) }); market = false; continue; }
+      if (room(x, y, 2, 2)) { claim(x, y, 2, 2); buildings.push({ kind: 'house', x, y, level: Math.min(3, L) }); n++; }
+    }
+  }
+  // fields: strips of farmland beyond the town, then the realm's own buildings on the outskirts
+  const townX0 = Math.min(gx - 2, ...buildings.filter((b) => b.y > box.y1).map((b) => b.x)) - 2, townX1 = Math.max(gx + 3, ...buildings.filter((b) => b.y > box.y1).map((b) => b.x + 2)) + 2;
   const zones: [number, number, number, number][] = [];
-  if (lx1 - lx0 > 5) zones.push([lx0, lx1, 3, RH - 6]); if (rx1 - rx0 > 5) zones.push([rx0, rx1, 3, RH - 6]); zones.push([2, RW - 4, by, RH - 4]);
-  zones.forEach((z, i) => scatter(homeKind, Math.ceil(homes / zones.length) + (i === 0 ? homes % zones.length : 0), hl, ...z));
-  const farms = r.bandits ? 0 : Math.max(1, Math.min(7, 1 + Math.floor(L / 2) + bonus / 2));
-  zones.forEach((z) => scatter('farm', Math.ceil(farms / zones.length), Math.min(3, L), z[0], z[1], Math.max(z[2], 14), z[3]));
+  if (townX0 - 2 > 6) zones.push([2, townX0 - 1, Math.min(RH - 8, box.y1 - 4), RH - 4]);
+  if (RW - 3 - townX1 > 6) zones.push([townX1 + 1, RW - 4, Math.min(RH - 8, box.y1 - 4), RH - 4]);
+  if (box.x0 > 8) zones.push([2, box.x0 - 3, 3, box.y1]);
+  if (RW - box.x1 > 9) zones.push([box.x1 + 3, RW - 4, 3, box.y1]);
+  if (!zones.length) zones.push([2, RW - 4, Math.min(RH - 6, box.y1 + 2), RH - 4]);
+  const farms = r.bandits ? 0 : Math.max(2, Math.min(9, 2 + L + bonus / 2));
+  zones.forEach((z) => scatter('farm', Math.ceil(farms / zones.length), Math.min(3, L), z[0], z[1], Math.max(z[2], box.y1 - 2), z[3]));
   const pers = r.bandits ? 'aggressive' : r.personality, any = (k: BKind, n: number, lv: number) => zones.forEach((z) => scatter(k, Math.ceil(n / zones.length), lv, ...z));
-  if (pers === 'mercantile' && type !== 'walledtown') { any('market', 1 + (wealth === 'rich' ? 1 : 0), Math.min(2, L)); any('storehouse', 2, 2); }
+  // (merchant realms show their trade in the market square: more stalls, see above)
   if (pers === 'aggressive') { any('trainfield', 1, Math.min(2, L)); any('range', 1, Math.min(3, L)); any('watchtower', 2, Math.min(2, L)); }
-  if (pers === 'honorable') { any('stable', 1, Math.min(2, L)); any('guardhouse', 1, Math.min(2, L)); }
-  if (pers === 'pious') any('market', 1, 1);
+  if (pers === 'honorable') any('guardhouse', 1, Math.min(2, L));
   if (pers === 'treacherous') { any('guardhouse', 2, Math.min(2, L)); any('watchtower', 2, Math.min(2, L)); }
-  if (L >= 2) any('blacksmith', 1, Math.min(3, L));
-  return { biome, type, wealth, buildings, walls, wallKind, wallLevel, gate, box, inner, water, frozen: biome === 'tundra', bridges };
+  // whatever stands in front of the gate, where an enemy would camp, is the suburb (burnt in a siege)
+  const suburb = (x: number, y: number, w: number) => y > box.y1 && Math.abs(x + w / 2 - (gate.x + 1)) <= 15;
+  for (const b of buildings) if (suburb(b.x, b.y, (SIZE[b.kind] ?? [2, 2])[0])) b.suburb = true;
+  for (const m of landmarks) if (suburb(m.x, m.y, m.w)) m.suburb = true;
+  return { biome, type, wealth, buildings, walls, wallKind, wallLevel, gate, box, inner, water, frozen: biome === 'tundra', bridges, streets, plaza, landmarks };
 }

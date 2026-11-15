@@ -1,5 +1,5 @@
 // Ground tiles and plants for each biome, plus rubble for broken walls.
-import { P, r, px, canvas, outline, rng, shade } from './px.ts';
+import { P, r, px, canvas, outline, rng, shade, stoneBlock, crenel, gable, cone, door, awning } from './px.ts';
 import type { Biome } from '../../lib/realms.ts';
 
 export const GROUND: Record<Biome, { base: string; dots: string[]; alt: string }> = {
@@ -96,4 +96,33 @@ export function barricade(): HTMLCanvasElement {
   r(c, 1, 20, 5, 5, P.wood); r(c, 1, 20, 5, 1, P.woodL); r(c, 7, 19, 4, 6, P.wood); r(c, 7, 20, 4, 1, P.stoneD); r(c, 7, 23, 4, 1, P.stoneD);
   r(c, 11, 21, 4, 4, P.woodD); for (let i = 0; i < 4; i++) { r(c, 2 + i * 4, 16 + (i % 2), 1, 5, P.woodL); px(c, 2 + i * 4, 15 + (i % 2), P.stoneL); }
   r(c, 0, 25, 16, 2, P.stone); outline(cv); return cv;
+}
+
+/** A stone parish church, 3 tiles wide: a nave under a steep slate roof, lancet windows, an arched door,
+ *  and a bell tower with a spire and cross at the west end. Drawn standing on its 3x4 footprint. */
+export function church(): HTMLCanvasElement {
+  const [cv, c] = canvas(48, 88), base = 87, nave = { x: 14, w: 33, top: 46 };
+  stoneBlock(c, nave.x, nave.top, nave.w, base - nave.top, P.stoneL, 5);
+  gable(c, nave.x - 1, nave.top - 16, nave.w + 2, 17, P.slate);
+  for (const wx of [20, 28, 36]) { r(c, wx, nave.top + 8, 3, 9, P.stoneDD); px(c, wx + 1, nave.top + 7, P.stoneDD); r(c, wx + 1, nave.top + 9, 1, 7, '#7ea2c8'); }
+  r(c, 41, nave.top + 6, 1, 3, P.stoneD); // buttress shadow
+  // the tower, with a bell opening, a spire and a cross
+  stoneBlock(c, 1, 28, 15, base - 28, P.stone, 9); crenel(c, 0, 25, 17);
+  r(c, 6, 33, 5, 7, P.stoneDD); r(c, 7, 34, 3, 4, '#c8a030'); // the bell
+  cone(c, 8, 4, 15, 22, P.slate);
+  r(c, 8, 0, 1, 6, P.gold); r(c, 6, 2, 5, 1, P.gold);
+  // the west door
+  r(c, 4, base - 13, 9, 13, P.stoneDD); r(c, 5, base - 14, 7, 1, P.stoneDD); door(c, 5, base - 12, 7, 12, P.woodD);
+  r(c, 7, nave.top - 2, 3, 3, '#a8c4e0'); px(c, 8, nave.top - 1, P.stoneD); // rose window
+  outline(cv); return cv;
+}
+/** A market stall: posts, a striped awning and a counter of wares. */
+export function stall(kind: number): HTMLCanvasElement {
+  const [cv, c] = canvas(16, 24), cols = [['#c0392b', '#f4e8d0'], ['#2a5aa8', '#f4e8d0'], ['#2a8a5a', '#f0e0a0'], ['#c88a2a', '#fff4d6']][kind % 4];
+  r(c, 1, 8, 1, 15, P.woodD); r(c, 14, 8, 1, 15, P.woodD);
+  awning(c, 0, 6, 16, cols[0], cols[1]);
+  r(c, 1, 16, 14, 3, P.wood); r(c, 1, 16, 14, 1, P.woodL); r(c, 2, 19, 12, 4, P.woodD);
+  const wares = [['#c03a2a', '#e04a3a'], ['#d8b060', '#b88a40'], ['#7a4ab0', '#4a8ac8'], ['#5a9a3a', '#e0c040']][kind % 4];
+  for (let i = 0; i < 5; i++) { px(c, 3 + i * 2, 15, wares[i % 2]); px(c, 3 + i * 2 + 1, 14, wares[(i + 1) % 2]); }
+  outline(cv); return cv;
 }
