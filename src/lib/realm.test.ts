@@ -136,3 +136,18 @@ test('subjects: add your own, remove them, and the one you study becomes the def
   S.studyDiscard(); assert.equal(S.currentSubject(S.getState()), 'Mathematics', 'an empty session leaves no mark');
   S.removeSubject('History'); assert.ok(!S.getState().subjects.includes('History'));
 });
+
+test('a removed subject stays removed when the cloud copy (which keeps every subject) is merged back', async () => {
+  const { adoptSnapshot, buildPayload } = await import('./syncCore.ts');
+  S._with(S.newGame()); S.removeSubject('History');
+  const local = S.getState(), payload = buildPayload(local).payload as { kingdom: { settings: unknown } };
+  // the server returns the union of old and new subjects, and the settings we just sent
+  const snap = { balance: local.res, lifetime: local.lifetime, sessions: [], session_rewards: {}, habits: [], completions: [], buildings: [], battalions: [], squads: [], techs: [], events: [],
+    kingdom: { stage: 1, achievements: [], subjects: ['Mathematics', 'Languages', 'Science', 'History', 'Programming', 'Reading'], settings: payload.kingdom.settings, world: local.world } };
+  const merged = adoptSnapshot(local, snap as never);
+  assert.ok(!merged.subjects.includes('History'), 'stays removed');
+  assert.ok(merged.subjects.includes('Science'));
+  S._with(merged); S.addSubject('history');
+  assert.ok(S.getState().subjects.some((x) => /history/i.test(x)), 'adding it again brings it back');
+  assert.ok(adoptSnapshot(S.getState(), { ...snap, kingdom: { ...snap.kingdom, settings: S.getState().settings } } as never).subjects.some((x) => /history/i.test(x)), 'and it survives the next sync');
+});

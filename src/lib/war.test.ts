@@ -182,7 +182,7 @@ test('bandit outposts: appear daily up to a cap, can be raided for a small purse
   WA.journeysTick(Date.now() + 3_600_000);
   const s = S.getState(), rep = s.world.reports[0];
   assert.match(rep.title, /Raid on/);
-  if (rep.win) { assert.ok(!s.world.outposts!.some((o) => o.id === op.id), 'camp cleared'); assert.equal(s.res.gold, gold + op.loot.gold); }
+  if (rep.win) { assert.ok(!s.world.outposts!.some((o) => o.id === op.id), 'camp cleared'); assert.equal(s.res.gold, gold + rep.loot!.gold!); assert.ok(rep.loot!.gold! >= op.loot.gold, 'the purse (more with a Raider in command)'); }
   assert.ok(s.world.journeys!.some((j) => j.kind === 'return' && j.home && j.to), 'survivors march home');
   WA.journeysTick(Date.now() + 7_200_000);
   assert.ok(!WA.awayBats(S.getState()).has(bat), 'home again');

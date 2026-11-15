@@ -1,4 +1,5 @@
 // Pure translation between the local game state and the database sync payload/snapshot.
+import { visibleSubjects } from './state.ts';
 import type { GameState, StudyRecord, Building, Battalion, Squad, Completion, KEvent, Table } from './state.ts';
 import type { Habit } from './habits.ts';
 import { type Res, ceilingFor, fitsCeiling, minRes, LEGACY_CEILING } from './rewards.ts';
@@ -78,11 +79,12 @@ export function adoptSnapshot(s: GameState, snap: Snapshot): GameState {
   const k = snap.kingdom;
   // keep the local in-progress session (it is the freshest); otherwise resume one saved by another device
   const session = s.session ?? (k?.active_session && k.active_session.status !== 'ended' ? k.active_session : null);
+  const settings = k?.settings && Object.keys(k.settings).length ? { ...s.settings, ...k.settings } : s.settings;
   return {
     ...s, res: num(snap.balance), lifetime: num(snap.lifetime), sessions, habits, completions: comps,
     buildings: buildings.length ? buildings : s.buildings, battalions, squads, techs: snap.techs as TechId[], events: events.length ? events : s.events,
     stage: Math.max(s.stage, k?.stage ?? 1), achievements: [...new Set([...s.achievements, ...(k?.achievements ?? [])])],
     world: k?.world ?? s.world,
-    subjects: [...new Set([...s.subjects, ...(k?.subjects ?? [])])], settings: k?.settings && Object.keys(k.settings).length ? { ...s.settings, ...k.settings } : s.settings, session,
+    subjects: visibleSubjects([...new Set([...s.subjects, ...(k?.subjects ?? [])])], settings), settings, session, // subjects you removed stay removed
   };
 }

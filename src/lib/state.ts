@@ -24,7 +24,8 @@ export type LedgerKind = 'start' | 'study' | 'manual' | 'habit' | 'milestone' | 
 export interface Ledger { kind: LedgerKind; ref: string; amt: Res; at: number }
 export interface KEvent { id: string; t: number; type: string; text: string; n?: number }
 export type Table = 'buildings' | 'battalions' | 'squads' | 'habits' | 'sessions' | 'completions';
-export interface Settings { rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean; music: number; sfx: number; ambience: boolean }
+/** hiddenSubjects: subjects you removed (the cloud keeps every subject ever used, so removals are remembered here). */
+export interface Settings { hiddenSubjects?: string[]; rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean; music: number; sfx: number; ambience: boolean }
 export interface GameState {
   v: 2; owner: string | null; updatedAt: number; res: Res; lifetime: Res;
   buildings: Building[]; battalions: Battalion[]; squads: Squad[]; techs: TechId[];
@@ -464,18 +465,23 @@ function settle(s: GameState, sess: NonNullable<GameState['session']>): GameStat
   return o;
 }
 /** The subject you are studying now, or studied last: the default everywhere a subject is asked for. */
-export const currentSubject = (s: GameState) => s.session?.subject ?? s.sessions[0]?.subject ?? s.subjects[0] ?? 'General';
+export const currentSubject = (s: GameState) => s.session?.subject ?? s.sessions.map((r) => r.subject).find((x) => s.subjects.includes(x)) ?? s.subjects[0] ?? 'General';
 /** Adds a subject of your own to the list (kept across devices). */
 export const addSubject = (name: string) => update((s) => {
   name = name.trim().replace(/\s+/g, ' ').slice(0, 40); if (!name) return 'Name the subject';
-  if (s.subjects.some((x) => x.toLowerCase() === name.toLowerCase())) return;
+  const hidden = (s.settings.hiddenSubjects ?? []).filter((x) => x.toLowerCase() !== name.toLowerCase()), settings = { ...s.settings, hiddenSubjects: hidden }; // adding one back un-hides it
+  if (s.subjects.some((x) => x.toLowerCase() === name.toLowerCase())) return { ...s, settings };
   if (s.subjects.length >= 40) return 'Too many subjects';
-  return { ...s, subjects: [...s.subjects, name] };
+  return { ...s, settings, subjects: [...s.subjects, name] };
 });
-export const removeSubject = (name: string) => update((s) => (s.subjects.length <= 1 ? 'Keep at least one subject' : { ...s, subjects: s.subjects.filter((x) => x !== name) }));
+export const removeSubject = (name: string) => update((s) => (s.subjects.length <= 1 ? 'Keep at least one subject'
+  : { ...s, subjects: s.subjects.filter((x) => x !== name), settings: { ...s.settings, hiddenSubjects: [...new Set([...(s.settings.hiddenSubjects ?? []), name])] } }));
+/** Subjects minus the ones you removed (applied whenever the cloud's list is merged in). */
+export const visibleSubjects = (subjects: string[], settings: Settings) => { const h = new Set((settings.hiddenSubjects ?? []).map((x) => x.toLowerCase())); const v = subjects.filter((x) => !h.has(x.toLowerCase())); return v.length ? v : subjects.slice(0, 1); };
 export const studyStart = (subject: string) => update((s) => {
   if (s.session) return 'A session is already running';
   const subjects = s.subjects.includes(subject) ? s.subjects : [...s.subjects, subject];
+  s = { ...s, settings: { ...s.settings, hiddenSubjects: (s.settings.hiddenSubjects ?? []).filter((x) => x.toLowerCase() !== subject.toLowerCase()) } };
   const sess = { ...startSession(subject, Date.now(), s.settings.cfg), xpMs: 0, source: (s.settings.cfg.pomodoro ? 'pomodoro' : 'timer') as Source };
   return mark({ ...s, subjects, session: sess, sessions: [record(sess, Date.now()), ...s.sessions] }, 'sessions', sess.id);
 });
