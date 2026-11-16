@@ -11,6 +11,13 @@ npm run dev          # http://localhost:3000
 
 Without Supabase variables the game runs fully offline and saves to the browser. `/artlab` shows every generated sprite.
 
+## Playing from other devices
+
+With `npm run dev` running, open the game from a phone or another computer on your home network
+(e.g. `http://10.0.0.150:3000`) or over Tailscale (`http://100.x.y.z:3000`, `http://my-pc.tailnet-name.ts.net:3000`,
+or the bare MagicDNS name of this computer, e.g. `http://my-pc:3000`). Other bare names can be allowed with
+`DEV_ORIGINS=name1,name2 npm run dev`. Restart the dev server after pulling changes to `next.config.ts`.
+
 ## Tests
 
 ```bash
