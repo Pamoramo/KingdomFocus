@@ -7,7 +7,8 @@ import { isKnown, reachOf, WORLD_SCALE, type Journey } from '../lib/war.ts';
 import { hdify } from './art/hd.ts';
 import { withoutOutline, hex } from './art/px.ts';
 import { bannerTex, sFrame, bTex, S } from './textures.ts';
-import { sitesFor, SETTLE, type SettleKind } from '../lib/expansion.ts';
+import { SETTLE, type SettleKind } from '../lib/expansion.ts';
+import { knownSites } from '../lib/realmActions.ts';
 import type { BKind } from '../lib/economy.ts';
 import { ENGINE_IDS } from '../lib/war.ts';
 
@@ -92,7 +93,7 @@ export class WorldScene extends Phaser.Scene {
   }
   private tap(p: Phaser.Input.Pointer) {
     const wp = this.cameras.main.getWorldPoint(p.x, p.y);
-    for (const st of sitesFor(getState().world.seed)) if (Math.hypot(wp.x - st.x * WW, wp.y - (st.y * WH - 10)) < 26) { setUI({ selRival: st.id, panel: 'realm' }); return; }
+    for (const st of knownSites(getState())) if (Math.hypot(wp.x - st.x * WW, wp.y - (st.y * WH - 10)) < 26) { setUI({ selRival: st.id, panel: 'realm' }); return; }
     for (const o of getState().world.outposts ?? []) if (Math.hypot(wp.x - o.x * WW, wp.y - (o.y * WH - 12)) < 30) { setUI({ selRival: o.id, panel: 'world' }); return; }
     for (const [id, v] of this.sites) if (Math.hypot(wp.x - v.icon.x, wp.y - (v.icon.y - 20)) < 40) { if (id === 'home') setUI({ view: 'kingdom' }); else setUI({ selRival: id, panel: 'world' }); return; }
   }
@@ -128,7 +129,7 @@ export class WorldScene extends Phaser.Scene {
   /** Your lands: a signpost on each unclaimed site, and houses that grow with each settlement's level. */
   private settlements(s: GameState) {
     const held = s.world.settlements ?? [], KIND: Record<SettleKind, BKind> = { village: 'house', lumber: 'hut', mine: 'storehouse', market: 'market', abbey: 'greathall' };
-    for (const site of sitesFor(s.world.seed)) {
+    for (const site of knownSites(s)) {
       const st = held.find((x) => x.site === site.id), sig = st ? `L${st.level}` : 'free', cur = this.lands.get(site.id);
       if (cur?.sig === sig) continue;
       cur?.parts.forEach((p) => p.destroy());

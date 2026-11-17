@@ -7,7 +7,8 @@ import * as A from './assignments.ts';
 import { traitsFor, rating, praiseReady, styled, HONORS } from './commanders.ts';
 import { advanceDays, initWorld, dayStr, type WorldState } from './war.ts';
 import { courtDay, courtFx, newCourt, adjust } from './politics.ts';
-import { sitesFor, settleCap } from './expansion.ts';
+import { sitesFor, settleCap, foundCost, SETTLE } from './expansion.ts';
+const SETTLE_COST = (k: keyof typeof SETTLE) => SETTLE[k].cost.gold;
 import { thiefCanStrike } from './town.ts';
 
 const rich = () => { const g = S.newGame(); return { ...g, stage: 3, res: { gold: 99999, wood: 9999, stone: 9999, renown: 9999 }, buildings: [...g.buildings, { id: 'f', kind: 'farm' as const, x: 10, y: 10, level: 3, at: 0 }, { id: 'b', kind: 'barracks' as const, x: 20, y: 10, level: 3, at: 0 }, ...[0, 1, 2, 3].map((i) => ({ id: 'h' + i, kind: 'house' as const, x: 30 + i * 3, y: 10, level: 2, at: 0 }))] }; };
@@ -183,4 +184,22 @@ test('battalions on patrol, on guard or in quarters stay at their posts; only th
   S.setOrders(a, 'formation'); assert.equal(S.marchTo(a, 900, 900), null); assert.notEqual(pos(a).x, a0.x, 'marches once back in formation');
   S.setOrders(b, 'garrison'); const b0 = { ...pos(b) }; S.marchArmy(pos(b).army, 300, 300);
   assert.deepEqual([pos(b).x, pos(b).y], [b0.x, b0.y], 'the army marches without the guard');
+});
+
+test('lands along the roads: more to settle, charted as your maps grow, dearer farther out; vassals let you hold more', () => {
+  const g = S.newGame(), w = g.world, all = sitesFor(w.seed, w.rivals), road = all.filter((x) => x.road);
+  assert.ok(road.length >= 10, `lands along the roads (${road.length})`);
+  assert.deepEqual(sitesFor(w.seed, w.rivals).map((x) => x.id), all.map((x) => x.id), 'fixed for the world');
+  for (const x of road) for (const r of w.rivals) assert.ok(Math.hypot(x.x - r.x, x.y - r.y) > 0.03, `${x.name} is not inside ${r.name}`);
+  S._with({ ...g, stage: 1 }); const few = RA.knownSites(S.getState()).filter((x) => x.road).length;
+  S._with({ ...g, stage: 5, world: { ...w, rivals: w.rivals.map((r) => ({ ...r, known: true })) } }); const many = RA.knownSites(S.getState()).filter((x) => x.road).length;
+  assert.ok(many > few, `bigger maps chart more lands (${few} → ${many})`);
+  const near = [...road].sort((a, b) => Math.hypot(a.x - 0.5, a.y - 0.5) - Math.hypot(b.x - 0.5, b.y - 0.5)), a = near[0], z = near[near.length - 1];
+  assert.ok(foundCost(z.kind, 0, z).gold / SETTLE_COST(z.kind) > foundCost(a.kind, 0, a).gold / SETTLE_COST(a.kind), 'far lands cost more');
+  const base = RA.landCap(S.getState()); S._with({ ...S.getState(), world: { ...S.getState().world, rivals: S.getState().world.rivals.map((r, i) => (i === 1 ? { ...r, status: 'vassal' as const } : r)) } });
+  assert.equal(RA.landCap(S.getState()), base + 1, 'a vassal guards one more land');
+  // settling a roadside land adds to what study earns
+  S._with({ ...S.getState(), res: { gold: 1e6, wood: 1e6, stone: 1e6, renown: 1e6 } }); const before = S.studyMult(S.getState());
+  const target = RA.knownSites(S.getState()).find((x) => x.road && x.kind === 'market')!; assert.equal(RA.foundSettlement(target.id), null);
+  assert.ok(S.studyMult(S.getState()).gold > before.gold);
 });

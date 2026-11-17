@@ -112,7 +112,7 @@ export function effects(s: GameState): Required<Effects> {
   for (const b of s.buildings) { const f = BUILDINGS[b.kind].fx(b.level); for (const k of Object.keys(f) as (keyof Effects)[]) if (k !== 'green') e[k] += f[k] ?? 0; }
   if (has(s, 'veterancy')) e.xp += 0.25;
   e.discount = Math.min(0.3, e.discount);
-  if (s.world) { const st = settlementFx(s.world.settlements, sitesFor(s.world.seed)); e.cap = Math.round((e.cap + st.cap) * (1 + courtFx(courtOf(s.world)).cap)); }
+  if (s.world) { const st = settlementFx(s.world.settlements, sitesFor(s.world.seed, s.world.rivals)); e.cap = Math.round((e.cap + st.cap) * (1 + courtFx(courtOf(s.world)).cap)); }
   return e;
 }
 export const armyCap = (s: GameState) => effects(s).cap;
@@ -165,7 +165,7 @@ export const studyMult = (s: GameState): Res => {
   const e = effects(s), w = s.world, vs = w ? w.rivals.filter((r) => r.status === 'vassal') : [], tribute = vs.reduce((t, r) => t + vassalGold(r) * ((w.garrisons ?? []).some((g) => g.at === r.id) ? 1 + GARRISON_TRIBUTE : 1), 0), tributeRenown = vs.reduce((t, r) => t + vassalRenown(r), 0);
   const safe = townOrder(s).ratio >= 1 && townOrder(s).needed > 2 ? 0.03 : 0;
   // the court's decrees and moods, and the settlements you hold
-  const c = w ? courtFx(courtOf(w)) : null, st = w ? settlementFx(w.settlements, sitesFor(w.seed)) : null;
+  const c = w ? courtFx(courtOf(w)) : null, st = w ? settlementFx(w.settlements, sitesFor(w.seed, w.rivals)) : null;
   return { gold: Math.max(0.5, 1 + e.gold + safe + Math.min(VASSAL_GOLD_MAX, tribute) - (w?.threat ? 0.25 : 0) + (c?.gold ?? 0) + (st?.gold ?? 0)), wood: 1 + e.wood + (st?.wood ?? 0), stone: 1 + e.stone + (st?.stone ?? 0), renown: Math.max(0.5, 1 + e.renown + tributeRenown + (c?.renown ?? 0) + (st?.renown ?? 0)) };
 };
 export function costOf(s: GameState, kind: BKind, lvlIdx: number): Res {

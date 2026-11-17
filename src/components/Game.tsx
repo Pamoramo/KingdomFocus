@@ -5,6 +5,8 @@ import { KingdomScene } from '../game/KingdomScene.ts';
 import { WorldScene } from '../game/WorldScene.ts';
 import { BattleScene } from '../game/BattleScene.ts';
 import { RivalScene } from '../game/RivalScene.ts';
+import { LandScene } from '../game/LandScene.ts';
+import { sitesFor } from '../lib/expansion.ts';
 import { ParadeScene } from '../game/ParadeScene.ts';
 import { audio, type Sfx } from '../game/audio.ts';
 import { WEATHER_NAME, type Weather } from '../game/weather.ts';
@@ -95,6 +97,7 @@ function TopBar() {
     <div className="pointer-events-auto pt-1 w-full lg:w-auto flex justify-center gap-1.5 flex-wrap">
       <StudyMini onOpen={() => setUI({ panel: 'study' })} />
       {ui.view === 'rival' && <span className="wood rounded px-2.5 py-1 text-sm">Visiting {s.world.rivals.find((r) => r.id === ui.visit)?.name}</span>}
+      {ui.view === 'land' && <span className="wood rounded px-2.5 py-1 text-sm">Visiting {sitesFor(s.world.seed, s.world.rivals).find((x) => x.id === ui.visit)?.name}</span>}
       {ui.view !== 'world' && <button className="wood rounded px-2.5 py-1 flex items-center gap-1 text-sm" onClick={() => setUI({ view: 'world' })}><Icon name="map" size={18} />World</button>}
       {ui.view !== 'kingdom' && <button className="wood rounded px-2.5 py-1 flex items-center gap-1 text-sm" onClick={() => setUI({ view: 'kingdom' })}><Icon name="realm" size={18} />Kingdom</button>}
       {neglect(s) > 0 && <button className="rounded px-2.5 py-1 text-sm bg-[#6a3a1a] text-parch border-2 border-black" title="Study to calm the realm" onClick={() => setUI({ panel: 'study' })}>Restless realm · {idleDays(s)} idle days</button>}
@@ -122,7 +125,7 @@ export default function Game() {
   useStudyAlerts();
   useEffect(() => {
     initPersistence();
-    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, RivalScene, BattleScene, ParadeScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
+    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, RivalScene, LandScene, BattleScene, ParadeScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
     gameRef.current = game;
     worldTick(); courtTick(); const wt = setInterval(() => { worldTick(); courtTick(); }, 60000); const jt = setInterval(() => { journeysTick(); assignmentsTick(); breachTick(); }, 2000);
     const wake = () => { audio.start(); const st = getState().settings; audio.setVolumes({ music: st.music ?? 0.5, sfx: st.sfx ?? 0.7, ambience: st.ambience ?? true, ambVol: st.ambVol ?? 0.7 }); };
@@ -161,9 +164,11 @@ export default function Game() {
     if (ui.view !== 'kingdom') g.scene.sleep('kingdom');
     if (ui.view !== 'world' && g.scene.isActive('world')) g.scene.sleep('world');
     if (ui.view !== 'rival' && (g.scene.isActive('rival') || g.scene.isSleeping('rival'))) g.scene.stop('rival');
+    if (ui.view !== 'land' && (g.scene.isActive('land') || g.scene.isSleeping('land'))) g.scene.stop('land');
     if (ui.view === 'kingdom') show('kingdom');
     if (ui.view === 'world') show('world');
     if (ui.view === 'rival' && ui.visit) { g.scene.start('rival', { id: ui.visit }); g.scene.bringToTop('battle'); }
+    if (ui.view === 'land' && ui.visit) { g.scene.start('land', { id: ui.visit }); g.scene.bringToTop('battle'); }
   }, [ui.view, ui.visit]);
   const Panel = ui.panel ? PANELS[ui.panel] : null;
   const placing = ui.placing ? BUILDINGS[ui.placing].name : null;

@@ -2,10 +2,10 @@
 // and the military parade. Kept apart from state.ts so the pure rules stay testable on their own.
 import { _internal, getState, emit, neglect, type GameState } from './state.ts';
 import { awayBats } from './warActions.ts';
-import { dayStr, type WorldState } from './war.ts';
+import { dayStr, isKnown, type WorldState } from './war.ts';
 import { canAfford, ZERO, type Res } from './rewards.ts';
 import { courtOf, courtDay, adjust, DECREES, FACTIONS, type DecreeId } from './politics.ts';
-import { sitesFor, settleCap, foundCost, upgradeCost, upgradeStage, SETTLE } from './expansion.ts';
+import { sitesFor, siteKnown, settleCap, foundCost, upgradeCost, upgradeStage, SETTLE } from './expansion.ts';
 import { assignmentHooks } from './assignments.ts';
 import { hash } from './names.ts';
 
@@ -49,13 +49,17 @@ export const courtTick = () => {
 assignmentHooks.push((s, a, what) => withCourt(s, (c) => adjust(c, what === 'done' ? { clergy: a.size === 'large' ? 4 : 2, commons: 1 } : { clergy: -4, commons: -2, nobles: -2, merchants: -2 })));
 
 // ---------------- expansion ----------------
-export const sitesOf = (s: GameState) => sitesFor(s.world.seed);
+export const sitesOf = (s: GameState) => sitesFor(s.world.seed, s.world.rivals);
+/** Lands your mapmakers know (all of those round your castle, and the roadside lands within reach of your maps). */
+export const knownSites = (s: GameState) => sitesOf(s).filter((x) => siteKnown(x, { stage: s.stage, settlements: (s.world.settlements ?? []).length, known: s.world.rivals.filter(isKnown) }) || (s.world.settlements ?? []).some((h) => h.site === x.id));
+/** How many settlements the realm can hold: by the castle's stage, and one more for each vassal (they guard your lands). */
+export const landCap = (s: GameState) => settleCap(s.stage) + s.world.rivals.filter((r) => r.status === 'vassal').length;
 export const foundSettlement = (siteId: string) => update((s) => {
-  const site = sitesOf(s).find((x) => x.id === siteId); if (!site) return;
-  const held = s.world.settlements ?? [];
+  const site = knownSites(s).find((x) => x.id === siteId); if (!site) return 'Your mapmakers have not charted that land';
+  const held = s.world.settlements ?? [], cap = landCap(s);
   if (held.some((x) => x.site === siteId)) return 'Already settled';
-  if (held.length >= settleCap(s.stage)) return `Your realm can hold ${settleCap(s.stage)} settlement${settleCap(s.stage) === 1 ? '' : 's'} at this stage. Grow your castle to claim more.`;
-  const cost = foundCost(site.kind, held.length); if (!canAfford(s.res, cost)) return 'Not enough resources';
+  if (held.length >= cap) return `Your realm can hold ${cap} settlement${cap === 1 ? '' : 's'} now. Grow your castle or take vassals to claim more.`;
+  const cost = foundCost(site.kind, held.length, site); if (!canAfford(s.res, cost)) return 'Not enough resources';
   let o = W(spend(s, cost), { ...s.world, settlements: [...held, { site: siteId, level: 1, founded: Date.now() }] });
   if (site.kind === 'abbey') o = withCourt(o, (c) => adjust(c, { clergy: 8 }));
   if (site.kind === 'market') o = withCourt(o, (c) => adjust(c, { merchants: 6 }));

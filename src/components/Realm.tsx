@@ -10,7 +10,7 @@ import { Preview } from './Build.tsx';
 const ICON_KIND = ['camp', 'hut', 'barracks', 'keep', 'tower', 'palace'] as const;
 
 export function RealmPanel() {
-  const ui = useUI(), [tab, setTab] = useState<'kingdom' | 'court' | 'lands'>(ui.selRival?.startsWith('site') ? 'lands' : 'kingdom');
+  const ui = useUI(), [tab, setTab] = useState<'kingdom' | 'court' | 'lands'>(ui.selRival?.startsWith('site') || ui.selRival?.startsWith('road:') ? 'lands' : 'kingdom');
   return <div className="space-y-3">
     <Tabs value={tab} onChange={setTab} items={[['kingdom', 'Kingdom'], ['court', 'Court'], ['lands', 'Lands']]} />
     {tab === 'kingdom' && <Progress />}{tab === 'court' && <CourtPanel />}{tab === 'lands' && <LandsPanel />}
