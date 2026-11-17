@@ -153,3 +153,27 @@ test('with short days the world takes a turn each time a day ends', async () => 
     assert.ok(w.rivals.filter((r) => !r.bandits).every((r) => r.lordship && r.lordship.days >= 1), 'every lordship took its turn');
   } finally { Date.now = real; }
 });
+
+test('kindness is remembered: repeated aid raises where feelings settle, and they do not cool while your soldiers serve', async () => {
+  const { advanceDays, restingRelation, addFavour, shiftRelations } = await import('./war.ts');
+  let w = initWorld(21); const r0 = w.rivals.find((r) => !r.bandits && r.personality === 'honorable') ?? w.rivals.find((r) => !r.bandits)!, id = r0.id;
+  const rel = () => w.rivals.find((r) => r.id === id)!.relation, ctx = { stage: 2, myPower: 100, fort: 0, active: false };
+  let day = 0; const pass = (n: number) => { for (let i = 0; i < n; i++) w = advanceDays(w, ctx, `2027-01-${String(++day + 1).padStart(2, '0')}`); };
+  const settled: number[] = [];
+  for (let k = 0; k < 3; k++) {
+    w = { ...addFavour(shiftRelations(w, id, 12), id, 12 * 0.7 + 3), loans: [{ bat: 'b', rival: id, leftMin: 60 }] }; // troops arrive
+    const high = rel(); pass(4); assert.ok(rel() >= high, 'while they serve, no cooling');
+    w = { ...w, loans: [] }; pass(6); settled.push(rel());
+  }
+  assert.ok(settled[2] > settled[0] + 8, `each aid leaves them friendlier than before (${settled.join(' → ')})`);
+  assert.ok(settled[2] > restingRelation({ ...r0, favour: 0 }, 2) + 15, 'well above their nature alone');
+});
+
+test('an older save: goodwill is credited for the aid the chronicle remembers', () => {
+  const g = S.newGame(), k = g.world.rivals.find((r) => !r.bandits)!;
+  const ev = (text: string) => ({ id: text + Math.random(), t: Date.now(), type: 'diplomacy', text });
+  S._with({ ...g, events: [...g.events, ev(`Sent troops to aid ${k.name}.`), ev(`Sent troops to aid ${k.name}.`), ev(`Sent troops to aid ${k.name}.`), ev(`Sent a gift of 200 gold to ${k.name}.`)] });
+  WA.worldTick();
+  const r = S.getState().world.rivals.find((x) => x.id === k.id)!; assert.equal(r.favour !== undefined && r.favour >= 39, true, `three aids and a gift remembered (${r.favour})`);
+  assert.ok(S.getState().world.rivals.filter((x) => !x.bandits && x.id !== k.id).every((x) => (x.favour ?? 0) <= 1));
+});
