@@ -54,7 +54,7 @@ export interface Garrison { bat: string; at: string; since: number }
 export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown>; to?: { x: number; y: number } }
 /** A small bandit camp on the road: easy prey with a small purse. */
 export interface Outpost { id: string; name: string; x: number; y: number; power: number; loot: Res; biome: 'grassland' | 'forest' | 'highlands' | 'swamp' }
-export interface WorldState { /** what the other realms have been doing */ news?: import('./lordships.ts').News[]; /** set by the cloud save: which write this is */ stamp?: string; garrisons?: Garrison[]; /** battalions sent off duty to quarters */ quartered?: string[]; seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
+export interface WorldState { /** the game's calendar (see clockOf) */ clock?: Clock; /** what the other realms have been doing */ news?: import('./lordships.ts').News[]; /** set by the cloud save: which write this is */ stamp?: string; garrisons?: Garrison[]; /** battalions sent off duty to quarters */ quartered?: string[]; seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
   /** until when the town celebrates a victory */ festival?: number;
   /** buildings damaged in a lost battle, shown blackened and smoking until `until` */ scars?: { ids: string[]; until: number } }
 
@@ -160,6 +160,32 @@ export function upgradeWorld(w: WorldState): WorldState {
 }
 
 export const dayStr = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// ---------------- the game's calendar ----------------
+/** A game day lasts `len` minutes (1440 = a real day, turning at local midnight). Day `day0` began at `at`;
+ *  day 1 fell on the calendar date `base`, and each game day after it is the next date, so a game day can be
+ *  used anywhere a date is (warnings, truces, the court's day). With real days, the game date is today's date. */
+export interface Clock { base: string; day0: number; at: number; len: number }
+export const DAY_LENGTHS: { min: number; name: string }[] = [{ min: 1440, name: 'A real day' }, { min: 720, name: '12 hours' }, { min: 360, name: '6 hours' }, { min: 120, name: '2 hours' }, { min: 60, name: '1 hour' }, { min: 30, name: '30 minutes' }, { min: 10, name: '10 minutes' }];
+const midnight = (t: number) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const calDays = (a: number, b: number) => Math.round((midnight(b) - midnight(a)) / 864e5); // whole calendar days, safe across clock changes
+/** The world's clock; a world without one counts real days from `since` (e.g. your first study session). */
+export function clockOf(w: Pick<WorldState, 'clock'>, since = Date.now(), now = Date.now()): Clock {
+  return w.clock ?? { base: dayStr(new Date(midnight(since))), day0: 1 + calDays(since, now), at: midnight(now), len: 1440 };
+}
+/** Which game day it is. */
+export const dayNumber = (c: Clock, now = Date.now()) => c.day0 + Math.max(0, c.len === 1440 ? calDays(c.at, now) : Math.floor((now - c.at) / (c.len * 60000)));
+/** When the next game day begins. */
+export const nextDayAt = (c: Clock, now = Date.now()) => { if (c.len === 1440) { const d = new Date(now); d.setHours(24, 0, 0, 0); return d.getTime(); } return c.at + (dayNumber(c, now) - c.day0 + 1) * c.len * 60000; };
+/** The calendar date standing for game day n. */
+export const dateOfDay = (c: Clock, n: number) => { const [y, m, d] = c.base.split('-').map(Number); return dayStr(new Date(y, m - 1, d + n - 1, 12)); };
+/** Today's date in the game's calendar: use it for anything that happens once a game day. */
+export const gameDay = (w: Pick<WorldState, 'clock'>, now = Date.now()) => { const c = clockOf(w, now, now); return dateOfDay(c, dayNumber(c, now)); };
+/** A new length of day, starting now: the day count carries on, and the next day comes `min` minutes from now (or at midnight for real days). */
+export function setDayLength(c: Clock, min: number, now = Date.now()): Clock {
+  const n = dayNumber(c, now);
+  return { base: c.base, day0: n, at: min === 1440 ? midnight(now) : now, len: min };
+}
 
 export function initWorld(seed: number): WorldState {
   const R = rng(seed), names = [...KINGDOM_NAMES].sort(() => R() - 0.5);
@@ -287,7 +313,7 @@ export function tradeQuote(r: Rival, give: keyof Res, amount: number, want: keyo
 }
 /** Whether you can trade with a realm now, and if not, why. Sieges cut the roads: while your castle is besieged no caravan
  *  can leave; while you besiege a realm, its friends will not deal with you and roads that pass the siege are closed. */
-export function canTrade(r: Rival, w?: Pick<WorldState, 'rivals' | 'threat' | 'campaign'>, today = dayStr()) {
+export function canTrade(r: Rival, w?: Pick<WorldState, 'rivals' | 'threat' | 'campaign' | 'clock'>, today = w ? gameDay(w) : dayStr()) {
   if (r.bandits) return 'Bandits do not trade';
   if (r.known === false) return 'You have not charted their lands';
   if (r.status === 'war') return 'You are at war';

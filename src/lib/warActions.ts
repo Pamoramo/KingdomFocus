@@ -5,7 +5,7 @@ import { courtOf, courtFx, adjust } from './politics.ts';
 import { rating, lossFactor, has as hasTrait, praiseReady, styled, battleCry, type BattleKind } from './commanders.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
-import { type Journey, type JourneyKind, travelMs, type WorldState, canStation, screenOf, marchMs, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, LOAN_MIN, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
+import { type Journey, type JourneyKind, travelMs, gameDay, clockOf, setDayLength as nextClock, type WorldState, canStation, screenOf, marchMs, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, LOAN_MIN, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
 import { simulateLordships } from './lordships.ts';
 import { RANKS, OFFICERS } from './economy.ts';
@@ -105,7 +105,9 @@ export const sendExpedition = () => update((s) => {
   return event(sendTo(spend(s, cost), 'explore', r, `Explorers heading ${dir || 'out'} into uncharted lands`, { data: { rival: r.id } }), 'diplomacy', `Sent an expedition into uncharted lands to the ${dir}.`);
 });
 export const worldTick = () => {
-  const s0 = getState(), today = dayStr();
+  // the game's calendar: started the day you first studied, counting real days until you choose otherwise
+  if (!getState().world.clock) { const first = Math.min(Date.now(), ...getState().sessions.map((x) => x.startedAt)); setState(W(getState(), { ...getState().world, clock: clockOf(getState().world, first) })); }
+  const s0 = getState(), today = gameDay(s0.world);
   if ((s0.world.v ?? 1) < 2) setState(W(s0, upgradeWorld(s0.world))); // the world grows
   discoverTick();
   if (getState().world.outpostDay !== today) setState(W(getState(), refreshOutposts(getState().world, getState().stage, today))); // bandits pitch a new camp each day
@@ -157,7 +159,7 @@ export const trade = (id: string, give: keyof Res, amount: number, want: keyof R
   const r = rival(s, id); if (!r) return; const why = canTrade(r, s.world); if (why) return why;
   amount = Math.floor(amount); if (amount <= 0 || give === want) return 'Choose an amount and two different goods';
   if (!canAfford(s.res, { [give]: amount })) return 'Not enough to trade';
-  const q = tradeQuote(r, give, amount, want, courtFx(courtOf(s.world)).trade), today = dayStr();
+  const q = tradeQuote(r, give, amount, want, courtFx(courtOf(s.world)).trade), today = gameDay(s.world);
   let o = spend(s, { [give]: amount });
   o = W(o, { ...o.world, rivals: o.world.rivals.map((x) => (x.id === id ? { ...x, trades: x.lastTradeDay === today ? x.trades + 1 : 1, lastTradeDay: today } : x)) });
   o = send(o, 'caravan', r, `Caravan to ${r.name}`, { data: { give, amount, want, got: q.got, rel: q.rel } });
@@ -573,3 +575,10 @@ export const praiseCommander = (batId: string) => update((s) => {
 /** Nobles and commons approve of honoured heroes. */
 const praiseEffects = (w: WorldState): WorldState => ({ ...w, court: adjust(courtOf(w), { nobles: 6, commons: 3 }) });
 
+
+/** How long a game day lasts (in minutes). The day count carries on; the next day comes that long from now. */
+export const setDayLength = (min: number) => update((s) => {
+  const c = nextClock(clockOf(s.world), min);
+  emit({ kind: 'info', text: min === 1440 ? 'Days now follow the real calendar: the next day comes at midnight.' : `A day in the realm now lasts ${min >= 60 ? `${min / 60} hour${min > 60 ? 's' : ''}` : `${min} minutes`}.` });
+  return W(s, { ...s.world, clock: c });
+});

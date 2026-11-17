@@ -3,7 +3,7 @@
 import { _internal, getState, emit, armySize, type GameState } from './state.ts';
 import { awayBats } from './warActions.ts';
 import { type Res, scale } from './rewards.ts';
-import { dayStr, isKnown, tierOf, type WorldState } from './war.ts';
+import { gameDay, isKnown, tierOf, type WorldState } from './war.ts';
 import { uid } from './study.ts';
 
 const { update, ledger, spend, mark, kill, event } = _internal;
@@ -65,7 +65,7 @@ export function penalize(s: GameState, a: Assignment): [GameState, string] {
   const w = s.world, foe = w.rivals.filter((r) => r.status !== 'ally' && r.status !== 'vassal' && isKnown(r) && tierOf(r) === 'neighbour').sort((x, y) => x.relation - y.relation)[0];
   if (foe && !w.threat && !w.campaign) {
     const nw: WorldState = { ...w, threat: { rival: foe.id, power: Math.round(foe.power * 0.6), since: Date.now(), allyHelp: [] }, rivals: w.rivals.map((r) => (r.id === foe.id ? { ...r, status: 'war' as const } : r)),
-      inbox: [...w.inbox, { id: `${dayStr()}-assign-${a.id}`, rival: foe.id, kind: 'news', day: dayStr(), text: `${foe.name} heard your realm was distracted and marches on your castle!` }] };
+      inbox: [...w.inbox, { id: `${gameDay(w)}-assign-${a.id}`, rival: foe.id, kind: 'news', day: gameDay(w), text: `${foe.name} heard your realm was distracted and marches on your castle!` }] };
     return [W(s, nw), `${foe.name} took advantage and laid siege to your castle.`];
   }
   const [o, dead] = cull(s, 0.2), g = Math.min(1200, Math.floor(o.res.gold * 0.15));

@@ -9,7 +9,7 @@ import { hash } from '../lib/names.ts';
 import { setUI, focusOn } from '../game/ui.ts';
 import { paradeSoldiers, paradeCost, paradeReward, holdParade } from '../lib/realmActions.ts';
 import { courtOf } from '../lib/politics.ts';
-import { dayStr } from '../lib/war.ts';
+import { gameDay } from '../lib/war.ts';
 import { TRAITS, HONORS, traitsOf, honorsOf, praiseReady, styled } from '../lib/commanders.ts';
 import { praiseCommander } from '../lib/warActions.ts';
 import { soldierSheet, frameRect, FW, FH } from '../game/art/soldiers.ts';
@@ -74,7 +74,7 @@ function TownWatch() {
 
 /** Look over the army on the parade square, or pay for a grand parade that pleases the realm. */
 function ParadeGround() {
-  const s = useGame(), n = paradeSoldiers(s), cost = paradeCost(s), r = paradeReward(s), done = courtOf(s.world).lastParade === dayStr();
+  const s = useGame(), n = paradeSoldiers(s), cost = paradeCost(s), r = paradeReward(s), done = courtOf(s.world).lastParade === gameDay(s.world);
   return <Section title="Parade ground">
     <div className="flex gap-2"><button className="btn flex-1" disabled={!n} onClick={() => setUI({ parade: { mode: 'review' }, panel: null })}>Review the army</button>
       <button className="btn btn-gold flex-1" disabled={done || n < 6 || !canAfford(s.res, cost)} onClick={() => { if (!holdParade()) setUI({ parade: { mode: 'parade' }, panel: null }); }}>Hold a parade (<Cost cost={cost} />)</button></div>

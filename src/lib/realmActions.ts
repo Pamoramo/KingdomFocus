@@ -2,7 +2,7 @@
 // and the military parade. Kept apart from state.ts so the pure rules stay testable on their own.
 import { _internal, getState, emit, neglect, type GameState } from './state.ts';
 import { awayBats } from './warActions.ts';
-import { dayStr, isKnown, type WorldState } from './war.ts';
+import { gameDay, isKnown, type WorldState } from './war.ts';
 import { canAfford, ZERO, type Res } from './rewards.ts';
 import { courtOf, courtDay, adjust, DECREES, FACTIONS, type DecreeId } from './politics.ts';
 import { sitesFor, siteKnown, settleCap, foundCost, upgradeCost, upgradeStage, SETTLE } from './expansion.ts';
@@ -16,7 +16,7 @@ const withCourt = (s: GameState, f: (c: ReturnType<typeof courtOf>) => ReturnTyp
 // ---------------- the court ----------------
 /** Proclaim a decree. Each can be changed once a day; those it favours cheer, those it burdens grumble. */
 export const setDecree = (id: DecreeId, option: string) => update((s) => {
-  const c = courtOf(s.world), today = dayStr(), opt = DECREES[id].options[option]; if (!opt) return;
+  const c = courtOf(s.world), today = gameDay(s.world), opt = DECREES[id].options[option]; if (!opt) return;
   if (c.decrees[id] === option) return;
   if (c.decreed?.[id] === today) return 'The court will not hear another change to this decree until tomorrow';
   const shock = Object.fromEntries(Object.entries(opt.drift).map(([f, v]) => [f, (v ?? 0) * 3]));
@@ -34,7 +34,7 @@ export const answerPetition = (id: string, grant: boolean) => update((s) => {
 });
 /** Once a day: the estates' moods drift, petitions arrive, and angry estates make trouble. */
 export const courtTick = () => {
-  const s0 = getState(), today = dayStr(); if (courtOf(s0.world).day === today) return;
+  const s0 = getState(), today = gameDay(s0.world); if (courtOf(s0.world).day === today) return;
   let h = hash(`${s0.world.seed}:${today}:court`); const rnd = () => ((h = (h * 1664525 + 1013904223) >>> 0) / 4294967296);
   const r = courtDay(courtOf(s0.world), { today, seed: s0.world.seed, neglect: neglect(s0), stage: s0.stage }, rnd);
   update((s) => {
@@ -84,7 +84,7 @@ export const paradeCost = (s: GameState): Partial<Res> => ({ gold: Math.min(3000
 /** What the parade earns: renown, the people's and the lords' favour, drilled soldiers, a day without thieves, and second thoughts among enemies. */
 export const paradeReward = (s: GameState) => ({ renown: Math.min(150, 10 + Math.floor(paradeSoldiers(s) / 6)), xp: 20, commons: 6, nobles: 5, deter: 0.3 });
 export const holdParade = () => update((s) => {
-  const n = paradeSoldiers(s), today = dayStr(), c = courtOf(s.world);
+  const n = paradeSoldiers(s), today = gameDay(s.world), c = courtOf(s.world);
   if (n < 6) return 'You need at least 6 soldiers at home to parade';
   if (c.lastParade === today) return 'One parade a day: the people need their sleep';
   const cost = paradeCost(s), r = paradeReward(s); if (!canAfford(s.res, cost)) return 'Not enough gold';

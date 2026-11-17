@@ -11,6 +11,7 @@ import { ParadeScene } from '../game/ParadeScene.ts';
 import { audio, type Sfx } from '../game/audio.ts';
 import { WEATHER_NAME, type Weather } from '../game/weather.ts';
 import { worldTick, journeysTick, breachTick } from '../lib/warActions.ts';
+import { clockOf, dayNumber, nextDayAt } from '../lib/war.ts';
 import { WorldPanel, BattleReport, worldBadge } from './World.tsx';
 import { AssignmentsPanel, assignmentBadge } from './Assignments.tsx';
 import { assignmentsTick } from '../lib/assignments.ts';
@@ -19,7 +20,7 @@ import { initPersistence } from '../lib/sync.ts';
 import { getState, setState, onDuty, studyTick, fxBus, neglect, idleDays, type Fx } from '../lib/state.ts';
 import { isAwaiting, dueAt } from '../lib/study.ts';
 import { BUILDINGS, STAGES } from '../lib/economy.ts';
-import { useGame, useUI, fmt } from './hooks.ts';
+import { useGame, useUI, fmt, useNow, clock } from './hooks.ts';
 import { setUI } from '../game/ui.ts';
 import { Icon } from './Icon.tsx';
 import { StudyPanel, CheckInModal, StudyMini, FocusMode, SessionComplete } from './Study.tsx';
@@ -92,6 +93,7 @@ function TopBar() {
     <div className="pointer-events-auto mx-auto lg:mx-0 wood rounded-b-md flex items-center gap-3 sm:gap-5 px-3 py-1.5">
       {(['gold', 'wood', 'stone', 'renown'] as const).map((k) => <Counter key={k} k={k} v={s.res[k]} />)}
       <span className={`w-2 h-2 rounded-full ${sync.startsWith('saved') ? 'bg-green-400' : sync.startsWith('offline') || sync.startsWith('sync error') ? 'bg-red-400' : 'bg-yellow-300'}`} title={`Cloud: ${sync}`} />
+      <DayCounter />
       <span title={WEATHER_NAME[ui.weather as Weather] ?? 'Clear skies'} className="flex"><Icon name={ui.weather === 'clear' || !ui.weather ? (ui.night > 0.5 ? 'moon' : 'sun') : ui.weather} size={16} /></span>
     </div>
     <div className="pointer-events-auto pt-1 w-full lg:w-auto flex justify-center gap-1.5 flex-wrap">
@@ -118,6 +120,14 @@ function Welcome() {
     <button className="btn btn-gold w-full text-lg" onClick={() => { setOpen(false); setUI({ panel: 'study' }); }}>Begin my first study session</button>
     <button className="btn w-full" onClick={() => setOpen(false)}>Look around first</button>
   </div></div>;
+}
+
+/** The day of the realm, and how long until the next one (tap to change how long a day lasts). The world turns the moment a day ends. */
+function DayCounter() {
+  const s = useGame(), now = useNow(1000), c = clockOf(s.world), n = dayNumber(c, now), left = nextDayAt(c, now) - now;
+  useEffect(() => { worldTick(); }, [n]);
+  return <button className="flex flex-col items-center leading-none text-parch" title={`Day ${n} of your reign. The next day begins in ${clock(left)}. Tap to change how long a day lasts.`} onClick={() => setUI({ panel: 'settings' })}>
+    <span className="text-sm font-bold whitespace-nowrap">Day {n}</span><span className="text-[10px] opacity-80 tabular-nums">{clock(left)}</span></button>;
 }
 
 export default function Game() {

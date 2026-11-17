@@ -6,6 +6,8 @@ import { DEFAULT_RATES, RES_KEYS } from '../lib/rewards.ts';
 import { useGame } from './hooks.ts';
 import { Icon } from './Icon.tsx';
 import { Section } from './Cost.tsx';
+import { DAY_LENGTHS, clockOf, dayNumber } from '../lib/war.ts';
+import { setDayLength } from '../lib/warActions.ts';
 
 const sub = (l: () => void) => (syncStatus.addEventListener('change', l), () => syncStatus.removeEventListener('change', l));
 export const useSync = () => useSyncExternalStore(sub, getSyncStatus, getSyncStatus);
@@ -67,6 +69,11 @@ export function SettingsPanel() {
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={st.ambience ?? true} onChange={(e) => setSettings({ ambience: e.target.checked })} /> Ambience (birdsong, wind, the forge, the market, crickets at night)</label>
       <label className="flex items-center gap-2 text-sm">Ambience volume <input type="range" className="flex-1" min={0} max={1} step={0.05} value={st.ambVol ?? 0.7} disabled={!(st.ambience ?? true)} onChange={(e) => setSettings({ ambVol: +e.target.value })} /></label>
       <p className="text-xs opacity-75">All music is generated live: a lute, recorder and drum play in a medieval mode that shifts with day, night and war.</p>
+    </Section>
+    <Section title="Days in the realm">
+      <p className="text-xs">How long a day lasts in your realm. Each new day the other kingdoms take their turn, warnings fall due, the court meets, bandits move camp and daily limits (trade, parades) reset. Your studies, habits and assignments always follow the real calendar.</p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">{DAY_LENGTHS.map((d) => <button key={d.min} className={`btn text-sm !px-1 ${clockOf(s.world).len === d.min ? 'btn-gold' : ''}`} onClick={() => setDayLength(d.min)}>{d.name}</button>)}</div>
+      <p className="text-xs opacity-75">Day {dayNumber(clockOf(s.world))} of your reign. Changing it keeps the count; at most three days are played out at once when you return from a long absence.</p>
     </Section>
     <Section title="Appearance">
       <div className="flex gap-1 flex-wrap">{THEMES.map(([id, name, req]) => { const ok = !req || unlocked(s, req); return <button key={id} disabled={!ok} title={ok ? '' : 'Unlocked by an achievement'} className={`btn text-sm ${st.theme === id ? 'btn-gold' : ''}`} onClick={() => setSettings({ theme: id })}>{name}{ok ? '' : ' (locked)'}</button>; })}</div>

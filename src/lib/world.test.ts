@@ -122,3 +122,34 @@ test('garrisons: stationed in vassal and allied castles, they raise tribute, scr
   WA.worldTick();
   assert.equal((S.getState().world.garrisons ?? []).length, 0); assert.ok((S.getState().world.journeys ?? []).some((j) => j.kind === 'return' && j.bats?.includes(bat)), 'marching home');
 });
+
+test('the realm\'s calendar: real days by default, or shorter days that keep the count', async () => {
+  const { clockOf, dayNumber, nextDayAt, dateOfDay, gameDay, setDayLength, dayStr } = await import('./war.ts');
+  const t0 = new Date(2026, 4, 10, 15, 0).getTime(), first = new Date(2026, 4, 1, 9, 0).getTime();
+  const c = clockOf({}, first, t0);
+  assert.equal(dayNumber(c, t0), 10, 'counted from your first day'); assert.equal(dateOfDay(c, 10), dayStr(new Date(t0)), 'a real day is today\'s date');
+  assert.equal(dayNumber(c, new Date(2026, 4, 11, 0, 1).getTime()), 11, 'the next day comes at midnight');
+  assert.equal(new Date(nextDayAt(c, t0)).getHours(), 0);
+  assert.equal(gameDay({}), dayStr(), 'a world without a clock is on today\'s date');
+  // ten-minute days: the count goes on, and each day is the next date
+  const f = setDayLength(c, 10, t0);
+  assert.equal(dayNumber(f, t0), 10); assert.equal(dayNumber(f, t0 + 9 * 60000), 10); assert.equal(dayNumber(f, t0 + 10 * 60000), 11); assert.equal(dayNumber(f, t0 + 65 * 60000), 16);
+  assert.equal(nextDayAt(f, t0 + 3 * 60000), t0 + 10 * 60000);
+  assert.equal(dateOfDay(f, 11), dayStr(new Date(2026, 4, 11, 12)), 'the next game day is the next date');
+  // back to real days: the count carries on from where it is
+  const r = setDayLength(f, 1440, t0 + 65 * 60000); assert.equal(dayNumber(r, t0 + 65 * 60000), 16);
+});
+
+test('with short days the world takes a turn each time a day ends', async () => {
+  const { gameDay, clockOf, dayNumber } = await import('./war.ts');
+  const real = Date.now; let t = real();
+  try {
+    Date.now = () => t;
+    S._with({ ...S.newGame() }); WA.worldTick(); // starts the calendar
+    WA.setDayLength(10); const day0 = S.getState().world.lastDay, n0 = dayNumber(clockOf(S.getState().world), t);
+    t += 11 * 60000; WA.worldTick();
+    const w = S.getState().world; assert.equal(dayNumber(clockOf(w), t), n0 + 1);
+    assert.equal(w.lastDay, gameDay(w, t)); assert.notEqual(w.lastDay, day0, 'a new day was played');
+    assert.ok(w.rivals.filter((r) => !r.bandits).every((r) => r.lordship && r.lordship.days >= 1), 'every lordship took its turn');
+  } finally { Date.now = real; }
+});
