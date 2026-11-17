@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useGame, useUI, useNow, clock, fmt, hex, mobile } from './hooks.ts';
-import { BIOME_NAME, CASTLE_NAME, biomeOf, realmLayout } from '../lib/realms.ts';
+import { BIOME_NAME, CASTLE_NAME, TOWN_PLAN_NAME, biomeOf, realmLayout } from '../lib/realms.ts';
 import { setUI, toggleWorldView } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res, canAfford } from '../lib/rewards.ts';
@@ -113,7 +113,7 @@ function RivalDetail({ r }: { r: Rival }) {
     <div className="card p-2 flex gap-3"><Banner color={r.color} emblem={r.emblem} scale={3} />
       <div className="text-sm flex-1"><h3 className="font-title text-3xl leading-none">{r.name}</h3><div>Ruled by {r.ruler}</div><div className="opacity-80">{r.bandits ? 'Outlaws who raid the borderlands. They will not parley.' : PERSONALITY_TEXT[r.personality]}</div>
         <div>{STATUS[r.status]} · {strengthText(mine, r.power)} (≈{fmt(r.power)}) · walls {r.wallMax}</div>
-        <div>{BIOME_NAME[biomeOf(s.world, r)]} · {CASTLE_NAME[realmLayout(s.world, r).type]} · {realmLayout(s.world, r).wealth} realm</div>
+        <div>{BIOME_NAME[biomeOf(s.world, r)]} · {CASTLE_NAME[realmLayout(s.world, r).type]} · {realmLayout(s.world, r).wealth} {r.bandits ? 'camp' : TOWN_PLAN_NAME[realmLayout(s.world, r).plan]}</div>
         <div className="text-xs opacity-80">{TIER[tierOf(r)].name}, {leagues(r).toFixed(1)} leagues away: {TIER[tierOf(r)].desc}</div>
         <button className="btn btn-gold !py-0.5 mt-1" onClick={() => setUI({ view: 'rival', visit: r.id, panel: mobile() ? null : 'world' })}>Visit {r.name}</button>
         {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}</div></div>

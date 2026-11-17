@@ -4,7 +4,7 @@ import { realmLayout, RW, RH, type RealmLayout, type Biome } from '../lib/realms
 import { armyOf, ENGINE_IDS, consumption, type Rival } from '../lib/war.ts';
 import { BUILDINGS, CONNECTS, type BKind } from '../lib/economy.ts';
 import { campaignSquads } from '../lib/warActions.ts';
-import { biomeTile, plant, rubble, church, stall, pavise, campfire, mineEntrance, barricade, wagon, BIOME_PLANTS, BIOME_DENSITY } from './art/biome.ts';
+import { biomeTile, plant, rubble, church, stall, windmill, windmillSails, pavise, campfire, mineEntrance, barricade, wagon, BIOME_PLANTS, BIOME_DENSITY } from './art/biome.ts';
 import { engineArt, siegeCamp } from './art/war.ts';
 import { hdify, HD } from './art/hd.ts';
 import { withoutOutline } from './art/px.ts';
@@ -87,6 +87,8 @@ export class RivalScene extends Phaser.Scene {
     for (let v = 0; v < 4; v++) { const k = `bt_${b}${v}`; if (!T.exists(k)) T.addCanvas(k, hdify(biomeTile(b, v), { rim: false, outline: false, grain: 6, seed: v })); }
     BIOME_PLANTS[b].forEach((p, i) => { for (const sd of [0, 1]) { const k = `bp_${p}${sd}`; if (!T.exists(k)) T.addCanvas(k, hdify(withoutOutline(() => plant(p, sd + i * 3)), { seed: sd })); } });
     if (!T.exists('church')) T.addCanvas('church', hdify(withoutOutline(() => church())));
+    if (!T.exists('windmill')) T.addCanvas('windmill', hdify(withoutOutline(() => windmill())));
+    if (!T.exists('mill_sails')) T.addCanvas('mill_sails', hdify(withoutOutline(() => windmillSails())));
     for (let i = 0; i < 4; i++) if (!T.exists(`stall${i}`)) T.addCanvas(`stall${i}`, hdify(withoutOutline(() => stall(i))));
     for (let i = 0; i < 3; i++) if (!T.exists(`rubble${i}`)) T.addCanvas(`rubble${i}`, hdify(withoutOutline(() => rubble(i * 7 + 1))));
     if (!T.exists('camp_icon')) T.addCanvas('camp_icon', hdify(withoutOutline(() => siegeCamp())));
@@ -252,7 +254,8 @@ export class RivalScene extends Phaser.Scene {
     }
     // the parish church and the market stalls
     for (const m of L.landmarks) {
-      const by = (m.y + m.h) * TILE, img = this.add.image(m.x * TILE, by, m.kind === 'church' ? 'church' : `stall${m.v % 4}`).setOrigin(0, 1).setScale(S).setDepth(by);
+      const by = (m.y + m.h) * TILE, img = this.add.image(m.kind === 'windmill' ? (m.x + 1) * TILE : m.x * TILE, by, m.kind === 'church' ? 'church' : m.kind === 'windmill' ? 'windmill' : `stall${m.v % 4}`).setOrigin(m.kind === 'windmill' ? 0.5 : 0, 1).setScale(S).setDepth(by);
+      if (m.kind === 'windmill') { const sails = this.add.image((m.x + 1) * TILE, by - img.displayHeight * (1 - 22 / 56), 'mill_sails').setScale(S).setDepth(by + 1); this.tweens.add({ targets: sails, angle: 360, duration: 9000, repeat: -1 }); if (L.biome === 'tundra') sails.setTint(0xeef4ff); }
       if (L.biome === 'tundra') img.setTint(0xeef4ff);
       this.marks.push({ img, suburb: m.suburb });
       this.doors.push({ x: (m.x + m.w / 2) * TILE, y: by + 4 });

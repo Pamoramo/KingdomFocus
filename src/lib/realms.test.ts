@@ -49,7 +49,12 @@ test('rival towns are laid out like medieval towns: a high street from the gate,
   const w = initWorld(4242);
   for (const r0 of w.rivals.filter((x) => !x.bandits)) for (const level of [2, 4]) {
     const r = { ...r0, level, power: 120 * level ** 2.2 }, L = realmLayout(w, r), gx = L.gate.x, street = new Set([...L.streets, ...L.plaza].map((t) => `${t.x},${t.y}`));
-    for (let y = L.gate.y + 1; y < 40; y++) assert.ok(street.has(`${gx},${y}`) || L.bridges.some((b) => b.x === gx && b.y === y), `${r.name}: the high street is unbroken at ${y}`);
+    // the streets form one network, reached from the gate and running out to the edge of the map
+    const net = new Set([...street, ...L.bridges.map((t) => `${t.x},${t.y}`), ...[0, 1].flatMap((i) => [`${L.gate.x + i},${L.gate.y}`, `${L.gate.x + i},${L.gate.y - 1}`])]), seen = new Set<string>([`${gx},${L.gate.y + 1}`]), q = [[gx, L.gate.y + 1]];
+    assert.ok(net.has(`${gx},${L.gate.y + 1}`), `${r.name}: a street leaves the gate`);
+    while (q.length) { const [x, y] = q.pop()!; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const k = `${x + dx},${y + dy}`; if (net.has(k) && !seen.has(k)) { seen.add(k); q.push([x + dx, y + dy]); } } }
+    assert.ok([...seen].some((k) => { const [x, y] = k.split(',').map(Number); return y >= RH - 3 || x <= 2 || x >= RW - 3; }), `${r.name} (${L.plan}): the road runs on out of town`);
+    assert.ok(seen.size >= (net.size - 4) * 0.9, `${r.name} (${L.plan}): no stranded streets (${seen.size}/${net.size})`);
     assert.ok(L.plaza.length >= 24, 'a market square');
     assert.ok(L.landmarks.some((m) => m.kind === 'stall') && L.buildings.some((b) => b.kind === 'well'), 'with stalls and a well');
     const houses = L.buildings.filter((b) => b.kind === 'house' || b.kind === 'hut');
@@ -59,6 +64,9 @@ test('rival towns are laid out like medieval towns: a high street from the gate,
     const dist = houses.map((h) => Math.hypot(h.x - gx, h.y - L.gate.y)).sort((a, b) => a - b);
     assert.ok(dist[Math.floor(dist.length / 2)] < 16, 'the town crowds the castle gate');
   }
+  // towns grow in different ways: several plans among the realms of one world, and castles of different shapes
+  const plans = new Set(w.rivals.filter((x) => !x.bandits).map((x) => realmLayout(w, x).plan)), gates = new Set(w.rivals.map((x) => { const L = realmLayout(w, x); return L.gate.x - L.box.x0; }));
+  assert.ok(plans.size >= 4, `several town plans (${[...plans]})`); assert.ok(gates.size >= 5, 'gates sit at different points along the wall');
   // a bigger, richer realm builds a bigger town, with a church
   const k = w.rivals.find((x) => !x.bandits)!, small = realmLayout(w, { ...k, level: 1, power: 60 }), big = realmLayout(w, { ...k, level: 5, power: 120 * 5 ** 2.2 * 2 });
   const n = (L: ReturnType<typeof realmLayout>) => L.buildings.filter((b) => b.kind === 'house' || b.kind === 'hut').length;

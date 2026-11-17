@@ -126,3 +126,22 @@ export function stall(kind: number): HTMLCanvasElement {
   for (let i = 0; i < 5; i++) { px(c, 3 + i * 2, 15, wares[i % 2]); px(c, 3 + i * 2 + 1, 14, wares[(i + 1) % 2]); }
   outline(cv); return cv;
 }
+/** A post-and-tower windmill without its sails (drawn separately so they can turn): a tapering stone tower and a thatched cap. */
+export function windmill(): HTMLCanvasElement {
+  const [cv, c] = canvas(32, 56), base = 55;
+  for (let y = 22; y <= base; y++) { const half = Math.round(8 + ((y - 22) / (base - 22)) * 5); r(c, 16 - half, y, half * 2, 1, (y % 6) < 1 ? P.plasterD : P.plaster); r(c, 16 + half - 3, y, 3, 1, P.plasterD); }
+  cone(c, 16, 10, 20, 14, P.thatch, P.thatchD, P.woodD);
+  door(c, 13, base - 9, 6, 9, P.woodD); r(c, 14, 32, 3, 4, P.glass); r(c, 17, 42, 2, 3, P.glass);
+  r(c, 15, 21, 3, 3, P.woodD); // the axle hub
+  outline(cv); return cv;
+}
+/** The four sails of a windmill, a lattice of wood and cloth, centred so they can be rotated. */
+export function windmillSails(): HTMLCanvasElement {
+  const [cv, c] = canvas(44, 44), m = 22;
+  for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+    for (let i = 3; i < 21; i++) { px(c, m + dx * i, m + dy * i, P.woodD); }
+    for (let i = 6; i < 21; i++) for (let k = 1; k <= 3; k++) { const x = m + dx * i + (dy ? k : 0) * (dy || 1), y = m + dy * i + (dx ? -k : 0) * (dx || 1); px(c, x, y, (i + k) % 3 ? P.cloth : P.wood); }
+  }
+  r(c, m - 1, m - 1, 3, 3, P.woodD);
+  outline(cv); return cv;
+}
