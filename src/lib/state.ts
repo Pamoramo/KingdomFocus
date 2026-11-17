@@ -1,5 +1,5 @@
 import { type Res, ZERO, DEFAULT_RATES, MANUAL_FACTOR, MANUAL_MAX_PER_DAY_MIN, add, sub, maxRes, canAfford, full, scale, studyReward, isZero, ceilingFor, minRes, workReward } from './rewards.ts';
-import { type Session, type SessionCfg, DEFAULT_CFG, startSession, tick, checkIn, pause, takeBreak, endSession, uid, MIN } from './study.ts';
+import { type Session, type SessionCfg, DEFAULT_CFG, startSession, tick, expire, checkIn, pause, takeBreak, endSession, uid, MIN } from './study.ts';
 import { type Habit, type Freq, progress, streak, habitReward, MILESTONES, dayKey, periodKey } from './habits.ts';
 import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, SQUADS_PER_COMPANY, TCLASSES, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
 import { nameFor } from './names.ts';
@@ -543,9 +543,10 @@ export const studyStart = (subject: string) => update((s) => {
 export const studyTick = () => {
   for (const slot of ['session', 'work'] as const) {
     const s = state, sess = s[slot]; if (!sess) continue;
-    const t = { ...sess, ...tick(sess, Date.now()) };
+    const t = { ...sess, ...(slot === 'work' ? expire(sess, Date.now()) : tick(sess, Date.now())) };
     if (t.status !== sess.status) {
       if (t.status === 'missed') emit({ kind: 'error', text: 'Check-in missed: timer paused. Everything already earned is kept.' });
+      if (slot === 'work' && t.status === 'ended') emit({ kind: 'error', text: 'No click for 30 minutes: the productive timer has ended. Time up to your last click is kept.' });
       setState(post(settle(s, t, slot)));
     }
   }
@@ -569,10 +570,13 @@ export const workStart = (task: string) => update((s) => {
   if (s.session) return 'Finish your study session first: one thing at a time';
   if (s.work) return;
   task = task.trim().replace(/\s+/g, ' ').slice(0, 40) || 'Productive time';
-  const sess = { ...startSession(WORK_MARK + task, Date.now(), { ...s.settings.cfg, pomodoro: false }), xpMs: 0, source: 'timer' as Source };
+  const sess = { ...startSession(WORK_MARK + task, Date.now(), { ...s.settings.cfg, pomodoro: false, intervalMin: WORK_WINDOW_MIN, graceMin: 0 }), xpMs: 0, source: 'timer' as Source };
   return mark({ ...s, work: sess, sessions: [record(sess, Date.now()), ...s.sessions] }, 'sessions', sess.id);
 });
-const actW = (f: (x: Session, now: number) => Session) => update((s) => (s.work ? settle(s, { ...s.work, ...f(s.work, Date.now()) }, 'work') : undefined));
+/** The window a productive timer stays alive without a click. */
+export const WORK_WINDOW_MIN = 30;
+// a click that comes after the window closed is too late: the timer has already ended at the deadline
+const actW = (f: (x: Session, now: number) => Session) => update((s) => { if (!s.work) return; const now = Date.now(), e = expire(s.work, now); return settle(s, { ...s.work, ...(e.status === 'ended' ? e : f(s.work, now)) }, 'work'); });
 export const workCheckIn = (note?: string) => actW((x, n) => checkIn(x, n, note));
 export const workPause = () => actW(pause);
 export const workEnd = () => actW(endSession);

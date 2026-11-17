@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useGame, useUI, useNow, clock, fmt, hm } from './hooks.ts';
-import { workStart, workCheckIn, workPause, workEnd, workDiscard, workTasks, addWorkTask, removeWorkTask, taskOf, isWork, WORK_FACTOR, idleDays, neglect, GRACE_DAYS, studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState, currentSubject, addSubject, removeSubject } from '../lib/state.ts';
+import { WORK_WINDOW_MIN, workStart, workCheckIn, workPause, workEnd, workDiscard, workTasks, addWorkTask, removeWorkTask, taskOf, isWork, WORK_FACTOR, idleDays, neglect, GRACE_DAYS, studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState, currentSubject, addSubject, removeSubject } from '../lib/state.ts';
 import { pendingAt, dueAt, isAwaiting, totalMs } from '../lib/study.ts';
 import { studyReward, workReward, focusMultiplier, MANUAL_FACTOR, type Res } from '../lib/rewards.ts';
 import { Tabs } from './Cost.tsx';
@@ -28,7 +28,7 @@ function WorkPanel() {
     <div className="card p-2.5 text-sm space-y-1">
       <div>For useful things that are not study: chores, exercise, your job, errands, practice. Your realm rewards them too, at {Math.round(WORK_FACTOR * 100)}% of study&apos;s pay per minute and without study&apos;s focus bonus.</div>
       <div>An hour earns <Cost cost={hour} plus /> <span className="opacity-70">(an hour of study: {fmt(studyHour.gold)} gold)</span>. Soldiers and sieges advance at the same lesser rate.</div>
-      <div className="text-xs opacity-75">Check-ins work as in study. It is counted apart from study: it does not keep the realm calm on its own, or count toward study streaks and honours.</div>
+      <div className="text-xs opacity-75">No check-in prompts: just click <b>Still at it</b> at least once every {WORK_WINDOW_MIN} minutes. Miss it and the timer simply ends, keeping the time up to your last click. It is counted apart from study: it does not keep the realm calm on its own, or count toward study streaks and honours.</div>
     </div>
     <Section title="Activity">
       <div className="flex flex-wrap gap-1">{tasks.map((x) => <span key={x} className="inline-flex"><button onClick={() => setTask(x)} className={`btn text-sm !py-0.5 ${x === task ? 'btn-gold' : ''}`}>{x}</button>
@@ -40,20 +40,21 @@ function WorkPanel() {
     <RecentSessions work />
   </div>;
   const total = totalMs(w, now), due = dueAt(w), projected = workReward(w.verifiedMs + pendingAt(w, now), s.settings.rates, mult);
-  const statusText = { running: isAwaiting(w, now) ? 'check-in needed!' : 'at work', paused: 'paused', missed: 'paused: check-in missed', break: 'on a break', ended: 'finished' }[w.status];
+  const statusText = { running: 'at work', paused: 'paused', missed: 'paused', break: 'on a break', ended: 'finished' }[w.status];
   return <div className="space-y-3">
     <div className="text-center">
       <div className="text-sm opacity-75">{taskOf(w.subject)} · productive time · {statusText}</div>
       <div className="text-6xl font-bold tabular-nums leading-none my-1">{clock(total)}</div>
-      {w.status === 'running' && due && <div className="text-sm">Next check-in in <b className="tabular-nums">{clock(Math.max(0, due - now))}</b></div>}
+      {w.status === 'running' && due && <div className={`text-sm ${due - now < 5 * 60000 ? 'text-blood font-bold' : ''}`}>Click within <b className="tabular-nums">{clock(Math.max(0, due - now))}</b> or the timer ends</div>}
     </div>
-    {w.status === 'running' && <Bar value={pendingAt(w, now)} max={w.cfg.intervalMin * 60000} color="bg-moss" />}
+    {w.status === 'running' && <Bar value={Math.max(0, (due ?? now) - now)} max={w.cfg.intervalMin * 60000} color={due && due - now < 5 * 60000 ? 'bg-blood' : 'bg-moss'} />}
+    {w.status === 'running' && <button className={`btn btn-gold w-full text-xl py-2 ${due && due - now < 5 * 60000 ? 'pulse' : ''}`} onClick={() => workCheckIn()}>Still at it</button>}
     <div className="grid grid-cols-2 gap-2 text-sm">
       <div className="card p-2"><div className="text-xs opacity-70">Earned (verified)</div><Cost cost={w.awarded} /></div>
-      <div className="card p-2"><div className="text-xs opacity-70">At next check-in</div><Cost cost={projected} /></div>
+      <div className="card p-2"><div className="text-xs opacity-70">At your next click</div><Cost cost={projected} /></div>
     </div>
     <div className="flex gap-2">
-      {w.status === 'running' ? <button className="btn flex-1" onClick={workPause}>Pause</button> : <button className="btn btn-gold flex-1" onClick={() => workCheckIn()}>{w.status === 'missed' ? 'Check in & resume' : 'Resume'}</button>}
+      {w.status === 'running' ? <button className="btn flex-1" onClick={workPause}>Pause</button> : <button className="btn btn-gold flex-1" onClick={() => workCheckIn()}>Resume</button>}
       <button className="btn btn-red flex-1" onClick={workEnd}>Finish</button>
       {w.verifiedMs === 0 && <button className="btn" onClick={workDiscard}>Discard</button>}
     </div>
@@ -161,8 +162,8 @@ function RecentSessions({ work = false }: { work?: boolean }) {
 
 /** Check-in and pomodoro prompts. Clearly visible, with a live countdown. */
 export function CheckInModal() {
-  const s = useGame(), now = useNow(500), sess = s.session ?? s.work, w = !s.session && !!s.work;
-  const ci = w ? workCheckIn : studyCheckIn, end = w ? workEnd : studyEnd;
+  const s = useGame(), now = useNow(500), sess = s.session; // productive time has no prompt: a click keeps it alive
+  const ci = studyCheckIn, end = studyEnd;
   const [note, setNote] = useState('');
   if (!sess) return null;
   if (sess.status === 'break' && sess.breakUntil && now >= sess.breakUntil) return (
@@ -170,19 +171,19 @@ export function CheckInModal() {
       <button className="btn btn-gold w-full text-xl py-3" onClick={() => ci()}>Resume studying</button>
       <button className="btn w-full" onClick={end}>Finish session</button></Modal>);
   if (!isAwaiting(sess, now)) return null;
-  const left = dueAt(sess)! + sess.cfg.graceMin * 60000 - now, ok = w || !s.settings.requireNote || note.trim().length > 1;
+  const left = dueAt(sess)! + sess.cfg.graceMin * 60000 - now, ok = !s.settings.requireNote || note.trim().length > 1;
   const submit = (f: (n?: string) => void) => { f(note.trim() || undefined); setNote(''); };
   return (
     <Modal pulse>
       <Icon name={sess.cfg.pomodoro ? 'hourglass' : 'check'} size={44} />
       <h2 className="font-title text-4xl">{sess.cfg.pomodoro ? 'Focus Block Complete' : "Sentry's Call"}</h2>
-      <p>{sess.cfg.pomodoro ? 'Well fought! Confirm your study to bank it.' : w ? `Still at it (${taskOf(sess.subject).toLowerCase()}), my liege?` : 'Are you still at your studies, my liege?'}</p>
+      <p>{sess.cfg.pomodoro ? 'Well fought! Confirm your study to bank it.' : 'Are you still at your studies, my liege?'}</p>
       <div className="text-6xl font-bold tabular-nums text-blood">{clock(left)}</div>
-      {(s.settings.requireNote || sess.cfg.pomodoro) && <input autoFocus className="inp" placeholder={w ? 'What are you doing? (optional)' : s.settings.requireNote ? 'What did you study? (required)' : 'What did you study? (optional)'} value={note} onChange={(e) => setNote(e.target.value)} />}
+      {(s.settings.requireNote || sess.cfg.pomodoro) && <input autoFocus className="inp" placeholder={s.settings.requireNote ? 'What did you study? (required)' : 'What did you study? (optional)'} value={note} onChange={(e) => setNote(e.target.value)} />}
       {sess.cfg.pomodoro ? <>
         <button disabled={!ok} className="btn btn-gold w-full text-xl py-3" onClick={() => submit(studyBreak)}>Bank it & take a break</button>
         <button disabled={!ok} className="btn w-full" onClick={() => submit(studyCheckIn)}>Bank it & keep going</button>
-      </> : <button disabled={!ok} className="btn btn-gold w-full text-xl py-3" onClick={() => submit(ci)}>{w ? 'Still at it' : 'I am studying'}</button>}
+      </> : <button disabled={!ok} className="btn btn-gold w-full text-xl py-3" onClick={() => submit(ci)}>I am studying</button>}
       <p className="text-xs opacity-75">If the timer runs out, the session pauses. Everything already earned is kept.</p>
     </Modal>
   );
@@ -193,8 +194,9 @@ function Modal({ children, pulse }: { children: React.ReactNode; pulse?: boolean
 
 export function StudyMini({ onOpen }: { onOpen: () => void }) {
   const s = useGame(), now = useNow(), sess = s.session, w = s.work;
-  if (!sess && w) return <button onClick={onOpen} className={`wood rounded px-3 py-1 flex items-center gap-2 ${isAwaiting(w, now) ? 'pulse' : ''}`}>
-    <Icon name="build" size={18} /><span className="font-bold tabular-nums">{clock(totalMs(w, now))}</span><span className="text-xs">{w.status === 'running' ? (isAwaiting(w, now) ? 'CHECK IN' : taskOf(w.subject).toLowerCase()) : w.status === 'missed' ? 'MISSED' : 'paused'}</span></button>;
+  if (!sess && w) { const left = (dueAt(w) ?? now) - now, low = w.status === 'running' && left < 5 * 60000;
+    return <button onClick={() => { if (w.status === 'running') workCheckIn(); onOpen(); }} title={w.status === 'running' ? `Still at it? A click keeps the timer going (it ends in ${clock(left)} without one)` : ''} className={`wood rounded px-3 py-1 flex items-center gap-2 ${low ? 'pulse' : ''}`}>
+      <Icon name="build" size={18} /><span className="font-bold tabular-nums">{clock(totalMs(w, now))}</span><span className={`text-xs ${low ? 'text-blood font-bold' : ''}`}>{w.status === 'running' ? (low ? `CLICK ${clock(left)}` : taskOf(w.subject).toLowerCase()) : 'paused'}</span></button>; }
   if (!sess) return <button onClick={onOpen} className="wood rounded px-3 py-1 flex items-center gap-2 text-sm"><Icon name="study" size={18} />Study</button>;
   const label = sess.status === 'running' ? (isAwaiting(sess, now) ? 'CHECK IN' : 'studying') : sess.status === 'missed' ? 'MISSED' : sess.status === 'break' ? 'break' : 'paused';
   return <button onClick={onOpen} className={`wood rounded px-3 py-1 flex items-center gap-2 ${isAwaiting(sess, now) ? 'pulse' : ''}`}>

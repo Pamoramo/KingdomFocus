@@ -213,7 +213,7 @@ test('productive time: its own timer, a lesser reward, counted apart from study'
     Date.now = () => t; S._with({ ...S.newGame(), events: [{ id: 'e', t: t - 10 * 864e5, type: 'stage', text: '' }] });
     const idle = S.idleDays(S.getState());
     assert.equal(S.workStart('Chores'), null); assert.match(S.studyStart('History')!, /productive/, 'one timer at a time');
-    t += 29 * 60000; S.workCheckIn(); t += 31 * 60000; S.workCheckIn(); S.workEnd();
+    t += 29 * 60000; S.workCheckIn(); t += 29 * 60000; S.workCheckIn(); t += 2 * 60000; S.workEnd();
     const st = S.getState(), rec = st.sessions[0];
     assert.equal(st.work, null); assert.ok(S.isWork(rec) && S.taskOf(rec.subject) === 'Chores' && rec.source === 'timer');
     assert.equal(rec.reward.gold, workReward(60 * 60000, st.settings.rates, S.studyMult(st)).gold, 'paid at the productive rate');
@@ -222,5 +222,21 @@ test('productive time: its own timer, a lesser reward, counted apart from study'
     assert.ok(!st.achievements.includes('first') && !st.achievements.includes('hour'), 'nor for study honours');
     assert.ok(!st.subjects.some((x) => x.includes('Chores')), 'activities are not study subjects');
     assert.equal(S.studyStart('History'), null, 'study can start once it is done');
+  } finally { Date.now = real; }
+});
+
+test('productive time has no check-in prompt: a click every 30 minutes keeps it going, and without one it ends', () => {
+  const real = Date.now; let t = real();
+  try {
+    Date.now = () => t; S._with(S.newGame());
+    S.workStart('Exercise'); t += 10 * 60000; S.workCheckIn(); // an early click banks the time and restarts the window
+    t += 25 * 60000; S.studyTick(); assert.equal(S.getState().work?.status, 'running', 'still within 30 minutes of the click');
+    t += 6 * 60000; S.studyTick(); // 31 minutes since the last click
+    const st = S.getState(), rec = st.sessions[0];
+    assert.equal(st.work, null, 'the timer ended on its own'); assert.equal(rec.verifiedSec, 10 * 60, 'keeping the time up to the last click');
+    assert.ok(rec.endedAt! <= t && rec.reward.gold > 0);
+    // closed the app and came back too late: the click does not revive it
+    S.workStart('Chores'); t += 15 * 60000; S.workCheckIn(); t += 3 * 3600_000; S.workCheckIn();
+    const r2 = S.getState().sessions[0]; assert.equal(S.getState().work, null); assert.equal(r2.verifiedSec, 15 * 60);
   } finally { Date.now = real; }
 });

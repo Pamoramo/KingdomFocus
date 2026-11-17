@@ -27,7 +27,7 @@ for (let i = 0; i < 6; i++) S.grantCompensation(S.stableUuid(`stress:${i}:${USER
 sync('study');
 { // an hour of productive time (not study), timed in the past
   const real = Date.now; let t = real() - 2 * 3600_000; Date.now = () => t;
-  const e = S.workStart('Exercise'); if (e) throw new Error(e); t += 29 * 60000; S.workCheckIn(); t += 31 * 60000; S.workCheckIn(); S.workEnd(); Date.now = real;
+  const e = S.workStart('Exercise'); if (e) throw new Error(e); t += 29 * 60000; S.workCheckIn(); t += 29 * 60000; S.workCheckIn(); t += 2 * 60000; S.workEnd(); Date.now = real;
   assert.ok(S.getState().sessions.some((r) => S.isWork(r) && r.reward.gold > 0));
 }
 sync('productive time');

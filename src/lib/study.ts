@@ -72,6 +72,12 @@ export function takeBreak(s0: Session, now: number, note?: string): Session {
   const pomos = s.pomos + 1, len = pomos % 4 === 0 ? s.cfg.longBreakMin : s.cfg.breakMin;
   return { ...verify(s, now, note), segStart: null, status: 'break', breakUntil: now + len * MIN, pomos };
 }
+/** For timers that must be kept alive by a click (productive time): once the window passes without one, the session
+ *  simply ends at the deadline. Time up to the last click is kept; the unconfirmed rest is not counted. */
+export function expire(s: Session, now: number): Session {
+  const due = dueAt(s); if (s.status !== 'running' || due == null || now <= due) return s;
+  return { ...s, forfeitedMs: s.forfeitedMs + pendingAt(s, due), pendingMs: 0, segStart: null, status: 'ended', endedAt: due, lastTick: Math.max(s.lastTick, now) };
+}
 export function endSession(s0: Session, now: number): Session {
   let s = tick(s0, now);
   if (s.status === 'running') s = verify(s, now);
