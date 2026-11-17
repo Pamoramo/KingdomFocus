@@ -5,7 +5,7 @@ import { courtOf, courtFx, adjust } from './politics.ts';
 import { rating, lossFactor, has as hasTrait, praiseReady, styled, battleCry, type BattleKind } from './commanders.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
-import { type Journey, type JourneyKind, travelMs, addFavour, gameDay, clockOf, setDayLength as nextClock, type WorldState, canStation, screenOf, marchMs, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, LOAN_MIN, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
+import { type Journey, type JourneyKind, travelMs, addFavour, FAVOUR_MAX, gameDay, clockOf, setDayLength as nextClock, type WorldState, canStation, screenOf, marchMs, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, LOAN_MIN, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
 import { simulateLordships } from './lordships.ts';
 import { RANKS, OFFICERS } from './economy.ts';
@@ -104,6 +104,23 @@ export const sendExpedition = () => update((s) => {
   emit({ kind: 'info', text: `Your explorers set out to the ${dir || 'horizon'}.` });
   return event(sendTo(spend(s, cost), 'explore', r, `Explorers heading ${dir || 'out'} into uncharted lands`, { data: { rival: r.id } }), 'diplomacy', `Sent an expedition into uncharted lands to the ${dir}.`);
 });
+/** One-time corrections for kingdoms affected by a past bug, each applied once per world (remembered in world.grants). */
+const GRANTS: { id: string; apply: (s: GameState) => GameState | null }[] = [
+  { // aid used to be forgotten as relations drifted back: those who lent battalions to Kaelholm three times or more get the trust they earned
+    id: 'kaelholm-aid-60', apply: (s) => {
+      const k = s.world.rivals.find((r) => r.name === 'Kaelholm' && !r.bandits);
+      if (!k || s.events.filter((e) => e.text === 'Sent troops to aid Kaelholm.').length < 3) return null;
+      emit({ kind: 'achieve', text: `Kaelholm remembers the battalions you lent them: relations rise to 60 (Trusted), and ${k.ruler} offers an alliance.`, big: true });
+      const offer = k.status === 'neutral' ? [{ id: 'grant-kaelholm-alliance', rival: k.id, kind: 'alliance_offer' as const, day: gameDay(s.world), text: `${k.ruler} of Kaelholm, grateful for the soldiers you lent them, proposes an alliance.` }] : [];
+      return W(s, { ...s.world, inbox: [...s.world.inbox, ...offer], rivals: s.world.rivals.map((r) => (r.id === k.id ? { ...r, relation: Math.max(r.relation, 60), favour: FAVOUR_MAX } : r)) });
+    } },
+];
+/** Applies each grant once, when it applies (a grant waits if, say, the cloud save has not loaded yet). */
+function applyGrants() {
+  const s = getState(), done = new Set(s.world.grants ?? []); let o = s; const applied: string[] = [];
+  for (const g of GRANTS) { if (done.has(g.id)) continue; const r = g.apply(o); if (r) { o = r; applied.push(g.id); } }
+  if (applied.length) setState(W(o, { ...o.world, grants: [...(s.world.grants ?? []), ...applied] }));
+}
 export const worldTick = () => {
   // the game's calendar: started the day you first studied, counting real days until you choose otherwise
   if (!getState().world.clock) { const first = Math.min(Date.now(), ...getState().sessions.map((x) => x.startedAt)); setState(W(getState(), { ...getState().world, clock: clockOf(getState().world, first) })); }
@@ -116,6 +133,7 @@ export const worldTick = () => {
       return { ...r, favour: Math.min(60, aid * 12 + gifts * 4) };
     }) }));
   }
+  applyGrants();
   const s0 = getState(), today = gameDay(s0.world);
   if ((s0.world.v ?? 1) < 2) setState(W(s0, upgradeWorld(s0.world))); // the world grows
   discoverTick();

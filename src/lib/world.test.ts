@@ -177,3 +177,18 @@ test('an older save: goodwill is credited for the aid the chronicle remembers', 
   const r = S.getState().world.rivals.find((x) => x.id === k.id)!; assert.equal(r.favour !== undefined && r.favour >= 39, true, `three aids and a gift remembered (${r.favour})`);
   assert.ok(S.getState().world.rivals.filter((x) => !x.bandits && x.id !== k.id).every((x) => (x.favour ?? 0) <= 1));
 });
+
+test('the Kaelholm grant: three loans recorded → relations 60, lasting goodwill and an alliance offer, once', () => {
+  const g = S.newGame(), k = g.world.rivals.find((r) => !r.bandits)!, ev = (text: string) => ({ id: Math.random().toString(), t: Date.now(), type: 'diplomacy', text });
+  const world = { ...g.world, rivals: g.world.rivals.map((r) => (r.id === k.id ? { ...r, name: 'Kaelholm', relation: 24, status: 'neutral' as const } : r)) };
+  const kh = () => S.getState().world.rivals.find((r) => r.id === k.id)!;
+  // not yet loaded (or only two loans): it waits
+  S._with({ ...g, world, events: [...g.events, ev('Sent troops to aid Kaelholm.'), ev('Sent troops to aid Kaelholm.')] }); WA.worldTick();
+  assert.ok(kh().relation < 60 && !(S.getState().world.grants ?? []).includes('kaelholm-aid-60'));
+  S._with({ ...S.getState(), events: [...S.getState().events, ev('Sent troops to aid Kaelholm.')] }); WA.worldTick();
+  assert.ok(kh().relation >= 58, `trusted (${kh().relation})`); assert.ok((kh().favour ?? 0) >= 59);
+  const offer = S.getState().world.inbox.find((m) => m.kind === 'alliance_offer' && m.rival === k.id)!; assert.ok(offer, 'an alliance offer arrives');
+  // applied once: lowering it again is not undone by the grant
+  S._with({ ...S.getState(), world: { ...S.getState().world, rivals: S.getState().world.rivals.map((r) => (r.id === k.id ? { ...r, relation: 10 } : r)) } }); WA.worldTick(); assert.equal(kh().relation, 10);
+  WA.answerMissive(offer.id, true); assert.equal(kh().status, 'ally', 'accepting seals the alliance');
+});
