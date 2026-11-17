@@ -79,7 +79,8 @@ test('lords grow old and die; the heir takes the throne and the realm remembers'
   w = set(w, id, (r) => ({ ...r, lordship: { ...r.lordship!, lord: { ...r.lordship!.lord, age: 95, traits: ['sickly'] } } }));
   const heir = L(w, id).lord.heir;
   for (let i = 0; i < 80 && R(w, id).ruler === old; i++) w = run(w, 1, 1 + i);
-  assert.equal(R(w, id).ruler, heir, 'the heir rules'); assert.ok(L(w, id).lord.age < 40 && L(w, id).lord.gen >= 2);
+  assert.equal(R(w, id).ruler, heir, 'the heir rules'); assert.notEqual(heir.split(' ')[0], old.split(' ')[0], 'a different given name');
+  assert.notEqual(L(w, id).lord.heir.split(' ')[0], heir.split(' ')[0], 'and the next heir too'); assert.ok(L(w, id).lord.age < 40 && L(w, id).lord.gen >= 2);
   assert.ok(L(w, id).history.some((h) => h.text.includes(old) && h.text.includes(heir)), 'written in the history');
 });
 

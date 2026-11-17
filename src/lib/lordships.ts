@@ -70,13 +70,27 @@ export function lordshipOf(w: Pick<WorldState, 'seed' | 'rivals'>, r: Rival): Lo
   const R = rng(hash(`lord:${w.seed}:${r.id}`)), L = r.level, pick = <T,>(a: readonly T[]) => a[Math.floor(R() * a.length)];
   const lean: Record<Personality, LordTrait[]> = { aggressive: ['warlike', 'ambitious', 'cruel'], mercantile: ['shrewd', 'greedy', 'builder'], honorable: ['just', 'cautious', 'generous'], treacherous: ['cruel', 'shrewd', 'ambitious'], pious: ['devout', 'generous', 'just'] };
   const traits = [pick(lean[r.personality]), pick(TRAITS)].filter((t, i, a) => a.indexOf(t) === i);
-  const house = r.ruler.split(' ').slice(-1)[0], ties: Record<string, number> = {};
+  const { house } = houseOf(r.ruler, r.name), ties: Record<string, number> = {};
   for (const o of lords(w)) if (o.id !== r.id) ties[o.id] = r.friends.includes(o.id) ? 55 : r.foes.includes(o.id) ? -55 : clamp(Math.round((compat(r.personality, o.personality) - between(r, o) * 10) + (R() - 0.5) * 20));
   const has: Record<Holding, number> = { farm: 2 + L, lumber: 1 + Math.floor(L / 2), quarry: Math.floor(L / 2), market: Math.max(0, L - 2), barracks: Math.max(1, L - 1), walls: L, church: L >= 3 ? 1 : 0 };
   const founded = 300 + (hash(r.id + w.seed) % 500);
-  return { lord: { name: r.ruler, age: 25 + Math.floor(R() * 30), traits, since: '', heir: nameFor(`${r.id}:heir:0:${w.seed}`).split(' ')[0] + ' ' + house, house, gen: 1 + Math.floor(R() * 6) },
+  const gen = 3 + Math.floor(R() * 5);
+  return { lord: { name: r.ruler, age: 25 + Math.floor(R() * 30), traits, since: '', heir: heirOf(r.ruler, r.name, `${r.id}:0:${w.seed}`), house, gen },
     gold: 150 * L, food: 120 + 40 * L, wood: 60 * L, stone: 40 * L, has, ties, wars: {}, allies: [...r.friends], plan: 'Tending the realm',
-    history: [{ day: '', text: `The House of ${house} has ruled ${r.name} since the year ${founded}.` }, { day: '', text: `${r.ruler} holds the ${L >= 4 ? 'great castle' : L >= 2 ? 'castle' : 'keep'}, the ${['third', 'fourth', 'fifth', 'sixth', 'seventh'][Math.floor(R() * 5)]} of the line.` }], days: 0 };
+    history: [{ day: '', text: `The House of ${house} has ruled ${r.name} since the year ${founded}.` }, { day: '', text: `${r.ruler} holds the ${L >= 4 ? 'great castle' : L >= 2 ? 'castle' : 'keep'}, the ${ORDINAL[gen - 1]} of the line.` }], days: 0 };
+}
+export const ORDINAL = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth'];
+/** The house a lord belongs to, and how his kin are named: "Stonehand", "of Dunmere", or for "X the Bold", the realm itself. */
+export function houseOf(ruler: string, realm: string) {
+  const rest = ruler.split(' ').slice(1).join(' ');
+  if (!rest || rest.startsWith('the ')) return { house: realm, kin: `of ${realm}` };
+  return rest.startsWith('of ') ? { house: rest.slice(3), kin: rest } : { house: rest, kin: rest };
+}
+/** An heir with a different given name from the lord. */
+function heirOf(ruler: string, realm: string, seed: string) {
+  const first = ruler.split(' ')[0], { kin } = houseOf(ruler, realm);
+  for (let k = 0; k < 12; k++) { const f = nameFor(`${seed}:${k}`).split(' ')[0]; if (f !== first) return `${f} ${kin}`; }
+  return `${first} the Younger`;
 }
 /** How readily two characters get along (before distance and events). */
 function compat(a: Personality, b: Personality): number {
@@ -161,7 +175,7 @@ function turn(w: WorldState, today: string, d: number, news: News[]): WorldState
 function succession(w: WorldState, r: Rival, l: Lordship, today: string, news: News[], R: () => number) {
   const old = l.lord, heir = old.heir, pick = <T,>(a: readonly T[]) => a[Math.floor(R() * a.length)];
   const traits = [R() < 0.5 && old.traits[0] !== 'sickly' ? old.traits[0] : pick(TRAITS), pick(TRAITS)].filter((t, i, a) => a.indexOf(t) === i);
-  l.lord = { name: heir, age: 18 + Math.floor(R() * 20), traits, since: today, heir: nameFor(`${r.id}:heir:${old.gen + 1}:${w.seed}`).split(' ')[0] + ' ' + old.house, house: old.house, gen: old.gen + 1 };
+  l.lord = { name: heir, age: 18 + Math.floor(R() * 20), traits, since: today, heir: heirOf(heir, r.name, `${r.id}:${old.gen + 1}:${w.seed}`), house: old.house, gen: old.gen + 1 };
   r.ruler = heir;
   // a new lord means new friendships: ties drift halfway back to where their natures put them
   for (const id of Object.keys(l.ties)) l.ties[id] = Math.round(l.ties[id] * 0.6);

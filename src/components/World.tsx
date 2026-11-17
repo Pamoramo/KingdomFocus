@@ -6,6 +6,7 @@ import { setUI, toggleWorldView } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res, canAfford } from '../lib/rewards.ts';
 import { TACTICS, TERRAINS, tacticLock, sidePower, type Tactic, type Terrain } from '../lib/battle.ts';
+import { lordshipOf, incomeOf, armyCapOf, TRAIT, ORDINAL, type News } from '../lib/lordships.ts';
 import { canStation, garrisonsAt, GARRISON_TRIBUTE, marchMs, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, LOAN_MIN, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, vassalGold, vassalRenown, VASSAL_GOLD_MAX, type Rival, type Engines, type Stance } from '../lib/war.ts';
 import * as WA from '../lib/warActions.ts';
 import { courtOf, courtFx } from '../lib/politics.ts';
@@ -23,7 +24,7 @@ const STATUS: Record<string, string> = { neutral: 'Neutral', ally: 'Allied', war
 
 export function WorldPanel() {
   const s = useGame(), ui = useUI(), w = s.world;
-  const [tab, setTab] = useState<'realms' | 'campaign' | 'works' | 'reports'>(w.campaign || w.threat ? 'campaign' : 'realms');
+  const [tab, setTab] = useState<'realms' | 'campaign' | 'works' | 'reports' | 'news'>(w.campaign || w.threat ? 'campaign' : 'realms');
   const sel = w.rivals.find((r) => r.id === ui.selRival);
   return <div className="space-y-3">
     <div className="flex gap-2"><button className="btn flex-1" onClick={() => setUI({ view: ui.view === 'world' ? 'kingdom' : 'world' })}>{ui.view === 'world' ? 'Return to your kingdom' : 'Open the world map'}</button>
@@ -33,11 +34,12 @@ export function WorldPanel() {
     {w.inbox.length > 0 && <Inbox />}
     <OnTheRoad />
     <LentOut />
-    <Tabs value={tab} onChange={setTab} items={[['realms', 'Realms'], ['campaign', w.campaign ? `Siege · day ${w.campaign.day}` : 'War'], ['works', 'Siege works'], ['reports', 'Reports']]} />
+    <Tabs value={tab} onChange={setTab} items={[['realms', 'Realms'], ['campaign', w.campaign ? `Siege · day ${w.campaign.day}` : 'War'], ['works', 'Siege works'], ['news', 'News'], ['reports', 'Reports']]} />
     {tab === 'realms' && (sel ? <RivalDetail r={sel} /> : <Realms />)}
     {tab === 'campaign' && <CampaignTab />}
     {tab === 'works' && <Works />}
     {tab === 'reports' && <Reports />}
+    {tab === 'news' && <RealmNews />}
   </div>;
 }
 
@@ -91,6 +93,45 @@ function Dominion() {
   </Section>;
 }
 
+const NEWS_ICON: Record<News['kind'], string> = { build: 'build', grow: 'realm', trade: 'gold', war: 'army', peace: 'check', alliance: 'renown', aid: 'army', ruler: 'renown', army: 'army', famine: 'habits' };
+/** What the other realms have been doing: wars, treaties, new lords, new walls. Only realms your mapmakers know. */
+function RealmNews() {
+  const s = useGame(), [only, setOnly] = useState<'all' | 'war' | 'diplomacy' | 'realm'>('all'), news = s.world.news ?? [];
+  const groups: Record<typeof only, News['kind'][] | null> = { all: null, war: ['war', 'peace', 'aid', 'army'], diplomacy: ['alliance', 'trade', 'peace', 'aid'], realm: ['build', 'grow', 'ruler', 'famine'] };
+  const list = news.filter((n) => !groups[only] || groups[only]!.includes(n.kind));
+  return <Section title="News of the realms">
+    <div className="flex gap-1 flex-wrap">{(['all', 'war', 'diplomacy', 'realm'] as const).map((k) => <button key={k} className={`btn !py-0 text-xs ${only === k ? 'btn-gold' : ''}`} onClick={() => setOnly(k)}>{k === 'all' ? 'All' : k === 'war' ? 'War' : k === 'diplomacy' ? 'Diplomacy' : 'Lords & building'}</button>)}</div>
+    {!list.length && <p className="text-sm opacity-75">No news yet. The other lords go about their business day by day; come back tomorrow.</p>}
+    {list.slice(0, 30).map((n, i) => <button key={i} className="w-full text-left text-sm flex gap-2 border-b border-black/10 pb-1" onClick={() => { const id = n.ids.find((x) => s.world.rivals.some((r) => r.id === x && r.known !== false)); if (id) setUI({ selRival: id }); }}>
+      <span className="w-5 shrink-0 pt-0.5"><Icon name={NEWS_ICON[n.kind]} size={16} /></span><span className="flex-1">{n.text}</span><span className="text-xs opacity-60 whitespace-nowrap">{n.day.slice(5)}</span></button>)}
+  </Section>;
+}
+/** A realm up close: its lord, treasury and lands, army, friends and enemies, what it is about, and its history. */
+function LordshipPanel({ r }: { r: Rival }) {
+  const s = useGame(), w = s.world, l = lordshipOf(w, r), inc = incomeOf(w, r, l), cap = armyCapOf(r, l), name = (id: string) => w.rivals.find((x) => x.id === id);
+  const knownName = (id: string) => { const x = name(id); return x && x.known !== false ? x.name : 'a far realm'; };
+  const ties = Object.entries(l.ties).filter(([id]) => name(id)?.known !== false).sort((a, b) => b[1] - a[1]), friends = ties.filter(([, t]) => t >= 40).slice(0, 4), enemies = ties.filter(([, t]) => t <= -30).reverse().slice(0, 4);
+  const rate = (n: number) => `${n >= 0 ? '+' : ''}${n}/day`;
+  return <Section title="Lordship">
+    <div className="text-sm space-y-0.5">
+      <div><b>{l.lord.name}</b>, {l.lord.age} years old · {ORDINAL[l.lord.gen - 1] ?? `${l.lord.gen}th`} of the House of {l.lord.house}</div>
+      <div className="flex flex-wrap gap-1">{l.lord.traits.map((t) => <span key={t} title={TRAIT[t].desc} className="text-xs border border-black/30 rounded px-1">{TRAIT[t].name}</span>)}</div>
+      <div className="text-xs opacity-80">Heir: {l.lord.heir}{l.lord.since ? ` · reigning since ${l.lord.since}` : ''}</div>
+      <div className="text-xs"><b>Now:</b> {l.plan}</div>
+    </div>
+    <div className="grid grid-cols-2 gap-x-3 text-xs">
+      <div>Treasury: {fmt(l.gold)} gold ({rate(inc.gold - inc.upkeep.gold)})</div><div>Granaries: {fmt(l.food)} food ({rate(inc.food - inc.upkeep.food)})</div>
+      <div>Timber: {fmt(l.wood)} ({rate(inc.wood)})</div><div>Stone: {fmt(l.stone)} ({rate(inc.stone)})</div>
+      <div>Army: ≈{fmt(r.power)} of {fmt(cap)} they can keep</div><div>Castle level {r.level} · walls {r.wallMax}</div>
+    </div>
+    <div className="text-xs">Holdings: {(Object.keys(l.has) as (keyof typeof l.has)[]).filter((k) => l.has[k]).map((k) => { const n = l.has[k], one = n === 1, word = { walls: one ? 'wall work' : 'wall works', farm: one ? 'farm' : 'farms', lumber: one ? 'lumber camp' : 'lumber camps', quarry: one ? 'quarry' : 'quarries', market: one ? 'market' : 'markets', church: one ? 'church' : 'churches', barracks: 'barracks' }[k]; return `${n} ${word}`; }).join(', ')}</div>
+    {Object.keys(l.wars).length > 0 && <div className="text-xs text-blood">At war with {Object.keys(l.wars).map(knownName).join(', ')}.</div>}
+    {l.allies.length > 0 && <div className="text-xs">Allied with {l.allies.map(knownName).join(', ')}.</div>}
+    {(friends.length > 0 || enemies.length > 0) && <div className="text-xs">{friends.length > 0 && <>Friendly with {friends.map(([id, t]) => `${knownName(id)} (${t})`).join(', ')}. </>}{enemies.length > 0 && <>Hostile to {enemies.map(([id, t]) => `${knownName(id)} (${t})`).join(', ')}.</>}</div>}
+    <details className="text-xs"><summary className="cursor-pointer">History of {r.name}</summary>
+      {[...l.history].reverse().map((h, i) => <div key={i} className="border-l-2 border-black/20 pl-2 my-0.5">{h.day && <span className="opacity-60">{h.day} · </span>}{h.text}</div>)}</details>
+  </Section>;
+}
 /** Your battalions quartered in a vassal's or ally's castle: send more, see who is there, bring them home. */
 function GarrisonPanel({ r }: { r: Rival }) {
   const s = useGame(), [pick, setPick] = useState<string[]>([]), here = garrisonsAt(s.world, r.id), coming = (s.world.journeys ?? []).filter((j) => j.kind === 'station' && j.rival === r.id);
@@ -117,6 +158,7 @@ function RivalDetail({ r }: { r: Rival }) {
         <div className="text-xs opacity-80">{TIER[tierOf(r)].name}, {leagues(r).toFixed(1)} leagues away: {TIER[tierOf(r)].desc}</div>
         <button className="btn btn-gold !py-0.5 mt-1" onClick={() => setUI({ view: 'rival', visit: r.id, panel: mobile() ? null : 'world' })}>Visit {r.name}</button>
         {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}</div></div>
+    {!r.bandits && <LordshipPanel r={r} />}
     {canStation(r) && <GarrisonPanel r={r} />}
     {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +{Math.round(vassalGold(r) * 100)}% gold and +{(vassalRenown(r) * 100).toFixed(1)}% renown from every study session (a greater realm pays more) (all vassals together give at most +{Math.round(VASSAL_GOLD_MAX * 100)}% gold).</p> : <>
       {r.status === 'war' && <Spoils r={r} />}
