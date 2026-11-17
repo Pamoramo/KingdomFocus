@@ -14,7 +14,7 @@ import { AssignmentsPanel, assignmentBadge } from './Assignments.tsx';
 import { assignmentsTick } from '../lib/assignments.ts';
 import { courtTick } from '../lib/realmActions.ts';
 import { initPersistence } from '../lib/sync.ts';
-import { getState, setState, studyTick, fxBus, neglect, idleDays, type Fx } from '../lib/state.ts';
+import { getState, setState, onDuty, studyTick, fxBus, neglect, idleDays, type Fx } from '../lib/state.ts';
 import { isAwaiting, dueAt } from '../lib/study.ts';
 import { BUILDINGS, STAGES } from '../lib/economy.ts';
 import { useGame, useUI, fmt } from './hooks.ts';
@@ -167,7 +167,7 @@ export default function Game() {
   }, [ui.view, ui.visit]);
   const Panel = ui.panel ? PANELS[ui.panel] : null;
   const placing = ui.placing ? BUILDINGS[ui.placing].name : null;
-  const hint = placing ? `Placing ${placing}: tap the map${BUILDINGS[ui.placing!].paint ? ' or drag to paint' : ''}` : ui.moving ? 'Tap a new spot for the building' : ui.selArmy ? `Tap the map to march the ${ui.selArmy}` : ui.selBat && !Panel ? 'Tap the map to march the battalion' : null;
+  const hint = placing ? `Placing ${placing}: tap the map${BUILDINGS[ui.placing!].paint ? ' or drag to paint' : ''}` : ui.moving ? 'Tap a new spot for the building' : ui.selArmy ? `Tap the map to march the ${ui.selArmy}` : ui.selBat && !Panel ? (() => { const st = getState(), b = st.battalions.find((x) => x.id === ui.selBat); return b && onDuty(st, b) ? 'This battalion is on duty (patrol, guard or quarters): give it Hold formation orders to march it' : 'Tap the map to march the battalion'; })() : null;
   return <div className="fixed inset-0 overflow-hidden select-none">
     <div ref={host} className="absolute inset-0" />
     <TopBar />

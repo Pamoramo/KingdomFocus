@@ -195,8 +195,8 @@ export class KingdomScene extends Phaser.Scene {
     if (this.happenings.tap(wx, wy)) return;
     const hit = this.army.hit(wx, wy);
     if (hit) { setUI({ selBat: hit.bat, selArmy: null, selBuilding: null, inspect: hit.squad ? { squad: hit.squad, idx: hit.idx! } : null, panel: 'army' }); return; }
-    if (ui.selArmy) { marchArmy(ui.selArmy, wx, wy + 8); this.marker(wx, wy); return; }
-    if (ui.selBat) { marchTo(ui.selBat, wx, wy + 8); this.marker(wx, wy); return; }
+    if (ui.selArmy) { if (!marchArmy(ui.selArmy, wx, wy + 8)) this.marker(wx, wy); return; }
+    if (ui.selBat) { if (!marchTo(ui.selBat, wx, wy + 8)) this.marker(wx, wy); return; }
     const b = this.world.buildingAt(tx, ty, s);
     setUI({ selBuilding: b?.id ?? null, inspect: null, panel: b ? 'build' : ui.panel === 'build' ? null : ui.panel });
   }

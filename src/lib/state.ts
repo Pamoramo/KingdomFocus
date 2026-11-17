@@ -451,9 +451,17 @@ export const transferSquad = (sid: string, bat: string) => update((s) => {
   return mark({ ...s, squads: s.squads.map((x) => (x.id === sid ? { ...x, bat } : x)) }, 'squads', sid);
 });
 const clampPos = (x: number, y: number) => ({ x: Math.max(2 * TILE, Math.min((MAP_W - 2) * TILE, x)), y: Math.max(3 * TILE, Math.min((MAP_H - 1) * TILE, y)) });
-export const marchTo = (id: string, x: number, y: number) => editBattalion(id, clampPos(x, y));
+/** On patrol, on guard or resting in quarters: the battalion keeps to its duties and cannot be marched about. */
+export const onDuty = (s: GameState, b: Battalion) => (b.orders === 'patrol' || b.orders === 'garrison' || inQuarters(s, b.id));
+const DUTY_MSG: Record<string, string> = { patrol: 'is on patrol', garrison: 'is on guard duty', quarters: 'is resting in quarters' };
+export const marchTo = (id: string, x: number, y: number) => update((s) => {
+  const b = s.battalions.find((q) => q.id === id); if (!b) return;
+  if (onDuty(s, b)) return `${b.name} ${DUTY_MSG[inQuarters(s, id) ? 'quarters' : b.orders!]}. Give them "Hold formation" orders to march them.`;
+  return mark({ ...s, battalions: s.battalions.map((q) => (q.id === id ? { ...q, ...clampPos(x, y) } : q)) }, 'battalions', id);
+});
 export const marchArmy = (army: string, x: number, y: number) => update((s) => {
-  const bs = s.battalions.filter((b) => b.army === army); if (!bs.length) return;
+  const all = s.battalions.filter((b) => b.army === army), bs = all.filter((b) => !onDuty(s, b)); if (!all.length) return;
+  if (!bs.length) return `Every battalion of the ${army} is on patrol, on guard or in quarters`; // those on duty stay at their posts
   const cx = bs.reduce((a, b) => a + b.x, 0) / bs.length, cy = bs.reduce((a, b) => a + b.y, 0) / bs.length;
   let o = s;
   for (const b of bs) o = mark({ ...o, battalions: o.battalions.map((q) => (q.id === b.id ? { ...q, ...clampPos(b.x - cx + x, b.y - cy + y) } : q)) }, 'battalions', b.id);

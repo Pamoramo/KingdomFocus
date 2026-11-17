@@ -173,3 +173,14 @@ test('quarters: beds in barracks take off-duty soldiers out of formation; they d
   const xp = (id: string) => S.getState().squads.find((q) => q.id === id)!.xp;
   assert.ok(xp('q4') > xp('q1') * 1.15, `quartered archers drilled (${xp('q4').toFixed(1)} vs ${xp('q1').toFixed(1)})`);
 });
+
+test('battalions on patrol, on guard or in quarters stay at their posts; only those in formation march', () => {
+  S._with({ ...S.newGame(), stage: 3 }); S.newBattalion('A'); S.newBattalion('B');
+  const [a, b] = S.getState().battalions.map((x) => x.id), pos = (id: string) => S.getState().battalions.find((x) => x.id === id)!;
+  const a0 = { ...pos(a) };
+  S.setOrders(a, 'patrol'); assert.match(S.marchTo(a, 900, 900)!, /on patrol/); assert.equal(pos(a).x, a0.x, 'did not move');
+  S.setOrders(a, 'quarters'); assert.match(S.marchTo(a, 900, 900)!, /quarters/);
+  S.setOrders(a, 'formation'); assert.equal(S.marchTo(a, 900, 900), null); assert.notEqual(pos(a).x, a0.x, 'marches once back in formation');
+  S.setOrders(b, 'garrison'); const b0 = { ...pos(b) }; S.marchArmy(pos(b).army, 300, 300);
+  assert.deepEqual([pos(b).x, pos(b).y], [b0.x, b0.y], 'the army marches without the guard');
+});
