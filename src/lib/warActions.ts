@@ -146,7 +146,7 @@ function send(s: GameState, kind: JourneyKind, r: Rival, label: string, extra: P
 }
 const mins = (ms: number) => (ms < 90000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)} min`);
 export const trade = (id: string, give: keyof Res, amount: number, want: keyof Res) => update((s) => {
-  const r = rival(s, id); if (!r) return; const why = canTrade(r); if (why) return why;
+  const r = rival(s, id); if (!r) return; const why = canTrade(r, s.world); if (why) return why;
   amount = Math.floor(amount); if (amount <= 0 || give === want) return 'Choose an amount and two different goods';
   if (!canAfford(s.res, { [give]: amount })) return 'Not enough to trade';
   const q = tradeQuote(r, give, amount, want, courtFx(courtOf(s.world)).trade), today = dayStr();
@@ -320,6 +320,7 @@ export const answerMissive = (mid: string, accept: boolean) => update((s) => {
     if (accept) { if (!canAfford(s.res, { gold: m.amount! })) return 'Not enough gold'; o = W(spend(o, { gold: m.amount! }), shiftRelations(o.world, r.id, 15)); }
     else o = W(o, shiftRelations(o.world, r.id, -15));
   } else if (m.kind === 'trade_offer' && accept) {
+    { const why = canTrade(r, s.world, '-'); if (why && why !== 'You are at war') return why; }
     if (!canAfford(s.res, { gold: m.amount! })) return 'Not enough gold';
     o = ledger(spend(o, { gold: m.amount! }), 'trade', uid(), { ...ZERO, wood: Math.round(m.amount! * 0.5), stone: Math.round(m.amount! * 0.35) });
     o = W(o, shiftRelations(o.world, r.id, 5));
@@ -437,19 +438,51 @@ export const callAllies = () => update((s) => {
   let w: WorldState = { ...s.world, threat: { ...t, allyHelp: ids } }; for (const id of ids) w = shiftRelations(w, id, -5, false);
   return W(s, w);
 });
-export const defend = (tactic: Tactic) => update((s) => {
+/** Whether your castle is walled in: enough curtain wall, palisade or gatehouses to shut the gates on an enemy. */
+export const walledOf = (s: GameState) => count(s, 'wall') + count(s, 'palisade') + 3 * count(s, 'gatehouse') + count(s, 'gate') >= 12;
+/** How long an unwalled town has between seeing the enemy and the enemy walking in (time to pay them off). */
+export const OPEN_GATES_MS = 20_000;
+/** A town without walls cannot be besieged; it is simply entered. If their host outnumbers your soldiers at home, they pour in
+ *  unopposed and sack the town; otherwise your soldiers meet them in the open streets, with no wall to help. */
+export const breachTick = (now = Date.now()) => {
+  const s = getState(), t = s.world.threat; if (!t || walledOf(s) || now - t.since < OPEN_GATES_MS) return;
+  update((s) => {
+    const t = s.world.threat; if (!t || walledOf(s)) return; const r = rival(s, t.rival); if (!r) return W(s, { ...s.world, threat: null });
+    const mine = sidePower([...unitsOf(homeSquads(s)), ...allyUnits(s, t.allyHelp, 0.35)]);
+    if (t.power > mine) return sackOpen(s, r, mine);
+    emit({ kind: 'war', text: `With no walls to hold them back, ${r.name} marches straight into your town. Your soldiers meet them in the streets!` });
+    return fight(s, 'assault', true);
+  });
+};
+/** The enemy walks into an unwalled town that has too few soldiers to stop them. */
+function sackOpen(s: GameState, r: Rival, mine: number): GameState {
+  const homeBats = s.battalions.filter((b) => !awayBats(s).has(b.id)).map((b) => b.id), home = homeSquads(s);
+  let o = home.length ? applyLosses(s, unitsOf(home), home.map((q) => Math.min(q.count, Math.ceil(q.count * 0.2)))) : s; // the few who stand are cut down
+  if (home.length) o = record(o, homeBats.filter((id) => o.squads.some((q) => q.bat === id)), false);
+  const take = { gold: Math.min(8000, Math.floor(o.res.gold * 0.25)), wood: Math.floor(o.res.wood * 0.18), stone: Math.floor(o.res.stone * 0.18) };
+  const w = { ...o.world, threat: null, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.round(x.power * 0.95) } : x)) };
+  o = scar(spend(W(o, w), take), 7);
+  emit({ kind: 'war', text: `You have no walls, and ${r.name}'s host (≈${Math.round(s.world.threat!.power)}) far outnumbers your ${Math.round(mine)} at home. They walk straight in and sack the town: ${take.gold} gold, ${take.wood} wood and ${take.stone} stone are carried off.`, big: true });
+  const lost = home.reduce((a, q) => a + Math.min(q.count, Math.ceil(q.count * 0.2)), 0);
+  o = W(o, { ...o.world, reports: [{ id: uid(), t: Date.now(), title: `${r.name} sacked your unwalled town`, win: false, you: home.reduce((a, q) => a + q.count, 0), foe: Math.round(s.world.threat!.power), lostYou: lost, lostFoe: 0, loot: { gold: -take.gold, wood: -take.wood, stone: -take.stone },
+    lines: [`No wall stood between ${r.name} and your streets, and their host outnumbered your defenders, so they simply walked in.`, `They carried off ${take.gold} gold, ${take.wood} wood and ${take.stone} stone${lost ? `; ${lost} of your soldiers fell trying to stop them` : ''}.`, 'Build walls, a palisade or a gatehouse (12+ sections) so the next army must besiege you instead.'] }, ...o.world.reports].slice(0, 25) });
+  return event(o, 'war', `${r.name} walked into your unwalled town and sacked it.`);
+}
+export const defend = (tactic: Tactic) => update((s) => fight(s, tactic, !walledOf(s)));
+/** Your garrison fights the host at your gates; `open` when there is no wall and the battle is fought in the streets. */
+function fight(s: GameState, tactic: Tactic, open: boolean): GameState | string | undefined {
   const t = s.world.threat; if (!t) return; const r = rival(s, t.rival)!;
   const mine = unitsOf(homeSquads(s)), a = [...mine, ...allyUnits(s, t.allyHelp, 0.35)], foe = armyOf(r, t.power), seed = Date.now() % 100000;
   const homeBats = s.battalions.filter((b) => !awayBats(s).has(b.id)).map((b) => b.id);
   const cmd = commanderOf(s, homeBats, 'defend', a);
-  const lock = a.length ? tacticLock(a, tactic, 'hills', cmd) : null; if (lock) return lock;
+  const lock = a.length ? tacticLock(a, tactic, open ? 'plains' : 'hills', cmd) : null; if (lock) return open ? fight(s, 'assault', open) : lock;
   // simulate with the enemy as attacker and you behind your walls
-  let res = simulate({ name: r.name, units: foe, commander: Math.min(4, r.level - 1), tactic: enemyTactic(r, seed) }, { name: 'Your garrison', units: a.length ? a : [{ cls: 'peasant', count: 5, rank: 0 }], commander: cmd, tactic, fort: fortOf(s) }, 'hills', seed, true);
+  let res = simulate({ name: r.name, units: foe, commander: Math.min(4, r.level - 1), tactic: enemyTactic(r, seed) }, { name: 'Your garrison', units: a.length ? a : [{ cls: 'peasant', count: 5, rank: 0 }], commander: cmd, tactic, fort: open ? 0 : fortOf(s) }, open ? 'plains' : 'hills', seed, true);
   res = capLosses(res, 'b', lossCap(s, homeBats, 0.25));
   const won = res.winner === 'b';
   let o = record(applyLosses(s, a, res.lossB), homeBats.filter((id) => s.squads.some((q) => q.bat === id)), won);
   const flipped: BattleResult = { ...res, winner: won ? 'a' : 'b', lossA: res.lossB, lossB: res.lossA, startA: res.startB, startB: res.startA, moraleA: res.moraleB, moraleB: res.moraleA };
-  play(`Defence of your castle`, a, foe, flipped, 'Your garrison', r.name, 0xb3242a, r.color, undefined, { biome: 'grassland', walls: count(s, 'wall') + count(s, 'gatehouse') > 0 ? { side: 0, kind: 'wall' } : count(s, 'palisade') > 0 ? { side: 0, kind: 'palisade' } : undefined, cry: cryOf(s, homeBats, 'defend') });
+  play(open ? 'Battle in your streets' : `Defence of your castle`, a, foe, flipped, 'Your garrison', r.name, 0xb3242a, r.color, undefined, { biome: 'grassland', walls: open ? undefined : count(s, 'wall') + count(s, 'gatehouse') > 0 ? { side: 0, kind: 'wall' } : count(s, 'palisade') > 0 ? { side: 0, kind: 'palisade' } : undefined, cry: cryOf(s, homeBats, 'defend') });
   o = report(o, `Defence against ${r.name}`, won, flipped, a, foe, won ? defenceSpoils(r) : undefined);
   let w = { ...o.world, threat: null, rivals: o.world.rivals.map((x) => (x.id === r.id ? { ...x, power: Math.round(x.power * (won ? 0.6 : 0.9)), relation: Math.min(100, x.relation + 10), beaten: won ? 1 : x.beaten } : x)) };
   if (won) { o = celebrate(payLoot(W(o, w), defenceSpoils(r)), 6); emit({ kind: 'achieve', text: `${r.name}'s host is broken before your walls!` }); }
@@ -458,8 +491,8 @@ export const defend = (tactic: Tactic) => update((s) => {
     o = scar(spend(W(o, w), take), 4); emit({ kind: 'war', text: `${r.name} breaks in and carries off ${take.gold} gold before withdrawing. Fires smoulder in the town.` });
   }
   void w;
-  return event(o, 'war', won ? `Repelled ${r.name}'s siege.` : `${r.name} plundered your stores and withdrew.`);
-});
+  return event(o, 'war', won ? `Repelled ${r.name}'s ${open ? 'attack' : 'siege'}.` : `${r.name} plundered your stores and withdrew.`);
+}
 export const payTribute = () => update((s) => {
   const t = s.world.threat; if (!t) return; const r = rival(s, t.rival)!, gold = Math.min(Math.floor(s.res.gold), 150 * r.level + 50 * s.stage);
   const o = spend(s, { gold });

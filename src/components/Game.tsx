@@ -8,7 +8,7 @@ import { RivalScene } from '../game/RivalScene.ts';
 import { ParadeScene } from '../game/ParadeScene.ts';
 import { audio, type Sfx } from '../game/audio.ts';
 import { WEATHER_NAME, type Weather } from '../game/weather.ts';
-import { worldTick, journeysTick } from '../lib/warActions.ts';
+import { worldTick, journeysTick, breachTick } from '../lib/warActions.ts';
 import { WorldPanel, BattleReport, worldBadge } from './World.tsx';
 import { AssignmentsPanel, assignmentBadge } from './Assignments.tsx';
 import { assignmentsTick } from '../lib/assignments.ts';
@@ -124,7 +124,7 @@ export default function Game() {
     initPersistence();
     const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current!, pixelArt: true, backgroundColor: '#2b2118', scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' }, scene: [KingdomScene, WorldScene, RivalScene, BattleScene, ParadeScene], banner: false, input: { activePointers: 3 }, fps: { target: 60 } });
     gameRef.current = game;
-    worldTick(); courtTick(); const wt = setInterval(() => { worldTick(); courtTick(); }, 60000); const jt = setInterval(() => { journeysTick(); assignmentsTick(); }, 2000);
+    worldTick(); courtTick(); const wt = setInterval(() => { worldTick(); courtTick(); }, 60000); const jt = setInterval(() => { journeysTick(); assignmentsTick(); breachTick(); }, 2000);
     const wake = () => { audio.start(); const st = getState().settings; audio.setVolumes({ music: st.music ?? 0.5, sfx: st.sfx ?? 0.7, ambience: st.ambience ?? true, ambVol: st.ambVol ?? 0.7 }); };
     addEventListener('pointerdown', wake); addEventListener('keydown', wake);
     const click = (e: MouseEvent) => { if ((e.target as HTMLElement).closest?.('.btn')) audio.play('click'); };

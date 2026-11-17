@@ -93,7 +93,7 @@ function Dominion() {
 
 function RivalDetail({ r }: { r: Rival }) {
   const s = useGame(), mine = WA.myPower(s), [give, setGive] = useState<keyof Res>('gold'), [want, setWant] = useState<keyof Res>('stone'), [amt, setAmt] = useState(200), [giftAmt, setGift] = useState(200), [bat, setBat] = useState('');
-  const q = tradeQuote(r, give, amt, want, courtFx(courtOf(s.world)).trade), tradeLock = canTrade(r), away = WA.awayBats(s), homeBats = s.battalions.filter((b) => !away.has(b.id));
+  const q = tradeQuote(r, give, amt, want, courtFx(courtOf(s.world)).trade), tradeLock = canTrade(r, s.world), away = WA.awayBats(s), homeBats = s.battalions.filter((b) => !away.has(b.id));
   return <div className="space-y-2">
     <button className="btn !py-0" onClick={() => setUI({ selRival: null })}>← All realms</button>
     <div className="card p-2 flex gap-3"><Banner color={r.color} emblem={r.emblem} scale={3} />
@@ -265,7 +265,9 @@ function Defense() {
   return <div className="card p-2 border-2 !border-blood space-y-2 pulse">
     <div className="font-title text-2xl text-blood">{r.name} besieges your castle!</div>
     <p className="text-sm">Their host (≈{fmt(t.power)} strength) blockades you: study gold is reduced by 25% until it is resolved. Your defenders: ≈{fmt(sidePower(home))} strength, walls {Math.round(WA.fortOf(s) * 100)}% fortified.{t.allyHelp.length ? ` ${t.allyHelp.length} allies have come to your aid.` : ''}</p>
-    <TacticPicker units={home.length ? home : [{ cls: 'peasant', count: 1, rank: 0 }]} terrain="hills" commander={Math.max(0, ...s.battalions.map((b) => b.commander.rank))} onPick={WA.defend} label="Meet them in battle" />
+    {!WA.walledOf(s) && <p className="text-sm font-bold text-blood">You have no walls: they will not besiege you, they will walk straight in{t.power > sidePower(home) ? ' and, outnumbering your soldiers, sack the town' : ' and your soldiers must fight them in the streets'} unless you pay them off first.</p>}
+    <p className="text-xs opacity-80">No caravan can leave while the enemy holds the roads: trade is cut off until the siege ends.</p>
+    <TacticPicker units={home.length ? home : [{ cls: 'peasant', count: 1, rank: 0 }]} terrain={WA.walledOf(s) ? 'hills' : 'plains'} commander={Math.max(0, ...s.battalions.map((b) => b.commander.rank))} onPick={WA.defend} label="Meet them in battle" />
     <div className="flex gap-2">{allies.length > 0 && !t.allyHelp.length && <button className="btn flex-1" onClick={WA.callAllies}>Call {allies.length} all{allies.length > 1 ? 'ies' : 'y'}</button>}
       <button className="btn flex-1" onClick={() => confirm('Pay tribute to end the siege?') && WA.payTribute()}>Pay tribute</button></div>
     <p className="text-xs opacity-75">Losing never destroys buildings: the enemy takes part of your stores and leaves.</p>

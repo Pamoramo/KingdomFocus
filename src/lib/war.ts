@@ -64,6 +64,21 @@ const TERRAINS: Terrain[] = ['plains', 'forest', 'hills', 'river', 'marsh'];
 export const relationLabel = (r: number) => (r >= 60 ? 'Trusted' : r >= 25 ? 'Friendly' : r > -25 ? 'Neutral' : r > -50 ? 'Unfriendly' : 'Hostile');
 const clamp = (v: number, a = -100, b = 100) => Math.max(a, Math.min(b, v));
 function rng(seed: number) { return () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296); }
+// ---------------- roads ----------------
+/** The road network: each site's road joins the nearest site closer to the heart of the map (index 0).
+ *  Returns each site's parent index (-1 for the heart). Shared by the painted roads, the travellers who walk them, and trade. */
+export function roadNet(sites: { x: number; y: number }[]): number[] {
+  const home = sites[0], dc = (p: { x: number; y: number }) => Math.hypot(p.x - home.x, p.y - home.y);
+  return sites.map((s, i) => { if (i === 0) return -1; let best = 0, bd = Infinity; sites.forEach((q, j) => { if (j !== i && dc(q) < dc(s)) { const d = Math.hypot(q.x - s.x, q.y - s.y); if (d < bd) { bd = d; best = j; } } }); return best; });
+}
+/** The way along the roads from the heart (site 0) to site i: the list of sites passed, heart first. */
+export function roadRoute<T extends { x: number; y: number }>(sites: T[], parent: number[], i: number) { const out: T[] = []; for (let k = i, n = 0; k >= 0 && n < 64; k = parent[k], n++) out.unshift(sites[k]); return out; }
+/** The realms a road from your castle to realm `id` passes through on the way (not counting the destination). */
+export function roadThrough(w: Pick<WorldState, 'rivals'>, id: string): string[] {
+  const sites = [{ x: 0.5, y: 0.5, id: '' }, ...w.rivals.map((r) => ({ x: r.x, y: r.y, id: r.id }))], i = sites.findIndex((p) => p.id === id);
+  return i > 0 ? roadRoute(sites, roadNet(sites), i).slice(1, -1).map((p) => p.id) : [];
+}
+
 // ---------------- the wide world: distance, tiers, discovery ----------------
 /** The map is this many times the width of your home region. Positions are fractions of the whole map. */
 export const WORLD_SCALE = 2.6;
@@ -250,10 +265,18 @@ export function tradeQuote(r: Rival, give: keyof Res, amount: number, want: keyo
   const rel = Math.min(8, 1 + Math.round((amount * VALUE[give]) / (150 * r.level)));
   return { got, rel, rate };
 }
-export function canTrade(r: Rival, today = dayStr()) {
+/** Whether you can trade with a realm now, and if not, why. Sieges cut the roads: while your castle is besieged no caravan
+ *  can leave; while you besiege a realm, its friends will not deal with you and roads that pass the siege are closed. */
+export function canTrade(r: Rival, w?: Pick<WorldState, 'rivals' | 'threat' | 'campaign'>, today = dayStr()) {
   if (r.bandits) return 'Bandits do not trade';
   if (r.known === false) return 'You have not charted their lands';
   if (r.status === 'war') return 'You are at war';
+  if (w?.threat) { const foe = w.rivals.find((x) => x.id === w.threat!.rival); return `Your castle is besieged${foe ? ` by ${foe.name}` : ''}: no caravan can leave`; }
+  const sieged = w?.campaign ? w.rivals.find((x) => x.id === w.campaign!.target) : undefined;
+  if (w && sieged) {
+    if (r.friends.includes(sieged.id) || sieged.friends.includes(r.id)) return `${r.name} will not trade while you besiege their friend ${sieged.name}`;
+    if (roadThrough(w, r.id).includes(sieged.id)) return `The road to ${r.name} runs past your siege of ${sieged.name}`;
+  }
   if (r.lastTradeDay === today && r.trades >= 3) return 'Three trades per kingdom per day';
   return null;
 }

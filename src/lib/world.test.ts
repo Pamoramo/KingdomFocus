@@ -62,3 +62,37 @@ test('spoils and tribute grow with the strength of the realm; great prizes are p
   assert.equal(S.getState().res.gold - g0, loot.gold, 'paid in full');
   assert.ok(rows.length >= 2 && rows.every((l) => l.amt.gold <= 10000 && l.amt.stone <= 3000 && l.amt.renown <= 400), 'in rows the cloud accepts');
 });
+
+test('an unwalled town is simply entered: sacked if outnumbered, fought for in the streets if not; walls make them besiege', () => {
+  const w0 = initWorld(9), foe = w0.rivals.find((r) => !r.bandits)!;
+  const threat = (power: number) => ({ rival: foe.id, power, since: Date.now() - 60_000, allyHelp: [] });
+  // outnumbered and no walls: sacked, and the threat is over
+  S._with({ ...S.newGame(), res: { gold: 1000, wood: 500, stone: 500, renown: 0 }, world: { ...w0, threat: threat(5000) } });
+  assert.equal(WA.walledOf(S.getState()), false);
+  WA.breachTick();
+  let s = S.getState(); assert.equal(s.world.threat, null, 'they did not wait to besiege');
+  assert.equal(s.res.gold, 750, 'a quarter of the gold carried off'); assert.match(s.world.reports[0].title, /sacked/);
+  // walled: nothing happens on its own; you choose how to defend
+  const walls = Array.from({ length: 14 }, (_, i) => ({ id: `w${i}`, kind: 'wall' as const, x: 10 + i, y: 10, level: 1, at: 0 }));
+  S._with({ ...S.newGame(), buildings: [...S.newGame().buildings, ...walls], world: { ...w0, threat: threat(5000) } });
+  assert.equal(WA.walledOf(S.getState()), true); WA.breachTick();
+  assert.ok(S.getState().world.threat, 'a walled castle is besieged, not entered');
+  // too soon after they arrive: still time to pay them off
+  S._with({ ...S.newGame(), world: { ...w0, threat: { ...threat(5000), since: Date.now() } } }); WA.breachTick();
+  assert.ok(S.getState().world.threat);
+});
+
+test('sieges cut trade: besieged, you cannot send caravans; besieging, their friends and the roads past the siege are closed', async () => {
+  const { canTrade, roadThrough } = await import('./war.ts');
+  let w = initWorld(4); w = { ...w, rivals: w.rivals.map((r) => ({ ...r, known: true, status: r.bandits ? r.status : 'neutral' as const, friends: [] })) };
+  const free = w.rivals.filter((r) => !r.bandits), a = free[0];
+  assert.equal(canTrade(a, w, '-'), null, 'trade is open in peace');
+  assert.match(canTrade(a, { ...w, threat: { rival: free[1].id, power: 100, since: 0, allyHelp: [] } }, '-')!, /besieged/);
+  // a realm whose road runs through another
+  const far = free.find((r) => roadThrough(w, r.id).length > 0)!, mid = roadThrough(w, far.id)[0];
+  const sieging = { ...w, campaign: { target: mid } as never };
+  assert.match(canTrade(far, sieging, '-')!, /runs past your siege/);
+  const friend = free.find((r) => r.id !== mid && r.id !== far.id && !roadThrough(w, r.id).includes(mid))!;
+  assert.equal(canTrade(friend, sieging, '-'), null, 'realms off the road still trade');
+  assert.match(canTrade({ ...friend, friends: [mid] }, sieging, '-')!, /their friend/);
+});
