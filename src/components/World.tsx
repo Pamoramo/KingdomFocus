@@ -6,7 +6,7 @@ import { setUI, toggleWorldView } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res, canAfford } from '../lib/rewards.ts';
 import { TACTICS, TERRAINS, tacticLock, sidePower, type Tactic, type Terrain } from '../lib/battle.ts';
-import { ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, LOAN_MIN, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, vassalGold, vassalRenown, VASSAL_GOLD_MAX, type Rival, type Engines, type Stance } from '../lib/war.ts';
+import { canStation, garrisonsAt, GARRISON_TRIBUTE, marchMs, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, LOAN_MIN, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, vassalGold, vassalRenown, VASSAL_GOLD_MAX, type Rival, type Engines, type Stance } from '../lib/war.ts';
 import * as WA from '../lib/warActions.ts';
 import { courtOf, courtFx } from '../lib/politics.ts';
 import { engineArt } from '../game/art/war.ts';
@@ -91,6 +91,20 @@ function Dominion() {
   </Section>;
 }
 
+/** Your battalions quartered in a vassal's or ally's castle: send more, see who is there, bring them home. */
+function GarrisonPanel({ r }: { r: Rival }) {
+  const s = useGame(), [pick, setPick] = useState<string[]>([]), here = garrisonsAt(s.world, r.id), coming = (s.world.journeys ?? []).filter((j) => j.kind === 'station' && j.rival === r.id);
+  const avail = WA.stationable(s, r.id), size = (id: string) => s.squads.filter((q) => q.bat === id).reduce((a, q) => a + q.count, 0);
+  const toggle = (id: string) => setPick((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  return <Section title={`Garrison${here.length ? ` (${here.length})` : ''}`}>
+    {here.map((g) => { const b = s.battalions.find((x) => x.id === g.bat); return <div key={g.bat} className="flex items-center gap-2 text-sm"><span className="flex-1"><b>{b?.name ?? 'Battalion'}</b> · {size(g.bat)} soldiers holding the walls</span><button className="btn !py-0 text-xs" onClick={() => WA.recallGarrison(g.bat)}>Recall</button></div>; })}
+    {coming.map((j) => <div key={j.id} className="text-xs opacity-80">{j.label}…</div>)}
+    {avail.length > 0 && <div className="space-y-1"><div className="flex flex-wrap gap-1">{avail.map((b) => { const at = WA.stationOf(s, b.id); return <button key={b.id} className={`btn !py-0 text-xs ${pick.includes(b.id) ? 'btn-gold' : ''}`} onClick={() => toggle(b.id)}>{b.name} ({size(b.id)}){at ? ` · from ${at.name}` : ''}</button>; })}</div>
+      <button className="btn" disabled={!pick.length} onClick={() => { if (!WA.stationAt(r.id, pick)) setPick([]); }}>Station {pick.length || ''} here</button></div>}
+    <p className="text-xs opacity-70">Stationed battalions hold this castle for you{r.status === 'vassal' ? `, collecting ${Math.round(GARRISON_TRIBUTE * 100)}% more tribute and keeping ${r.name} loyal` : ' and strengthen the friendship every day'}. Any enemy whose road to you runs past here is harried on the way (fewer invasions, weaker hosts), and campaigns can march straight from here. They are not at home to defend your own castle.</p>
+  </Section>;
+}
+
 function RivalDetail({ r }: { r: Rival }) {
   const s = useGame(), mine = WA.myPower(s), [give, setGive] = useState<keyof Res>('gold'), [want, setWant] = useState<keyof Res>('stone'), [amt, setAmt] = useState(200), [giftAmt, setGift] = useState(200), [bat, setBat] = useState('');
   const q = tradeQuote(r, give, amt, want, courtFx(courtOf(s.world)).trade), tradeLock = canTrade(r, s.world), away = WA.awayBats(s), homeBats = s.battalions.filter((b) => !away.has(b.id));
@@ -103,6 +117,7 @@ function RivalDetail({ r }: { r: Rival }) {
         <div className="text-xs opacity-80">{TIER[tierOf(r)].name}, {leagues(r).toFixed(1)} leagues away: {TIER[tierOf(r)].desc}</div>
         <button className="btn btn-gold !py-0.5 mt-1" onClick={() => setUI({ view: 'rival', visit: r.id, panel: mobile() ? null : 'world' })}>Visit {r.name}</button>
         {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}</div></div>
+    {canStation(r) && <GarrisonPanel r={r} />}
     {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +{Math.round(vassalGold(r) * 100)}% gold and +{(vassalRenown(r) * 100).toFixed(1)}% renown from every study session (a greater realm pays more) (all vassals together give at most +{Math.round(VASSAL_GOLD_MAX * 100)}% gold).</p> : <>
       {r.status === 'war' && <Spoils r={r} />}
       {!r.bandits && r.status !== 'war' && <Section title="Trade">
@@ -226,18 +241,19 @@ function CampaignTab() {
 function PlanCampaign() {
   const s = useGame(), ui = useUI(), w = s.world, foes = w.rivals.filter((r) => r.status === 'war');
   const [target, setTarget] = useState(ui.selRival && foes.some((f) => f.id === ui.selRival) ? ui.selRival : foes[0]?.id ?? ''), [bats, setBats] = useState<string[]>([]), [eng, setEng] = useState<Engines>({ ...NO_ENGINES }), [sup, setSup] = useState(Math.floor(Math.min(w.supplies, 60)));
-  const away = WA.awayBats(s), home = s.battalions.filter((b) => !away.has(b.id)), soldiers = s.squads.filter((q) => bats.includes(q.bat)).reduce((a, q) => a + q.count, 0);
-  const r = w.rivals.find((x) => x.id === target);
+  const away = WA.awayBats(s), held = new Set((w.garrisons ?? []).map((g) => g.bat)), home = s.battalions.filter((b) => !away.has(b.id) || held.has(b.id)), soldiers = s.squads.filter((q) => bats.includes(q.bat)).reduce((a, q) => a + q.count, 0);
+  const r = w.rivals.find((x) => x.id === target), march = r && bats.length ? Math.max(...bats.map((b) => marchMs(WA.stationOf(s, b), r))) : 0;
   if (!foes.length) return <p className="text-sm">You are at peace with everyone. Declare war from the Realms tab to plan a campaign. The Bandit Lord of the Crags is a good first target.</p>;
   return <div className="space-y-2">
     <Section title="Plan a campaign">
       <select className="inp" value={target} onChange={(e) => setTarget(e.target.value)}>{foes.map((f) => <option key={f.id} value={f.id}>{f.name} (≈{fmt(f.power)} strength, walls {f.wallMax})</option>)}</select>
       <div className="text-sm font-bold">Battalions</div>
-      {home.map((b) => { const p = sidePower(WA.unitsOf(s.squads.filter((q) => q.bat === b.id))); return <label key={b.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={bats.includes(b.id)} onChange={(e) => setBats(e.target.checked ? [...bats, b.id] : bats.filter((x) => x !== b.id))} /><span className="flex-1">{b.name}</span><span>strength {fmt(p)}</span></label>; })}
+      {home.map((b) => { const p = sidePower(WA.unitsOf(s.squads.filter((q) => q.bat === b.id))); return <label key={b.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={bats.includes(b.id)} onChange={(e) => setBats(e.target.checked ? [...bats, b.id] : bats.filter((x) => x !== b.id))} /><span className="flex-1">{b.name}{WA.stationOf(s, b.id) ? <span className="text-xs opacity-75"> · from {WA.stationOf(s, b.id)!.name}</span> : ''}</span><span>strength {fmt(p)}</span></label>; })}
       {!home.length && <p className="text-xs">All battalions are away.</p>}
       <div className="text-sm font-bold">Siege engines</div>
       <div className="grid grid-cols-2 gap-1">{ENGINE_IDS.map((e) => <label key={e} className="flex items-center gap-1 text-xs"><input type="number" className="inp !w-14" min={0} max={w.engines[e]} value={eng[e]} onChange={(ev) => setEng({ ...eng, [e]: Math.max(0, Math.min(w.engines[e], +ev.target.value)) })} />{ENGINES[e].name} ({w.engines[e]})</label>)}</div>
       <label className="flex items-center gap-2 text-sm">Supplies <input type="number" className="inp !w-24" min={0} max={Math.floor(w.supplies)} value={sup} onChange={(e) => setSup(Math.max(0, Math.min(Math.floor(w.supplies), +e.target.value)))} /> of {Math.floor(w.supplies)} · lasts {soldiers ? Math.floor(sup / consumption(soldiers)) : '—'} siege days</label>
+      {r && march > 0 && <p className="text-xs">March: {Math.round(march / 60000)} min{bats.some((b) => WA.stationOf(s, b)) ? ' (garrisoned battalions set out from their castles)' : ''}.</p>}
       {r && <p className="text-xs">Strength {fmt(sidePower(WA.unitsOf(s.squads.filter((q) => bats.includes(q.bat)))))} vs their field army ≈{fmt(r.power * 0.6)} and garrison ≈{fmt(r.garrison)}.</p>}
       <button className="btn btn-red w-full text-lg" disabled={!bats.length || !target} onClick={() => WA.startCampaign(target, bats, eng, sup)}>March to war</button>
     </Section>

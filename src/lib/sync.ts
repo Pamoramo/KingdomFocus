@@ -7,6 +7,11 @@ import { SUPABASE_URL as URL, SUPABASE_ANON_KEY as KEY } from './config.ts';
 export const supabase: SupabaseClient | null = URL && KEY ? createClient(URL, KEY) : null;
 const LS = 'kod-save-v2';
 let user: User | null = null, pulled = false, busy = false, failures = 0;
+/** The stamp of the cloud world this device last saw or wrote, and when it last heard from the cloud. If another device
+ *  has written a newer world since, this device takes that world instead of overwriting it with its stale copy. */
+let seen: string | undefined, lastContact = 0, worldAtContact: GameState['world'] | null = null;
+const stampOf = (snap: Snapshot) => (snap.kingdom?.world as { stamp?: string } | null | undefined)?.stamp;
+const newStamp = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 let saveT: ReturnType<typeof setTimeout> | undefined, syncT: ReturnType<typeof setTimeout> | undefined;
 export const syncStatus = new EventTarget();
 let status = supabase ? 'signed out' : 'local only';
@@ -37,6 +42,7 @@ async function rpc(payload: unknown): Promise<Snapshot> {
   return data as Snapshot;
 }
 
+const stamped = (sent: ReturnType<typeof buildPayload>) => { const k = sent.payload.kingdom as { world?: object | null }; if (k?.world) k.world = { ...k.world, stamp: newStamp() }; return sent; };
 /** Push pending changes in one transaction, then adopt the merged server state when nothing is pending. */
 export async function syncNow() {
   if (!supabase || !user || busy) return;
@@ -54,23 +60,31 @@ export async function syncNow() {
             outbox: { ...s.outbox, dirty: { ...s.outbox.dirty, buildings: (s.outbox.dirty.buildings ?? []).filter((id) => id !== local?.id) } } };
         }
       }
-      setState({ ...s, owner: user.id }, false); pulled = true;
+      // the cloud's world is the account's latest: never push this device's old copy over it
+      if (snap.kingdom?.world && s.owner === user.id) s = { ...s, world: upgradeWorld(snap.kingdom.world) };
+      seen = stampOf(snap); lastContact = Date.now();
+      setState({ ...s, owner: user.id }, false); pulled = true; worldAtContact = getState().world;
+    } else if (Date.now() - lastContact > 15_000) { // been away: check whether another device moved the world on
+      const snap = await rpc({}), st = stampOf(snap);
+      if (st && st !== seen && snap.kingdom?.world && getState().world === worldAtContact) { setState({ ...getState(), world: upgradeWorld(snap.kingdom.world) }, false); emit({ kind: 'info', text: 'Loaded newer progress from your other device.' }); }
+      seen = st; lastContact = Date.now(); worldAtContact = getState().world;
     }
     void checkSchema().catch(() => {});
     // an outdated database rejects big study rewards; send everything else and keep those waiting locally
     const probe = legacy && Date.now() - lastProbe > 10 * 60_000; // every 10 minutes, see whether the database was updated
-    let sent = buildPayload(getState(), legacy && !probe ? heldBack(getState()) : new Set()), snap: Snapshot;
+    let sent = stamped(buildPayload(getState(), legacy && !probe ? heldBack(getState()) : new Set())), snap: Snapshot;
     try { snap = await rpc(sent.payload); if (probe && legacy) setLegacy(false); }
     catch (e) {
       if (!CEILING_ERR.test((e as Error).message)) throw e;
       lastProbe = Date.now(); setLegacy(true);
-      sent = buildPayload(getState(), heldBack(getState())); snap = await rpc(sent.payload);
+      sent = stamped(buildPayload(getState(), heldBack(getState()))); snap = await rpc(sent.payload);
     }
     if (probe) lastProbe = Date.now();
+    seen = (sent.payload.kingdom as { world?: { stamp?: string } }).world?.stamp; lastContact = Date.now();
     let s = clearSent(getState(), sent);
     const adopted = outboxEmpty(s);
     if (adopted) s = adoptSnapshot(s, snap);
-    setState(s, false); saveLocal();
+    setState(s, false); saveLocal(); worldAtContact = getState().world;
     if (adopted) compensate(user.id);
     failures = 0;
     const waiting = legacy ? heldBack(getState()).size : 0;
@@ -105,9 +119,12 @@ export function initPersistence() {
     if (user) { clearTimeout(syncT); syncT = setTimeout(syncNow, 4000); }
   });
   addEventListener('pagehide', saveLocal);
-  addEventListener('visibilitychange', () => { if (document.hidden) { saveLocal(); syncNow(); } });
+  addEventListener('visibilitychange', () => { if (document.hidden) saveLocal(); syncNow(); });
   addEventListener('online', () => syncNow());
   setInterval(() => { if (user && !outboxEmpty(getState())) syncNow(); }, 60_000);
+  // keep an open tab current with what your other devices do, so it never shows (or later saves) an old kingdom
+  setInterval(() => { if (user && document.visibilityState === 'visible') syncNow(); }, 30_000);
+  addEventListener('focus', () => { if (user) syncNow(); });
   if (!supabase) return;
   const onUser = (u: User | null) => {
     const was = user?.id; user = u;

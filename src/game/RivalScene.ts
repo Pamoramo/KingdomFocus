@@ -30,7 +30,10 @@ const FOLK: Record<Biome, string[]> = {
 };
 /** Weather leans on the biome: deserts stay dry, the tundra snows, swamps fog over. */
 
-interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; onWall?: boolean; path?: Pt[]; leave?: Pt; starving?: boolean; triumph?: boolean; tx?: number; ty?: number; wait?: number; ph: number }
+interface Fig { img: Phaser.GameObjects.Image; x: number; y: number; cls: string; rank: number; side: 'you' | 'foe' | 'folk'; onWall?: boolean; path?: Pt[]; leave?: Pt; starving?: boolean; triumph?: boolean; tx?: number; ty?: number; wait?: number; ph: number;
+  /** a soldier off doing something in the siege camp, and where he stands in the host */ job?: Job; home?: Pt; carry?: Phaser.GameObjects.Rectangle }
+type JobKind = 'forage' | 'wood' | 'water' | 'dice' | 'cook' | 'sleep' | 'drill' | 'idle';
+interface Job { kind: JobKind; stage: 'out' | 'work' | 'back'; until: number; dur: number; at: Pt; mate?: Fig; zz?: Phaser.GameObjects.Text }
 
 /** A rival kingdom up close: its biome, castle and town, and your siege camp when you march on it. */
 export class RivalScene extends Phaser.Scene {
@@ -43,7 +46,7 @@ export class RivalScene extends Phaser.Scene {
   private waterImgs: { img: Phaser.GameObjects.Image; land: number }[] = [];
   private figs: Fig[] = []; private siegeObjs: Phaser.GameObjects.GameObject[] = []; private siegeSig = '';
   private chatter!: Chatter; private weather!: WeatherFx; private shade!: Phaser.GameObjects.Rectangle;
-  private doors: { x: number; y: number }[] = []; private unsub: (() => void)[] = [];
+  private doors: { x: number; y: number }[] = []; private unsub: (() => void)[] = []; private campAt: Pt | null = null;
   private drag: { x: number; y: number; sx: number; sy: number } | null = null; private pinch: { d: number; z: number } | null = null;
   constructor() { super('rival'); }
   init(data: { id: string }) { this.r = getState().world.rivals.find((x) => x.id === data.id)!; this.figs = []; this.waterImgs = []; this.bImgs = []; this.marks = []; this.wallImgs = []; this.siegeObjs = []; this.siegeSig = ''; }
@@ -69,6 +72,7 @@ export class RivalScene extends Phaser.Scene {
     this.unsub.push(subscribe(() => this.syncSiege(getState())));
     this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
     this.time.addEvent({ delay: 3500, loop: true, callback: () => this.siegeMood() });
+    this.time.addEvent({ delay: 1400, loop: true, callback: () => this.campLife() });
     this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; for (const b of this.bImgs) if (b.img.visible) b.img.setTexture(bTex(this, b.kind, b.level, this.frame % 2).key); for (const w of this.waterImgs) w.img.setTexture(waterTex(this, w.land, this.frame % 3)); for (const f of this.fires) f.setTexture(`fire${this.frame % 2}`); } });
     this.time.addEvent({ delay: 6500, loop: true, callback: () => this.chat() });
     this.time.addEvent({ delay: 4200, loop: true, callback: () => this.volley() });
@@ -111,6 +115,78 @@ export class RivalScene extends Phaser.Scene {
     if (hungry && Math.random() < 0.5) { const f = mine.filter((m) => m.starving)[Math.floor(Math.random() * Math.max(1, mine.filter((m) => m.starving).length))]; if (f) say(f, ['So hungry...', 'Not even a rat left to eat.', 'When do the supply wagons come?', 'I\'d trade my sword for bread.']); }
     // a despairing garrison: defenders slip down from the walls
     if (c.garrisonMorale < 35 && Math.random() < 0.3) { const d = this.figs.find((f) => f.side === 'foe' && f.onWall && !f.leave); if (d) { this.tweens.add({ targets: d.img, alpha: 0, y: d.img.y - 6, duration: 1600, onComplete: () => d.img.destroy() }); d.leave = { x: d.x, y: d.y }; } }
+  }
+  /** Life in the siege camp between assaults: most of a siege was waiting. Soldiers forage the countryside (more desperately
+   *  when food runs short), cut firewood, fetch water, cook, play dice, spar, nap by day and sleep at night, and grumble. */
+  private campLife() {
+    const s = getState(), c = s.world.campaign, camp = this.campAt; if (!c || c.target !== this.r.id || c.phase !== 'siege' || !camp) return;
+    const mine = this.figs.filter((f) => f.side === 'you' && f.img.active && !f.leave && !f.triumph && f.home), busy = mine.filter((f) => f.job).length;
+    const idle = mine.filter((f) => !f.job && !f.starving), cap = Math.min(16, Math.ceil(mine.length * 0.3));
+    if (!idle.length || busy >= cap) return;
+    const soldiers = campaignSquads(s).reduce((a, q) => a + q.count, 0), daysLeft = c.supplies / consumption(Math.max(1, soldiers)), night = nightFactor(s.settings.dayNight).n > 0.55;
+    const T = TILE, B = this.L.box, now = this.time.now, R = (a: number, b: number) => a + Math.random() * (b - a);
+    const w: [JobKind, number][] = night ? [['sleep', 6], ['dice', 2], ['cook', 1.5], ['idle', 1]]
+      : [['forage', daysLeft < 3 ? 6 : 2], ['wood', 1.5], ['water', this.L.water.length ? 1.2 : 0], ['dice', c.morale > 30 ? 2 : 0.6], ['cook', 1.4], ['sleep', 1], ['drill', c.morale > 45 ? 1.4 : 0.3], ['idle', 2]];
+    let roll = Math.random() * w.reduce((a, x) => a + x[1], 0), kind: JobKind = 'idle'; for (const [k, v] of w) { if ((roll -= v) <= 0) { kind = k; break; } }
+    const f = idle[Math.floor(Math.random() * idle.length)];
+    const free = (p: Pt) => { const t = this.nav.nearestFree(this.nav.tileOf(p), 6); return t ? { x: (t.x + 0.5) * T, y: (t.y + 0.75) * T } : p; };
+    const countryside = () => { const left = f.x < camp.x; return free({ x: (left ? R(2, Math.max(3, B.x0 - 4)) : R(Math.min(RW - 3, B.x1 + 4), RW - 2)) * T, y: R(B.y1 + 4, RH - 3) * T }); };
+    const nearCamp = (r: number) => free({ x: camp.x + R(-r, r), y: camp.y - R(20, 60) });
+    let at: Pt, dur = R(3500, 6000);
+    if (kind === 'forage' || kind === 'wood') at = countryside();
+    else if (kind === 'water') { const outside = this.L.water.filter((t) => t.y > B.y1 + 2 || t.x < B.x0 - 2 || t.x > B.x1 + 2); const t = outside.length ? outside[Math.floor(Math.random() * outside.length)] : null; at = t ? free({ x: (t.x + 0.5) * T, y: (t.y + 0.75) * T }) : countryside(); }
+    else if (kind === 'dice' || kind === 'cook') { at = nearCamp(150); dur = kind === 'dice' ? R(9000, 15000) : R(6000, 9000); }
+    else if (kind === 'sleep') { at = nearCamp(220); dur = night ? R(20000, 40000) : R(9000, 16000); }
+    else if (kind === 'drill') { at = nearCamp(120); dur = R(6000, 9000); }
+    else { at = free({ x: f.x + R(-60, 60), y: f.y + R(20, 60) }); dur = R(2500, 4000); }
+    f.job = { kind, stage: 'out', until: now + dur, dur, at }; f.path = this.nav.path(f, at) ?? [at];
+    // games and sparring need company
+    if (kind === 'dice' || kind === 'drill') for (const m of idle.filter((m) => m !== f).slice(0, kind === 'dice' ? 2 : 1)) {
+      const spot = { x: at.x + (kind === 'drill' ? 16 : R(-14, 14)), y: at.y + (kind === 'drill' ? 0 : R(-6, 6)) };
+      m.job = { kind, stage: 'out', until: now + dur, dur, at: spot, mate: f }; m.path = this.nav.path(m, spot) ?? [spot];
+    }
+    const lines: Record<JobKind, string[]> = {
+      forage: daysLeft < 2 ? ['Anything to eat out there...', 'I\'ll find food or die trying.', 'The farmers hid everything.'] : ['Off to find some turnips.', 'Let\'s see what the villages left us.', 'Fresh eggs, if we\'re lucky.'],
+      wood: ['Fires won\'t feed themselves.', 'Need timber for the ladders.', 'Fetching firewood.'],
+      water: ['Off to fill the buckets.', 'Hope they haven\'t fouled the stream.'],
+      dice: ['Dice, anyone?', 'Double or nothing!', 'I\'ll win my pay back tonight.'],
+      cook: ['Pottage again.', 'Who stole the salt?', 'Stir it, don\'t burn it!'],
+      sleep: night ? ['Wake me if they sally.', 'Goodnight, lads.'] : ['Just resting my eyes...', 'Wake me when the wall falls.'],
+      drill: ['Keep your guard up!', 'Again! Faster!', 'Mind the shield.'],
+      idle: ['Another day staring at walls.', 'How long can they hold out?', 'I miss my wife\'s stew.', 'My boots are rotting.', 'Rain again, I bet.', 'Heard the captain snores.'],
+    };
+    if (Math.random() < 0.55) this.chatter.say({ get x() { return f.x; }, get y() { return f.y; }, h: 16, alive: () => f.img.active }, lines[kind][Math.floor(Math.random() * lines[kind].length)], 300, 300);
+  }
+  /** Moves a soldier through his camp job; returns the frame to show. */
+  private doJob(f: Fig, dt: number, tick: number): number {
+    const j = f.job!, now = this.time.now;
+    if (j.stage === 'out' || j.stage === 'back') {
+      if (f.path?.length) { const dir = follow(f, dt, j.stage === 'back' && f.carry ? 20 : 28); if (dir) f.img.setFlipX(dir < 0); if (f.carry) f.carry.setPosition(f.x + (f.img.flipX ? -3 : 3), f.y - 9).setDepth(f.y + 1); return (tick + f.ph) % 4; }
+      if (j.stage === 'back') { f.carry?.destroy(); f.carry = undefined; f.job = undefined; return 0; }
+      j.stage = 'work'; j.until = Math.max(j.until, now + (j.mate || j.kind === 'dice' || j.kind === 'drill' ? 2500 : j.dur)); // the work starts when he gets there
+      if (j.kind === 'sleep') { f.img.setAngle(f.img.flipX ? -90 : 90); j.zz = this.add.text(f.x + 4, f.y - 14, 'z', { fontFamily: 'monospace', fontSize: '9px', color: '#e8e4ff' }).setDepth(30000).setResolution(2); }
+      if (j.mate) f.img.setFlipX(j.mate.x < f.x);
+    }
+    if (j.stage === 'work') {
+      if (j.zz) { const k = ((now / 900) % 3) | 0; j.zz.setText('z'.repeat(k + 1)).setPosition(f.x + 6, f.y - 14 - k * 2); }
+      if (now >= j.until || (j.mate && !j.mate.img.active)) {
+        f.img.setAngle(0); j.zz?.destroy(); j.zz = undefined;
+        const load = j.kind === 'forage' ? 0x8a6a3a : j.kind === 'wood' ? 0x6a4a2a : j.kind === 'water' ? 0x5a7a9a : 0;
+        if (load) f.carry = this.add.rectangle(f.x, f.y - 9, j.kind === 'wood' ? 7 : 4, j.kind === 'wood' ? 2 : 4, load).setDepth(f.y + 1);
+        if (j.kind === 'forage' && Math.random() < 0.35) this.chatter.say({ get x() { return f.x; }, get y() { return f.y; }, h: 16, alive: () => f.img.active }, Math.random() < 0.5 ? 'Found a sack of oats!' : 'Only a few onions...', 0, 300);
+        if (j.kind === 'dice' && !j.mate && Math.random() < 0.6) this.chatter.say({ get x() { return f.x; }, get y() { return f.y; }, h: 16, alive: () => f.img.active }, Math.random() < 0.5 ? 'Ha! Pay up!' : 'You cheat, I swear it.', 0, 300);
+        j.stage = 'back'; f.path = this.nav.path(f, f.home!) ?? [f.home!]; return 0;
+      }
+      switch (j.kind) {
+        case 'wood': return (tick + f.ph) % 4 < 2 ? 4 : 5; // swinging the axe
+        case 'drill': return (tick + f.ph) % 6 < 3 ? 4 : 5;
+        case 'forage': case 'water': return (tick + f.ph) % 8 < 4 ? 2 : 0; // stooping
+        case 'cook': if ((tick + f.ph) % 20 === 0) f.img.setFlipX(!f.img.flipX); return 0;
+        case 'dice': return (tick + f.ph) % 14 === 0 ? 4 : 0; // a throw
+        default: return 0;
+      }
+    }
+    return 0;
   }
   /** Just conquered: your soldiers march up the high street, through the gate, into the castle. */
   private triumph() {
@@ -219,7 +295,8 @@ export class RivalScene extends Phaser.Scene {
       return h < 45 ? 'whole' : h < 80 ? 'damaged' : 'ablaze';
     };
     for (const b of [...this.bImgs, ...this.marks]) if (b.suburb) { const f = c ? fate(b) : 'whole'; b.img.setVisible(f !== 'razed').setTint(f === 'damaged' ? 0xa89888 : f === 'ablaze' ? 0x8a6a58 : 0xffffff); }
-    this.figs = this.figs.filter((f) => { if ((f.side === 'you' && !f.triumph) || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); return false; } return true; });
+    this.figs = this.figs.filter((f) => { if ((f.side === 'you' && !f.triumph) || (f.side === 'foe' && f.y > (this.L.box.y1 + 2) * TILE)) { f.img.destroy(); f.carry?.destroy(); f.job?.zz?.destroy(); return false; } return true; });
+    this.campAt = null;
     if (this.sheltering !== !!c) for (const f of this.figs) if (f.side === 'folk') { f.path = undefined; f.wait = Math.random() * 1500; }
     this.sheltering = !!c;
     const add = <T extends Phaser.GameObjects.GameObject>(o: T) => { this.siegeObjs.push(o); return o; };
@@ -254,7 +331,8 @@ export class RivalScene extends Phaser.Scene {
     for (let x = this.L.gate.x - 12; x <= this.L.gate.x + 13; x++) if (Math.abs(x - this.L.gate.x - 0.5) > 2) add(this.add.image(x * T, line, tileTex(this, 'palisade', 1, (x > this.L.gate.x - 12 ? 8 : 0) | (x < this.L.gate.x + 13 ? 2 : 0))).setOrigin(0, 1).setScale(S).setDepth(line));
     // your host behind the line, one figure per soldier (up to 140)
     const men = campaignSquads(s).flatMap((q) => Array.from({ length: q.count }, () => ({ cls: q.cls, rank: q.rank }))).slice(0, 140);
-    men.forEach((m, i) => { const blk = Math.floor(i / 24), k = i % 24, bx = gx - 200 + (blk % 4) * 108 + (blk % 4 >= 2 ? 20 : 0), by = hostY + Math.floor(blk / 4) * 66; this.fig(m.cls, m.rank, bx + (k % 6) * 12 + (Math.floor(k / 6) % 2) * 3, by + Math.floor(k / 6) * 10, 'you', Math.random() < 0.15); });
+    men.forEach((m, i) => { const blk = Math.floor(i / 24), k = i % 24, bx = gx - 200 + (blk % 4) * 108 + (blk % 4 >= 2 ? 20 : 0), by = hostY + Math.floor(blk / 4) * 66; const f = this.fig(m.cls, m.rank, bx + (k % 6) * 12 + (Math.floor(k / 6) % 2) * 3, by + Math.floor(k / 6) * 10, 'you', Math.random() < 0.15); f.home = { x: f.x, y: f.y }; });
+    this.campAt = { x: gx, y: campY };
     if (c.phase === 'field') {
       const foe = armyOf(r, r.power * 0.6).flatMap((u) => Array.from({ length: u.count }, () => ({ cls: u.cls, rank: u.rank }))).slice(0, 90);
       foe.forEach((m, i) => this.fig(m.cls, m.rank, gx - 150 + (i % 18) * 17, front + 30 + Math.floor(i / 18) * 11, 'foe', i % 2 === 0));
@@ -336,7 +414,8 @@ export class RivalScene extends Phaser.Scene {
       } else if (f.leave) { // deserting: off toward the edge of the map
         const dx = f.leave.x - f.x, dy = f.leave.y - f.y, d = Math.hypot(dx, dy), k = Math.min(1, ((dt / 1000) * 20) / Math.max(1, d)); f.x += dx * k; f.y += dy * k; f.img.setFlipX(dx < 0); fr = (tick + f.ph) % 4;
         if (d < 4) { f.img.destroy(); continue; }
-      } else if (f.starving) fr = 2;
+      } else if (f.job) fr = this.doJob(f, dt, tick);
+      else if (f.starving) fr = 2;
       else if ((tick + f.ph) % 30 === 0) fr = 2;
       if (f.side !== 'foe' || f.img.frame.name.endsWith('|0') || f.img.frame.name.endsWith('|2')) f.img.setFrame(sFrame(f.cls, f.rank, fr));
       f.img.setPosition(Math.round(f.x), Math.round(f.y)).setDepth(f.y);

@@ -44,13 +44,15 @@ export interface Loan { bat: string; rival: string; leftMin: number }
 /** Minutes of study a lent battalion serves abroad before it marches home. */
 export const LOAN_MIN = 60;
 export interface Report { id: string; t: number; title: string; win: boolean; lines: string[]; you: number; foe: number; lostYou: number; lostFoe: number; loot?: Partial<Res> }
-export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'return' | 'reinforce' | 'raid' | 'explore';
+export type JourneyKind = 'envoy' | 'caravan' | 'gift' | 'aid' | 'army' | 'return' | 'reinforce' | 'raid' | 'explore' | 'station';
+/** One of your battalions stationed in a vassal's or ally's castle. */
+export interface Garrison { bat: string; at: string; since: number }
 /** Someone on the road between your kingdom and another. Effects apply when they arrive. */
 /** `to` is set for places that are not a realm (bandit outposts); otherwise the journey runs to the rival's castle. */
 export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown>; to?: { x: number; y: number } }
 /** A small bandit camp on the road: easy prey with a small purse. */
 export interface Outpost { id: string; name: string; x: number; y: number; power: number; loot: Res; biome: 'grassland' | 'forest' | 'highlands' | 'swamp' }
-export interface WorldState { seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
+export interface WorldState { /** set by the cloud save: which write this is */ stamp?: string; garrisons?: Garrison[]; seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
   /** until when the town celebrates a victory */ festival?: number;
   /** buildings damaged in a lost battle, shown blackened and smoking until `until` */ scars?: { ids: string[]; until: number } }
 
@@ -73,6 +75,20 @@ export function roadNet(sites: { x: number; y: number }[]): number[] {
 }
 /** The way along the roads from the heart (site 0) to site i: the list of sites passed, heart first. */
 export function roadRoute<T extends { x: number; y: number }>(sites: T[], parent: number[], i: number) { const out: T[] = []; for (let k = i, n = 0; k >= 0 && n < 64; k = parent[k], n++) out.unshift(sites[k]); return out; }
+// ---------------- garrisons ----------------
+/** Castles where you may station battalions: your vassals and allies. */
+export const canStation = (r: Pick<Rival, 'status' | 'bandits'>) => !r.bandits && (r.status === 'vassal' || r.status === 'ally');
+export const garrisonsAt = (w: Pick<WorldState, 'garrisons'>, id: string) => (w.garrisons ?? []).filter((g) => g.at === id);
+/** A garrison on an enemy's road to you: the castle (if any) whose soldiers will harry their host on the way. */
+export function screenOf(w: Pick<WorldState, 'rivals' | 'garrisons'>, foe: string): Rival | null {
+  const held = new Set((w.garrisons ?? []).map((g) => g.at)); if (!held.size) return null;
+  const id = roadThrough(w, foe).find((x) => held.has(x)); return id ? w.rivals.find((r) => r.id === id) ?? null : null;
+}
+/** March time for an army from one castle to another (from your own castle when `from` is null). */
+export const marchMs = (from: Pick<Rival, 'x' | 'y'> | null, to: Pick<Rival, 'x' | 'y'>) => travelMs('army', from ? { x: 0.5 + to.x - from.x, y: 0.5 + to.y - from.y } : to);
+/** Extra tribute a garrisoned vassal pays (its treasury is collected by your own men). */
+export const GARRISON_TRIBUTE = 0.5;
+
 /** The realms a road from your castle to realm `id` passes through on the way (not counting the destination). */
 export function roadThrough(w: Pick<WorldState, 'rivals'>, id: string): string[] {
   const sites = [{ x: 0.5, y: 0.5, id: '' }, ...w.rivals.map((r) => ({ x: r.x, y: r.y, id: r.id }))], i = sites.findIndex((p) => p.id === id);
@@ -175,8 +191,10 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
   const days = Math.min(3, Math.max(1, Math.round((now.getTime() - last.getTime()) / 864e5)));
   let out: WorldState = { ...w, lastDay: today, rivals: w.rivals.map((r) => ({ ...r })), inbox: w.inbox.filter((m) => m.day >= dayStr(new Date(now.getTime() - 4 * 864e5))) };
   const R = rng(w.seed + hash(today));
+  const held = new Set((w.garrisons ?? []).map((g) => g.at));
   for (let d = 0; d < days; d++) for (const r of out.rivals) {
-    if (r.status === 'vassal') { r.relation = clamp(r.relation + 1); continue; }
+    if (r.status === 'vassal') { r.relation = clamp(r.relation + (held.has(r.id) ? 2 : 1)); continue; }
+    if (r.status === 'ally' && held.has(r.id)) r.relation = clamp(r.relation + 2); // your soldiers on their walls are a pledge of friendship
     const base = BASE[r.personality] - (r.personality === 'aggressive' ? (ctx.stage - 1) * 4 : 0) + (r.status === 'ally' ? 30 : 0);
     r.relation = clamp(Math.round(r.relation + Math.sign(base - r.relation) * Math.min(tierOf(r) === 'far' ? 1 : 2, Math.abs(base - r.relation)))); // far kingdoms barely think of you
     if (r.personality === 'treacherous' && R() < 0.3) r.relation = clamp(r.relation - 3);

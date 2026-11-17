@@ -1,4 +1,5 @@
 'use client';
+import { stationOf, recallGarrison } from '../lib/warActions.ts';
 import { useState } from 'react';
 import { useGame, useUI, hex, fmt, mobile } from './hooks.ts';
 import { TROOPS, TCLASSES, RANKS, OFFICERS, SQUADS_PER_COMPANY, COLORS, HERALD_COLORS, EMBLEMS, HERALD_EMBLEMS, PRESTIGE_EMBLEMS, type TClass, type Formation } from '../lib/economy.ts';
@@ -92,7 +93,7 @@ function Host() {
         return <button key={b.id} className="w-full flex items-center gap-2 text-left border-b border-black/10 pb-1" onClick={() => { setUI({ selBat: b.id, selArmy: null }); focusOn(b.x, b.y - 20); }}>
           <Banner color={b.color} emblem={b.emblem} scale={1.5} /><Portrait b={b} scale={1.5} />
           <span className="flex-1 min-w-0"><b>{b.name}</b><br /><span className="text-sm">{OFFICERS[b.commander.rank].name} {b.commander.name}</span></span>
-          <span className="text-sm whitespace-nowrap text-right">{fmt(n)} soldiers{(() => { const l = s.world.loans.find((x) => x.bat === b.id); return l ? <span className="block text-xs text-moss">lent · {Math.max(0, Math.ceil(l.leftMin))} min left</span> : null; })()}</span>
+          <span className="text-sm whitespace-nowrap text-right">{fmt(n)} soldiers{(() => { const l = s.world.loans.find((x) => x.bat === b.id); const g = stationOf(s, b.id); return l ? <span className="block text-xs text-moss">lent · {Math.max(0, Math.ceil(l.leftMin))} min left</span> : g ? <span className="block text-xs text-moss">garrison · {g.name}</span> : null; })()}</span>
         </button>; })}
     </Section>)}
     <div className="flex gap-2"><input className="inp" placeholder="New battalion name" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} /><button className="btn" onClick={() => { newBattalion(name.trim()); setName(''); }}>Raise</button></div>
@@ -152,6 +153,7 @@ function BattalionDetail({ bat }: { bat: Battalion }) {
   const emblems = [...EMBLEMS, ...(has(s, 'heraldry') ? HERALD_EMBLEMS : []), ...Object.entries(PRESTIGE_EMBLEMS).filter(([, a]) => s.achievements.includes(a)).map(([e]) => e)];
   const armies = [...new Set([...s.battalions.map((b) => b.army), 'Royal Army'])];
   return <div className="space-y-3">
+    {(() => { const g = stationOf(s, bat.id); return g ? <div className="card p-2 text-sm border-l-4 border-moss flex items-center gap-2"><span className="flex-1">Stationed at <b>{g.name}</b>, holding its walls.</span><button className="btn !py-0 text-xs" onClick={() => recallGarrison(bat.id)}>Recall</button><button className="btn !py-0 text-xs" onClick={() => setUI({ panel: 'world', selRival: g.id })}>Visit</button></div> : null; })()}
     {(() => { const l = s.world.loans.find((x) => x.bat === bat.id), r = l && s.world.rivals.find((x) => x.id === l.rival); return l ? <div className="card p-2 text-sm border-l-4 border-moss">Serving with <b>{r?.name}</b>: <b>{Math.max(0, Math.ceil(l.leftMin))} min</b> of study left, then they march home with experience.</div> : null; })()}
     <div className="flex items-center gap-2"><button className="btn !py-0" onClick={() => setUI({ selBat: null, inspect: null })}>← Host</button><span className="text-sm opacity-75 flex-1">{fmt(n)} soldiers · {squads.length} squads · {Math.ceil(squads.length / SQUADS_PER_COMPANY)} companies</span></div>
     <div className="card p-2 flex gap-3">

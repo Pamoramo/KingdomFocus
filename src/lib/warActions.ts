@@ -5,7 +5,7 @@ import { courtOf, courtFx, adjust } from './politics.ts';
 import { rating, lossFactor, has as hasTrait, praiseReady, styled, battleCry, type BattleKind } from './commanders.ts';
 import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
-import { type Journey, type JourneyKind, travelMs, type WorldState, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, LOAN_MIN, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
+import { type Journey, type JourneyKind, travelMs, type WorldState, canStation, screenOf, marchMs, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, LOAN_MIN, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
 import { RANKS, OFFICERS } from './economy.ts';
 
@@ -14,7 +14,7 @@ const W = (s: GameState, w: WorldState): GameState => ({ ...s, world: w });
 const rival = (s: GameState, id: string) => s.world.rivals.find((r) => r.id === id);
 
 // ---------------- army helpers ----------------
-export const awayBats = (s: GameState) => new Set([...(s.world.campaign?.battalions ?? []), ...s.world.loans.map((l) => l.bat), ...(s.world.journeys ?? []).flatMap((j) => j.bats ?? [])]);
+export const awayBats = (s: GameState) => new Set([...(s.world.campaign?.battalions ?? []), ...s.world.loans.map((l) => l.bat), ...(s.world.garrisons ?? []).map((g) => g.bat), ...(s.world.journeys ?? []).flatMap((j) => j.bats ?? [])]);
 export const homeSquads = (s: GameState) => { const away = awayBats(s); return s.squads.filter((q) => !away.has(q.bat)); };
 export const unitsOf = (squads: Squad[]): Unit[] => squads.map((q) => ({ cls: q.cls, count: q.count, rank: q.rank, ref: q.id }));
 export const campaignSquads = (s: GameState) => s.squads.filter((q) => s.world.campaign?.battalions.includes(q.bat));
@@ -110,10 +110,13 @@ export const worldTick = () => {
   if (getState().world.outpostDay !== today) setState(W(getState(), refreshOutposts(getState().world, getState().stage, today))); // bandits pitch a new camp each day
   const s = getState();
   if (s.world.lastDay === today) return;
-  const w = advanceDays(s.world, { stage: s.stage, myPower: myPower(s), fort: fortOf(s), active: true, neglect: neglect(s) }, today);
+  let w = advanceDays(s.world, { stage: s.stage, myPower: myPower(s), fort: fortOf(s), active: true, neglect: neglect(s) }, today);
+  // your garrisons watch the roads: an enemy whose way to you passes one is less likely to come, and arrives bloodied
+  w = { ...w, warnings: (w.warnings ?? []).map((x) => (!(s.world.warnings ?? []).some((o) => o.rival === x.rival) && screenOf(w, x.rival) ? { ...x, chance: Math.round(x.chance * 0.6 * 100) / 100 } : x)) };
+  if (w.threat && !s.world.threat) { const by = screenOf(w, w.threat.rival); if (by) { w = { ...w, threat: { ...w.threat, power: Math.round(w.threat.power * 0.75) } }; emit({ kind: 'war', text: `Your garrison at ${by.name} harried the enemy host on the road: it arrives a quarter weaker.` }); } }
   const fresh = w.inbox.filter((m) => !s.world.inbox.some((x) => x.id === m.id));
   for (const m of fresh) emit({ kind: m.kind === 'news' ? 'war' : 'info', text: m.text });
-  setState(W(s, w));
+  setState(expelGarrisons(W(s, w)));
 };
 studyHooks.push((s, minutes) => {
   if (minutes <= 0 || !s.world) return s;
@@ -284,6 +287,11 @@ export const journeysTick = (now = Date.now()) => {
         continue;
       }
       if (j.kind === 'reinforce') { o = reinforcementsArrive(o, j, r); continue; }
+      if (j.kind === 'station') {
+        if (canStation(r)) { o = W(o, { ...o.world, garrisons: [...(o.world.garrisons ?? []).filter((g) => !j.bats!.includes(g.bat)), ...j.bats!.map((bat) => ({ bat, at: r.id, since: now }))] }); emit({ kind: 'info', text: `${j.label.replace(/ marching.*/, '')} now hold${j.bats!.length > 1 ? '' : 's'} the walls of ${r.name}.` }); o = event(o, 'command', `Stationed ${j.bats!.length} battalion${j.bats!.length > 1 ? 's' : ''} at ${r.name}.`); }
+        else { o = goHome(o, r, j.bats!, 'Turned away, marching home'); emit({ kind: 'error', text: `${r.name} closed its gates to your garrison. They march home.` }); }
+        continue;
+      }
       if (j.kind === 'caravan') {
         o = W(o, shiftRelations(o.world, r.id, d.rel, false));
         o = send(o, 'return', r, `Caravan returning from ${r.name}`, { home: true, data: { res: { [d.want]: d.got } } }, travelMs('caravan', r));
@@ -329,6 +337,47 @@ export const answerMissive = (mid: string, accept: boolean) => update((s) => {
   return event(o, 'diplomacy', `${accept ? 'Accepted' : 'Refused'}: ${m.text}`);
 });
 
+// ---------------- garrisons ----------------
+/** Where a battalion is stationed (null when at home or elsewhere). */
+export const stationOf = (s: GameState, bat: string) => { const g = (s.world.garrisons ?? []).find((x) => x.bat === bat); return g ? rival(s, g.at) ?? null : null; };
+/** Battalions you may send to a castle: those at home, and those garrisoned elsewhere (they march castle to castle). */
+export const stationable = (s: GameState, id: string) => {
+  const away = awayBats(s), held = new Set((s.world.garrisons ?? []).filter((g) => g.at !== id).map((g) => g.bat));
+  return s.battalions.filter((b) => s.squads.some((q) => q.bat === b.id) && (!away.has(b.id) || held.has(b.id)));
+};
+/** Station battalions in a vassal's or ally's castle: they hold its walls until recalled. */
+export const stationAt = (id: string, bats: string[]) => update((s) => {
+  const r = rival(s, id); if (!r) return; if (!canStation(r)) return 'Only your vassals and allies will quarter your soldiers';
+  if (s.world.threat) return 'Deal with the army at your gates first';
+  const ok = new Set(stationable(s, id).map((b) => b.id)); bats = bats.filter((b) => ok.has(b)); if (!bats.length) return 'Choose battalions at home or stationed elsewhere';
+  let o = s;
+  // from home, or from another castle: each group marches from where it stands
+  const groups = new Map<string, string[]>(); for (const b of bats) { const from = stationOf(s, b)?.id ?? ''; groups.set(from, [...(groups.get(from) ?? []), b]); }
+  o = W(o, { ...o.world, garrisons: (o.world.garrisons ?? []).filter((g) => !bats.includes(g.bat)) });
+  for (const [from, list] of groups) {
+    const src = from ? rival(s, from)! : null, names = list.map((b) => s.battalions.find((x) => x.id === b)?.name).join(', ');
+    o = send(o, 'station', r, `${names} marching to garrison ${r.name}`, { bats: list, data: { from } }, marchMs(src, r));
+  }
+  emit({ kind: 'info', text: `${bats.length} battalion${bats.length > 1 ? 's march' : ' marches'} to garrison ${r.name}.` });
+  return o;
+});
+/** Bring a stationed battalion home. */
+export const recallGarrison = (bat: string) => update((s) => {
+  const g = (s.world.garrisons ?? []).find((x) => x.bat === bat), r = g && rival(s, g.at); if (!g || !r) return;
+  const name = s.battalions.find((b) => b.id === bat)?.name ?? 'Your battalion';
+  emit({ kind: 'info', text: `${name} leaves ${r.name} for home.` });
+  return goHome(W(s, { ...s.world, garrisons: (s.world.garrisons ?? []).filter((x) => x.bat !== bat) }), r, [bat], `${name} returning from ${r.name}`);
+});
+/** Garrisons in castles that are no longer friendly march home. */
+const expelGarrisons = (s: GameState): GameState => {
+  let o = s;
+  for (const g of s.world.garrisons ?? []) { const r = rival(s, g.at); if (r && canStation(r)) continue;
+    o = W(o, { ...o.world, garrisons: (o.world.garrisons ?? []).filter((x) => x.bat !== g.bat) });
+    if (r) { o = goHome(o, r, [g.bat], `Garrison expelled from ${r.name}`); emit({ kind: 'war', text: `${r.name} is no longer your friend: your garrison there marches home.` }); }
+  }
+  return o;
+};
+
 // ---------------- siege works ----------------
 export const engineLock = (s: GameState, e: Engine) => (!has(s, 'engineering') ? 'Requires Engineering' : maxLevel(s, 'siege') < ENGINES[e].siege ? `Requires ${ENGINES[e].siege === 2 ? "Engineers' Yard" : 'Siege Workshop'}` : null);
 export const buildEngine = (e: Engine) => update((s) => {
@@ -347,14 +396,17 @@ export const startCampaign = (id: string, bats: string[], engines: Engines, supp
   const r = rival(s, id); if (!r) return; if (r.status !== 'war') return 'Declare war first';
   if (s.world.campaign) return 'You already have a campaign under way';
   if (s.world.threat) return 'Deal with the army at your gates first';
-  const away = awayBats(s); if (!bats.length || bats.some((b) => away.has(b))) return 'Choose battalions that are at home';
+  const away = awayBats(s), held = new Set((s.world.garrisons ?? []).map((g) => g.bat)); if (!bats.length || bats.some((b) => away.has(b) && !held.has(b))) return 'Choose battalions that are at home or in garrison';
   if (!s.squads.some((q) => bats.includes(q.bat))) return 'Those battalions have no soldiers';
   if (ENGINE_IDS.some((e) => engines[e] > s.world.engines[e])) return 'Not enough siege engines';
   supplies = Math.floor(supplies); if (supplies > s.world.supplies) return 'Not enough supplies';
   const allies = s.world.rivals.filter((x) => x.status === 'ally' && x.relation >= 60 && !r.friends.includes(x.id)).map((x) => x.id);
   const home = { ...s.world.engines }; for (const e of ENGINE_IDS) home[e] -= engines[e];
   emit({ kind: 'war', text: `Your host marches on ${r.name}${allies.length ? ` with ${allies.length} allied banner${allies.length > 1 ? 's' : ''}` : ''}!` });
-  return event(W(s, { ...s.world, engines: home, supplies: s.world.supplies - supplies, campaign: newCampaign(r, bats, engines, supplies, allies) }), 'war', `Marched on ${r.name}.`);
+  // battalions in a forward garrison march from there: the host gathers as soon as the slowest arrives
+  const camp = newCampaign(r, bats, engines, supplies, allies), now = Date.now(), arrive = now + Math.max(...bats.map((b) => marchMs(stationOf(s, b), r)));
+  const w = { ...s.world, garrisons: (s.world.garrisons ?? []).filter((g) => !bats.includes(g.bat)) };
+  return event(W(s, { ...w, engines: home, supplies: s.world.supplies - supplies, campaign: { ...camp, arrive } }), 'war', `Marched on ${r.name}.`);
 });
 /** Field battle against the enemy's army before the siege can begin. */
 export const fieldBattle = (tactic: Tactic) => update((s) => {

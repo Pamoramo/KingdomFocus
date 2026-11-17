@@ -7,7 +7,7 @@ import type { Biome } from './realms.ts';
 import { traitsFor, has as hasTrait, type TraitId } from './commanders.ts';
 import { courtOf, courtFx } from './politics.ts';
 import { sitesFor, settlementFx } from './expansion.ts';
-import { type WorldState, type Engines, initWorld, vassalGold, vassalRenown, VASSAL_GOLD_MAX, travelMs, type Journey } from './war.ts';
+import { type WorldState, type Engines, initWorld, vassalGold, vassalRenown, VASSAL_GOLD_MAX, GARRISON_TRIBUTE, travelMs, type Journey } from './war.ts';
 import type { Unit, BattleResult } from './battle.ts';
 
 // ---------------- types ----------------
@@ -142,7 +142,7 @@ export function townOrder(s: GameState) {
 }
 /** Study multipliers: buildings, vassal tribute (+5% gold each, max 30%), and an enemy blockade (-25% gold). */
 export const studyMult = (s: GameState): Res => {
-  const e = effects(s), w = s.world, vs = w ? w.rivals.filter((r) => r.status === 'vassal') : [], tribute = vs.reduce((t, r) => t + vassalGold(r), 0), tributeRenown = vs.reduce((t, r) => t + vassalRenown(r), 0);
+  const e = effects(s), w = s.world, vs = w ? w.rivals.filter((r) => r.status === 'vassal') : [], tribute = vs.reduce((t, r) => t + vassalGold(r) * ((w.garrisons ?? []).some((g) => g.at === r.id) ? 1 + GARRISON_TRIBUTE : 1), 0), tributeRenown = vs.reduce((t, r) => t + vassalRenown(r), 0);
   const safe = townOrder(s).ratio >= 1 && townOrder(s).needed > 2 ? 0.03 : 0;
   // the court's decrees and moods, and the settlements you hold
   const c = w ? courtFx(courtOf(w)) : null, st = w ? settlementFx(w.settlements, sitesFor(w.seed)) : null;

@@ -96,3 +96,29 @@ test('sieges cut trade: besieged, you cannot send caravans; besieging, their fri
   assert.equal(canTrade(friend, sieging, '-'), null, 'realms off the road still trade');
   assert.match(canTrade({ ...friend, friends: [mid] }, sieging, '-')!, /their friend/);
 });
+
+test('garrisons: stationed in vassal and allied castles, they raise tribute, screen the roads, march from there, and go home if turned out', async () => {
+  const { roadThrough, screenOf, marchMs } = await import('./war.ts');
+  let w = initWorld(4); w = { ...w, rivals: w.rivals.map((r) => ({ ...r, known: true })) };
+  const far = w.rivals.find((r) => !r.bandits && roadThrough(w, r.id).some((x) => x !== 'bandits'))!, midId = roadThrough(w, far.id).find((x) => x !== 'bandits')!;
+  w = { ...w, rivals: w.rivals.map((r) => (r.id === midId ? { ...r, status: 'vassal' as const } : r.id === far.id ? { ...r, status: 'war' as const } : r)) };
+  S._with({ ...S.newGame(), world: w }); S.newBattalion('Vanguard'); const b0 = S.getState().battalions[0].id;
+  S._with({ ...S.getState(), squads: [{ id: 'q1', cls: 'spearman', count: 10, xp: 0, rank: 0, bat: b0 }] });
+  const bat = S.getState().battalions[0].id, before = S.studyMult(S.getState()).gold;
+  assert.equal(WA.stationAt(far.id, [bat]), 'Only your vassals and allies will quarter your soldiers');
+  assert.equal(WA.stationAt(midId, [bat]), null);
+  assert.ok(WA.awayBats(S.getState()).has(bat), 'on the march');
+  WA.journeysTick(Date.now() + 3600_000 * 5);
+  assert.equal(S.getState().world.garrisons?.[0]?.at, midId, 'holding the vassal castle');
+  assert.ok(WA.awayBats(S.getState()).has(bat) && WA.homeSquads(S.getState()).length === 0, 'not at home to defend you');
+  assert.ok(S.studyMult(S.getState()).gold > before, 'the vassal pays more with your men collecting');
+  assert.equal(screenOf(S.getState().world, far.id)?.id, midId, 'the road from the far realm runs past your garrison');
+  // a campaign from the forward castle is a shorter march
+  const t0 = Date.now(); assert.equal(WA.startCampaign(far.id, [bat], { ram: 0, tower: 0, mangonel: 0, ballista: 0, trebuchet: 0 }, 0), null);
+  const c = S.getState().world.campaign!; assert.ok(c.arrive! - t0 <= marchMs(w.rivals.find((r) => r.id === midId)!, far) + 1000 && c.arrive! - t0 < marchMs(null, far), 'marches from the garrison');
+  assert.equal((S.getState().world.garrisons ?? []).length, 0, 'the garrison left to fight');
+  // a castle that turns against you sends the garrison home
+  S._with({ ...S.getState(), world: { ...S.getState().world, campaign: null, garrisons: [{ bat, at: midId, since: 0 }], lastDay: '2000-01-01', rivals: S.getState().world.rivals.map((r) => (r.id === midId ? { ...r, status: 'neutral' as const } : r)) } });
+  WA.worldTick();
+  assert.equal((S.getState().world.garrisons ?? []).length, 0); assert.ok((S.getState().world.journeys ?? []).some((j) => j.kind === 'return' && j.bats?.includes(bat)), 'marching home');
+});

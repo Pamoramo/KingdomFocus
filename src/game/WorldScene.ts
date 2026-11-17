@@ -34,7 +34,10 @@ export class WorldScene extends Phaser.Scene {
     const w = getState().world, sites = [HOME, ...w.rivals.map((r) => ({ x: r.x, y: r.y }))], net = roadNet(sites);
     let pts: { x: number; y: number }[];
     if (j.to) { const near = sites.map((p, i) => ({ i, d: Math.hypot(p.x - j.to!.x, p.y - j.to!.y) })).sort((a, b) => a.d - b.d)[0]; pts = [...roadRoute(sites, net, near.d < Math.hypot(HOME.x - j.to.x, HOME.y - j.to.y) ? near.i : 0), j.to]; }
-    else { const i = w.rivals.findIndex((r) => r.id === j.rival) + 1; pts = i > 0 ? roadRoute(sites, net, i) : [HOME]; }
+    else { const i = w.rivals.findIndex((r) => r.id === j.rival) + 1; pts = i > 0 ? roadRoute(sites, net, i) : [HOME];
+      // castle to castle (a garrison moving on): back along one road to where the roads meet, then out along the other
+      const from = (j.data as { from?: string } | undefined)?.from, fi = from ? w.rivals.findIndex((r) => r.id === from) + 1 : 0;
+      if (fi > 0) { const a = roadRoute(sites, net, fi); let k = 0; while (k + 1 < a.length && k + 1 < pts.length && a[k + 1] === pts[k + 1]) k++; pts = [...a.slice(k).reverse(), ...pts.slice(k + 1)]; } }
     pts = pts.map((p) => ({ x: p.x * WW, y: p.y * WH }));
     if (j.home) pts.reverse();
     return pts;
@@ -118,7 +121,7 @@ export class WorldScene extends Phaser.Scene {
       this.sites.get(r.id)!.label.setColor(r.status === 'war' ? '#ff9a8a' : r.status === 'ally' ? '#a8f0a0' : r.status === 'vassal' ? '#ffe27a' : '#fff4d6');
     }
     this.outposts(s); this.settlements(s);
-    const sig = JSON.stringify([w.campaign?.target, w.campaign?.phase, w.campaign?.engines, w.threat?.rival, w.loans.map((l) => l.rival + Math.ceil(l.leftMin))]); // redraw as a loan's time runs down
+    const sig = JSON.stringify([w.campaign?.target, w.campaign?.phase, w.campaign?.engines, w.threat?.rival, w.loans.map((l) => l.rival + Math.ceil(l.leftMin)), (w.garrisons ?? []).map((g) => g.at + g.bat)]); // redraw as a loan's time runs down
     if (sig !== this.sig) { this.sig = sig; this.armies(s); }
     this.highlight(); this.syncJourneys();
   }
@@ -176,6 +179,12 @@ export class WorldScene extends Phaser.Scene {
       const path = this.add.graphics().setDepth(50); path.lineStyle(3, 0xffe27a, 0.8); path.beginPath(); path.moveTo(home.x, home.y + 10); path.lineTo(cx, cy); path.strokePath(); this.units.push(path);
     }
     if (w.threat) { const r = w.rivals.find((x) => x.id === w.threat!.rival)!; this.soldiers(home.x + 60, home.y + 10, 'spearman', 12, true, 0xffb0a0); const b = this.add.image(home.x + 80, home.y - 20, bannerTex(this, r.color, r.emblem, 0)).setScale(S * 1.4); this.units.push(b); }
+    // your garrisons: soldiers and your banner on the walls of vassal and allied castles
+    const byCastle = new Map<string, string[]>(); for (const g of w.garrisons ?? []) byCastle.set(g.at, [...(byCastle.get(g.at) ?? []), g.bat]);
+    for (const [at, bats] of byCastle) { const r = w.rivals.find((x) => x.id === at); if (!r) continue; const b0 = s.battalions.find((b) => b.id === bats[0]);
+      this.soldiers(r.x * WW + 40, r.y * WH + 26, 'spearman', Math.min(8, 2 + bats.length * 2), true);
+      if (b0) this.units.push(this.add.image(r.x * WW + 58, r.y * WH - 4, bannerTex(this, b0.color, b0.emblem, 0)).setScale(S * 1.2).setDepth(r.y * WH + 30));
+      this.units.push(this.add.text(r.x * WW + 40, r.y * WH + 46, `Your garrison: ${bats.length} battalion${bats.length > 1 ? 's' : ''}`, { fontFamily: 'monospace', fontSize: '20px', color: '#ffe27a', stroke: '#1d1712', strokeThickness: 4 }).setOrigin(0.5, 0).setDepth(9000)); }
     for (const l of w.loans) { const r = w.rivals.find((x) => x.id === l.rival); if (!r) continue; this.soldiers(r.x * WW - 40, r.y * WH + 26, 'spearman', 4);
       const name = getState().battalions.find((b) => b.id === l.bat)?.name ?? 'Your troops'; this.units.push(this.add.text(r.x * WW - 40, r.y * WH + 46, `${name} · ${Math.max(0, Math.ceil(l.leftMin))} min of study left`, { fontFamily: 'monospace', fontSize: '20px', color: '#a8f0a0', stroke: '#1d1716', strokeThickness: 5 }).setOrigin(0.5, 0).setScale(0.5).setDepth(6000)); }
   }
