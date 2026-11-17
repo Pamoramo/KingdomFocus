@@ -17,8 +17,6 @@ export interface Rival {
   known?: boolean;
   /** when you took their castle (your troops are seen marching in for a while) */
   conquered?: number;
-  /** goodwill: what they remember of your kindness (aid, gifts, trade). Their feelings settle this much higher, and it fades slowly. */
-  favour?: number;
   /** the realm's own life: its lord, treasury, holdings, ties, wars and history (see lordships.ts) */
   lordship?: import('./lordships.ts').Lordship;
 }
@@ -56,7 +54,7 @@ export interface Garrison { bat: string; at: string; since: number }
 export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown>; to?: { x: number; y: number } }
 /** A small bandit camp on the road: easy prey with a small purse. */
 export interface Outpost { id: string; name: string; x: number; y: number; power: number; loot: Res; biome: 'grassland' | 'forest' | 'highlands' | 'swamp' }
-export interface WorldState { /** one-time corrections already applied */ grants?: string[]; /** the game's calendar (see clockOf) */ clock?: Clock; /** what the other realms have been doing */ news?: import('./lordships.ts').News[]; /** set by the cloud save: which write this is */ stamp?: string; garrisons?: Garrison[]; /** battalions sent off duty to quarters */ quartered?: string[]; seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
+export interface WorldState { /** the game's calendar (see clockOf) */ clock?: Clock; /** what the other realms have been doing */ news?: import('./lordships.ts').News[]; /** set by the cloud save: which write this is */ stamp?: string; garrisons?: Garrison[]; /** battalions sent off duty to quarters */ quartered?: string[]; seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
   /** until when the town celebrates a victory */ festival?: number;
   /** buildings damaged in a lost battle, shown blackened and smoking until `until` */ scars?: { ids: string[]; until: number } }
 
@@ -225,11 +223,8 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
   for (let d = 0; d < days; d++) for (const r of out.rivals) {
     if (r.status === 'vassal') { r.relation = clamp(r.relation + (held.has(r.id) ? 2 : 1)); continue; }
     if (r.status === 'ally' && held.has(r.id)) r.relation = clamp(r.relation + 2); // your soldiers on their walls are a pledge of friendship
-    // feelings settle toward the realm's nature, raised by the goodwill you have earned; while your soldiers serve them they never cool
-    const base = restingRelation(r, ctx.stage);
-    const serving = (w.loans ?? []).some((l) => l.rival === r.id) || held.has(r.id), step = Math.sign(base - r.relation) * Math.min(tierOf(r) === 'far' ? 1 : 2, Math.abs(base - r.relation));
-    if (!(serving && step < 0)) r.relation = clamp(Math.round(r.relation + step)); // far kingdoms barely think of you
-    if (r.favour) r.favour = Math.max(0, Math.round((r.favour - 0.5) * 10) / 10); // goodwill fades, slowly
+    const base = BASE[r.personality] - (r.personality === 'aggressive' ? (ctx.stage - 1) * 4 : 0) + (r.status === 'ally' ? 30 : 0);
+    r.relation = clamp(Math.round(r.relation + Math.sign(base - r.relation) * Math.min(tierOf(r) === 'far' ? 1 : 2, Math.abs(base - r.relation)))); // far kingdoms barely think of you
     if (r.personality === 'treacherous' && R() < 0.3) r.relation = clamp(r.relation - 3);
     if (r.bandits) r.power = Math.round(r.power * 1.015 + 2); // the lordships raise their own armies (lordships.ts)
     r.garrison = Math.max(r.garrison, Math.round(r.power * 0.4));
@@ -342,11 +337,6 @@ export function shiftRelations(w: WorldState, id: string, delta: number, ripple 
     return r;
   }) };
 }
-/** Kindness remembered: raises where a realm's feelings for you settle (up to +60). */
-export const FAVOUR_MAX = 60;
-/** Where a realm's feelings for you settle day by day: its nature, an alliance, and the goodwill you have earned. */
-export const restingRelation = (r: Pick<Rival, 'personality' | 'status' | 'favour'>, stage: number) => clamp(BASE[r.personality] - (r.personality === 'aggressive' ? (stage - 1) * 4 : 0) + (r.status === 'ally' ? 30 : 0) + (r.favour ?? 0));
-export const addFavour = (w: WorldState, id: string, n: number): WorldState => ({ ...w, rivals: w.rivals.map((r) => (r.id === id ? { ...r, favour: Math.min(FAVOUR_MAX, Math.round(((r.favour ?? 0) + n) * 10) / 10) } : r)) });
 export const setStatus = (w: WorldState, id: string, status: RStatus): WorldState => ({ ...w, rivals: w.rivals.map((r) => (r.id === id ? { ...r, status } : r)) });
 
 // ---------------- campaigns ----------------

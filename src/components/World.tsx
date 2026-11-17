@@ -6,7 +6,6 @@ import { setUI, toggleWorldView } from '../game/ui.ts';
 import { type GameState } from '../lib/state.ts';
 import { type Res, canAfford } from '../lib/rewards.ts';
 import { TACTICS, TERRAINS, tacticLock, sidePower, type Tactic, type Terrain } from '../lib/battle.ts';
-import { restingRelation } from '../lib/war.ts';
 import { lordshipOf, incomeOf, armyCapOf, TRAIT, ORDINAL, type News } from '../lib/lordships.ts';
 import { canStation, garrisonsAt, GARRISON_TRIBUTE, marchMs, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, SIEGE_DAY_MIN, PERSONALITY_TEXT, relationLabel, tradeQuote, canTrade, giftRelation, consumption, surrenderChance, bombardPerDay, likelihood, LOAN_MIN, isKnown, tierOf, leagues, reachOf, TIER, type Tier, fieldSpoils, conquestSpoils, vassalGold, vassalRenown, VASSAL_GOLD_MAX, type Rival, type Engines, type Stance } from '../lib/war.ts';
 import * as WA from '../lib/warActions.ts';
@@ -158,9 +157,7 @@ function RivalDetail({ r }: { r: Rival }) {
         <div>{BIOME_NAME[biomeOf(s.world, r)]} · {CASTLE_NAME[realmLayout(s.world, r).type]} · {realmLayout(s.world, r).wealth} {r.bandits ? 'camp' : TOWN_PLAN_NAME[realmLayout(s.world, r).plan]}</div>
         <div className="text-xs opacity-80">{TIER[tierOf(r)].name}, {leagues(r).toFixed(1)} leagues away: {TIER[tierOf(r)].desc}</div>
         <button className="btn btn-gold !py-0.5 mt-1" onClick={() => setUI({ view: 'rival', visit: r.id, panel: mobile() ? null : 'world' })}>Visit {r.name}</button>
-        {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}
-        {!r.bandits && (r.favour ?? 0) >= 1 && <div className="text-xs text-moss" title="Aid, gifts and trade are remembered: their feelings settle this much higher, and it fades only slowly.">Goodwill +{Math.round(r.favour!)}: they remember your kindness (their feelings now settle near {Math.round(restingRelation(r, s.stage))})</div>}
-        {!r.bandits && s.world.loans.some((l) => l.rival === r.id) && <div className="text-xs">Your soldiers serve them: their feelings will not cool meanwhile.</div>}</div></div>
+        {!r.bandits && <div className="flex items-center gap-2"><div className="flex-1"><Bar value={r.relation + 100} max={200} color={relColor(r.relation)} /></div>{relationLabel(r.relation)} {r.relation}</div>}</div></div>
     {!r.bandits && <LordshipPanel r={r} />}
     {canStation(r) && <GarrisonPanel r={r} />}
     {r.status === 'vassal' ? <p className="text-sm">{r.name} pays you tribute: +{Math.round(vassalGold(r) * 100)}% gold and +{(vassalRenown(r) * 100).toFixed(1)}% renown from every study session (a greater realm pays more) (all vassals together give at most +{Math.round(VASSAL_GOLD_MAX * 100)}% gold).</p> : <>
