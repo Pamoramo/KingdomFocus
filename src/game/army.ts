@@ -74,6 +74,11 @@ export class Army {
     for (const [id, v] of this.views) if (!seen.has(id)) { v.detail.destroy(); v.blocks.destroy(); v.banner.destroy(); v.label.destroy(); v.ring.destroy(); this.views.delete(id); }
   }
 
+  /** Where each soldier of a battalion in formation stands (for their shadows). */
+  feet(foot: (x: number, y: number, w: number) => void) {
+    if (this.lod) return;
+    for (const v of this.views.values()) if (v.detail.visible) { const x = Math.round(v.x), y = Math.round(v.y); for (const bb of v.bobs) if (bb.b.visible) foot(x + bb.ox + SW / 2, y + bb.oy + SH, SW * 0.5); }
+  }
   setLod(zoom: number) {
     const lod = zoom < LOD_ZOOM;
     if (lod === this.lod) return; this.lod = lod;

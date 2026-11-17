@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { ShadowLayer, FootShadows, shadowTex, sunNow } from './shadows.ts';
 import { getState, subscribe, TILE, type GameState } from '../lib/state.ts';
 import { realmLayout, RW, RH, type RealmLayout, type Biome } from '../lib/realms.ts';
 import { armyOf, ENGINE_IDS, consumption, type Rival } from '../lib/war.ts';
@@ -46,7 +47,7 @@ export class RivalScene extends Phaser.Scene {
   private waterImgs: { img: Phaser.GameObjects.Image; land: number }[] = [];
   private figs: Fig[] = []; private siegeObjs: Phaser.GameObjects.GameObject[] = []; private siegeSig = '';
   private chatter!: Chatter; private weather!: WeatherFx; private shade!: Phaser.GameObjects.Rectangle;
-  private doors: { x: number; y: number }[] = []; private unsub: (() => void)[] = []; private campAt: Pt | null = null;
+  private doors: { x: number; y: number }[] = []; private unsub: (() => void)[] = []; private campAt: Pt | null = null; private shadows!: ShadowLayer; private feet!: FootShadows;
   private drag: { x: number; y: number; sx: number; sy: number } | null = null; private pinch: { d: number; z: number } | null = null;
   constructor() { super('rival'); }
   init(data: { id: string }) { this.r = getState().world.rivals.find((x) => x.id === data.id)!; this.figs = []; this.waterImgs = []; this.bImgs = []; this.marks = []; this.wallImgs = []; this.siegeObjs = []; this.siegeSig = ''; }
@@ -54,6 +55,7 @@ export class RivalScene extends Phaser.Scene {
   create() {
     const s = getState(); this.L = realmLayout(s.world, this.r);
     this.nav = realmNav(this.L);
+    this.shadows = new ShadowLayer(this); this.shadows.sun = sunNow(s.settings.dayNight, biomeWeather(this.L.biome, weatherAt())); this.feet = new FootShadows(this);
     this.makeTextures(); this.drawGround(); this.placeBuildings(); this.spawnFolk(); this.triumph();
     this.chatter = new Chatter(this);
     this.weather = new WeatherFx(this, WW, WH);
@@ -73,6 +75,7 @@ export class RivalScene extends Phaser.Scene {
     this.events.once('shutdown', () => this.unsub.forEach((u) => u()));
     this.time.addEvent({ delay: 3500, loop: true, callback: () => this.siegeMood() });
     this.time.addEvent({ delay: 1400, loop: true, callback: () => this.campLife() });
+    this.time.addEvent({ delay: 1000, loop: true, callback: () => this.shadows.sync() }); // razed suburbs and breached walls lose their shadows
     this.time.addEvent({ delay: 380, loop: true, callback: () => { this.frame++; for (const b of this.bImgs) if (b.img.visible) b.img.setTexture(bTex(this, b.kind, b.level, this.frame % 2).key); for (const w of this.waterImgs) w.img.setTexture(waterTex(this, w.land, this.frame % 3)); for (const f of this.fires) f.setTexture(`fire${this.frame % 2}`); } });
     this.time.addEvent({ delay: 6500, loop: true, callback: () => this.chat() });
     this.time.addEvent({ delay: 4200, loop: true, callback: () => this.volley() });
@@ -220,6 +223,8 @@ export class RivalScene extends Phaser.Scene {
       const inside = x > this.L.box.x0 && x < this.L.box.x1 && y > this.L.box.y0 && y < this.L.box.y1, approach = Math.abs(x - gx) < 12 && y >= campTop;
       if (!occ.has(`${x},${y}`) && !inside && !approach && ((h >>> 9) % 1000) / 1000 < dens * (x < 2 || x > RW - 3 || y > RH - 3 ? 4 : 1)) deco.push([`bp_${plants[(h >>> 4) % plants.length]}${h % 2}`, x, y]);
     }
+    const sun = this.shadows.sun; // plants and rocks throw their shadows onto the ground first
+    if (sun.alpha > 0.02) for (const [k, x, y] of deco) { const sk = shadowTex(this, k, sun.len); if (sk) rt.batchDraw(sk, x * TILE * HD, (y * TILE - 8) * HD + this.textures.get(k).getSourceImage().height, sun.alpha); }
     for (const [k, x, y] of deco.sort((a, c) => a[2] - c[2])) rt.batchDraw(k, x * TILE * HD, (y * TILE - 8) * HD);
     rt.endDraw();
     // the high street, back lanes and market square: cobbles in a prosperous town, beaten earth in a poor one
@@ -243,13 +248,13 @@ export class RivalScene extends Phaser.Scene {
     for (const w of L.walls) {
       const mask = (ok(w.x, w.y - 1) ? 1 : 0) | (ok(w.x + 1, w.y) ? 2 : 0) | (ok(w.x, w.y + 1) ? 4 : 0) | (ok(w.x - 1, w.y) ? 8 : 0);
       const img = this.add.image(w.x * TILE, (w.y + 1) * TILE, tileTex(this, L.wallKind, L.wallLevel, mask)).setOrigin(0, 1).setScale(S).setDepth((w.y + 1) * TILE);
-      this.wallImgs.push({ img, x: w.x, y: w.y });
+      this.wallImgs.push({ img, x: w.x, y: w.y }); this.shadows.attach(img);
     }
     for (const b of L.buildings) {
       const d = BUILDINGS[b.kind], by = (b.y + d.h) * TILE;
       const img = this.add.image(b.x * TILE, by, bTex(this, b.kind, b.level, 0).key).setOrigin(0, 1).setScale(S).setDepth(by);
       if (L.biome === 'tundra') img.setTint(0xeef4ff); if (L.biome === 'desert') img.setTint(0xfff2dc);
-      this.bImgs.push({ img, kind: b.kind, level: b.level, suburb: b.suburb });
+      this.bImgs.push({ img, kind: b.kind, level: b.level, suburb: b.suburb }); if (b.kind !== 'farm' && b.kind !== 'trainfield') this.shadows.attach(img, bTex(this, b.kind, b.level, 0).key);
       this.doors.push({ x: (b.x + d.w / 2) * TILE, y: by + 4 });
     }
     // the parish church and the market stalls
@@ -257,7 +262,7 @@ export class RivalScene extends Phaser.Scene {
       const by = (m.y + m.h) * TILE, img = this.add.image(m.kind === 'windmill' ? (m.x + 1) * TILE : m.x * TILE, by, m.kind === 'church' ? 'church' : m.kind === 'windmill' ? 'windmill' : `stall${m.v % 4}`).setOrigin(m.kind === 'windmill' ? 0.5 : 0, 1).setScale(S).setDepth(by);
       if (m.kind === 'windmill') { const sails = this.add.image((m.x + 1) * TILE, by - img.displayHeight * (1 - 22 / 56), 'mill_sails').setScale(S).setDepth(by + 1); this.tweens.add({ targets: sails, angle: 360, duration: 9000, repeat: -1 }); if (L.biome === 'tundra') sails.setTint(0xeef4ff); }
       if (L.biome === 'tundra') img.setTint(0xeef4ff);
-      this.marks.push({ img, suburb: m.suburb });
+      this.marks.push({ img, suburb: m.suburb }); this.shadows.attach(img);
       this.doors.push({ x: (m.x + m.w / 2) * TILE, y: by + 4 });
     }
     // the rival's banners over the keep and gate
@@ -395,9 +400,10 @@ export class RivalScene extends Phaser.Scene {
     const ch = (s: number) => Math.round(255 + ((s >> 0) - 255) * n * 0.85); void ch;
     const mix = (a: number, b: number, t: number) => { const c = (sh: number) => Math.round(((a >> sh) & 255) + (((b >> sh) & 255) - ((a >> sh) & 255)) * t); return (c(16) << 16) | (c(8) << 8) | c(0); };
     this.shade.setFillStyle(mix(0xffffff, 0x3a4a8a, n * 0.85)).setVisible(n > 0.01);
+    this.shadows?.setSun(sunNow(getState().settings.dayNight, this.weather?.current ?? 'clear'));
   }
   update(time: number, dt: number) {
-    this.chatter.update(); this.weather?.update(this.cameras.main);
+    this.chatter.update(); this.weather?.update(this.cameras.main); this.feet.draw(this.shadows.sun);
     const tick = Math.floor(time / 150);
     for (const f of this.figs) {
       let fr = 0;

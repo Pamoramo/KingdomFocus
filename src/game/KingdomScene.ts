@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { sunNow, FootShadows } from './shadows.ts';
 import { getState, subscribe, fxBus, type Fx, MAP_W, MAP_H, TILE, CAMP_X, CAMP_Y, canPlace, build, marchTo, marchArmy, moveBuilding, footprint, demolishMany } from '../lib/state.ts';
 import { BUILDINGS, type BKind } from '../lib/economy.ts';
 import { getUI, setUI, subUI, camBus } from './ui.ts';
@@ -29,7 +30,7 @@ const lerpColor = (a: number, b: number, t: number) => { const ch = (s: number) 
 export class KingdomScene extends Phaser.Scene {
   private world!: World; private army!: Army; private ambient!: Ambient; private chatter!: Chatter; private weather!: WeatherFx; happenings!: TownEvents;
   private ghost!: Phaser.GameObjects.Rectangle; private selRect!: Phaser.GameObjects.Rectangle; private shade!: Phaser.GameObjects.Rectangle;
-  private frame = 0; private unsub: (() => void)[] = [];
+  private frame = 0; private unsub: (() => void)[] = []; private feet!: FootShadows;
   private pinch: { d: number; z: number; wx: number; wy: number } | null = null;
   private drag: { x: number; y: number; sx: number; sy: number; moved: boolean; paint: boolean } | null = null;
   private lastPaint = ''; private keys!: Record<string, Phaser.Input.Keyboard.Key>; private night = 0;
@@ -38,7 +39,7 @@ export class KingdomScene extends Phaser.Scene {
 
   create() {
     makeTextures(this);
-    this.world = new World(this); this.army = new Army(this); this.chatter = new Chatter(this); this.ambient = new Ambient(this, this.chatter); this.life = new Life(this, this.world, this.ambient);
+    this.world = new World(this); this.feet = new FootShadows(this); this.army = new Army(this); this.chatter = new Chatter(this); this.ambient = new Ambient(this, this.chatter); this.life = new Life(this, this.world, this.ambient);
     this.ghost = this.add.rectangle(0, 0, 16, 16, 0x44ff66, 0.3).setOrigin(0).setStrokeStyle(1, 0xffffff, 0.9).setDepth(40000).setVisible(false);
     this.selRect = this.add.rectangle(0, 0, 16, 16).setOrigin(0).setStrokeStyle(1, 0xffe27a, 1).setDepth(40001).setVisible(false);
     this.shade = this.add.rectangle(-WW, -WH, WW * 3, WH * 3, 0xffffff).setOrigin(0).setDepth(20000).setBlendMode(Phaser.BlendModes.MULTIPLY);
@@ -73,7 +74,7 @@ export class KingdomScene extends Phaser.Scene {
     this.happenings = new TownEvents(this, this.chatter);
     this.time.addEvent({ delay: 60000, loop: true, callback: () => this.happenings.maybeSpawn(0.3) });
     this.weather = new WeatherFx(this, WW, WH);
-    const doWeather = () => { const w = weatherAt(); this.weather.set(w); if (getUI().weather !== w) setUI({ weather: w }); };
+    const doWeather = () => { const w = weatherAt(); this.weather.set(w); if (getUI().weather !== w) setUI({ weather: w }); this.applyNight(); };
     doWeather(); this.time.addEvent({ delay: 30000, loop: true, callback: doWeather });
     this.time.addEvent({ delay: THIEF_CHECK_MS, loop: true, callback: () => { if (thiefCanStrike() && Math.random() < thiefChance()) this.ambient.spawnThief(); } });
     this.time.addEvent({ delay: 20000, loop: true, callback: () => this.applyNight() });
@@ -105,11 +106,13 @@ export class KingdomScene extends Phaser.Scene {
     const tint = lerpColor(lerpColor(seasonTint, 0xffc890, warm * 0.6), 0x3a4a8a, n * 0.85);
     this.shade.setFillStyle(tint, 1).setVisible(n > 0.01 || warm > 0.01 || season() !== 'summer');
     if (Math.abs(getUI().night - n) > 0.05) setUI({ night: n });
+    this.world.setSun(sunNow(getState().settings.dayNight, this.weather?.current ?? 'clear'), getState());
   }
 
   update(time: number, dt: number) {
     const s = getState(), ui = getUI(), cam = this.cameras.main;
     this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.life.update(dt, Math.floor(time / 150));
+    this.feet.draw(this.world.shadows.sun, (foot) => this.army.feet(foot));
     // smooth zoom toward the wheel's target
     if (this.zoomGoal) { const g = this.zoomGoal, z = Math.abs(g.z - cam.zoom) < 0.002 ? g.z : cam.zoom + (g.z - cam.zoom) * Math.min(1, dt / 90); this.placeZoom(z, g.sx, g.sy, g.wx, g.wy); if (z === g.z) this.zoomGoal = null; }
     if (this.night > 0.05) for (const l of this.world.lights) l.setAlpha(this.night * (0.55 + Math.random() * 0.15));

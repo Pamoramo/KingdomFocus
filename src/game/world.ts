@@ -4,10 +4,13 @@ import { BUILDINGS, CONNECTS, type BKind } from '../lib/economy.ts';
 import { audio } from './audio.ts';
 import { bTex, tileTex, waterTex, scaffoldTex, sFrame, HD, S } from './textures.ts';
 import type { Art } from './art/buildings.ts';
+import { ShadowLayer, shadowTex, type Sun } from './shadows.ts';
 
 const WW = MAP_W * TILE, WH = MAP_H * TILE;
 const TILE_KINDS = new Set<BKind>(['road', 'palisade', 'wall', 'courtyard', 'moat']);
 const GROUND = new Set<BKind>(['road', 'courtyard', 'moat']);
+/** Lying flat on the ground: they throw no shadow. */
+const FLAT = new Set<BKind>([...GROUND, 'farm', 'trainfield']);
 export const hashXY = (x: number, y: number) => { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) >>> 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return (h ^ (h >>> 16)) >>> 0; };
 
 interface BView { img: Phaser.GameObjects.Image; key: string; b: Building; lights: Phaser.GameObjects.Image[]; art?: Art; building?: number }
@@ -22,11 +25,13 @@ export class World {
   private sig = '';
   private frame = 0;
   private ready = false;
+  shadows: ShadowLayer;
   lights: Phaser.GameObjects.Image[] = [];
   smokePts: [number, number][] = [];
 
   constructor(private scene: Phaser.Scene) {
     this.terrain = scene.add.renderTexture(0, 0, WW * HD, WH * HD).setOrigin(0).setDepth(-10).setScale(S);
+    this.shadows = new ShadowLayer(scene);
     for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) if (isRiver(x, y)) {
       const land = (isRiver(x, y - 1) || y === 0 ? 0 : 1) | (isRiver(x + 1, y) ? 0 : 2) | (isRiver(x, y + 1) || y === MAP_H - 1 ? 0 : 4) | (isRiver(x - 1, y) ? 0 : 8);
       this.water.push({ img: scene.add.image(x * TILE, y * TILE, waterTex(scene, land, 0)).setOrigin(0).setDepth(-9).setScale(S), land });
@@ -36,6 +41,7 @@ export class World {
   tick(f: number) { // called ~every 380ms: animate water and building frames
     this.frame = f;
     for (const w of this.water) w.img.setTexture(waterTex(this.scene, w.land, f % 3));
+    if (f % 4 === 0) this.shadows.sync();
     for (const v of this.views.values()) {
       if (TILE_KINDS.has(v.b.kind)) { if (v.b.kind === 'moat') v.img.setTexture(tileTex(this.scene, 'moat', 1, +v.key.split('|')[2], f % 2)); continue; }
       if (v.building == null) v.img.setTexture(bTex(this.scene, v.b.kind, v.b.level, f % 2).key);
@@ -53,7 +59,7 @@ export class World {
   }
 
   drawTerrain(s: GameState) {
-    const sig = s.buildings.filter((b) => !TILE_KINDS.has(b.kind) || b.kind === 'courtyard').map((b) => `${b.kind}${b.x},${b.y},${b.level}`).join('|') + s.stage;
+    const sun = this.shadows.sun, sig = s.buildings.filter((b) => !TILE_KINDS.has(b.kind) || b.kind === 'courtyard').map((b) => `${b.kind}${b.x},${b.y},${b.level}`).join('|') + s.stage + `|${sun.len}|${sun.alpha}`;
     if (sig === this.sig) return; this.sig = sig;
     const occ = new Set<string>();
     for (const b of s.buildings) { const [w, h] = footprint(b.kind); for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) occ.add(`${b.x + i},${b.y + j}`); }
@@ -73,6 +79,8 @@ export class World {
       else d = p < 22 ? 'rock' : p < 30 ? 'boulder' : p < 58 ? 'deadbush' : p < 66 ? 'deadtree' : p < 70 ? 'stump' : null;
       if (d) deco.push([`d_${d}${h % 2}`, x, y]);
     }
+    // trees, rocks and bushes throw their shadows first, so a shadow never darkens the tree in front of it
+    if (sun.alpha > 0.02) for (const [k, x, y] of deco) { const sk = shadowTex(this.scene, k, sun.len); if (sk) rt.batchDraw(sk, x * TILE * HD, (y * TILE - 8) * HD + this.scene.textures.get(k).getSourceImage().height, sun.alpha); }
     for (const [k, x, y] of deco) rt.batchDraw(k, x * TILE * HD, (y * TILE - 8) * HD);
     rt.endDraw();
   }
@@ -115,13 +123,16 @@ export class World {
         v.lights.forEach((l) => l.destroy()); v.lights = [];
         for (const [lx, ly] of art?.lights ?? []) v.lights.push(this.scene.add.image(b.x * TILE + lx, by - v.img.displayHeight + ly, 'glow').setBlendMode(Phaser.BlendModes.ADD).setDepth(25000).setScale(0.35).setAlpha(0));
       }
+      if (FLAT.has(b.kind)) this.shadows.detach(v.img); else this.shadows.attach(v.img, tile ? tex : bTex(this.scene, b.kind, b.level, 0).key);
       for (const [sx, sy] of art?.smoke ?? []) this.smokePts.push([b.x * TILE + sx, by - v.img.displayHeight + sy]);
     }
-    for (const [id, v] of this.views) if (!seen.has(id)) { v.img.destroy(); v.lights.forEach((l) => l.destroy()); this.views.delete(id); }
+    for (const [id, v] of this.views) if (!seen.has(id)) { this.shadows.detach(v.img); v.img.destroy(); v.lights.forEach((l) => l.destroy()); this.views.delete(id); }
     this.lights = [...this.views.values()].flatMap((v) => v.lights);
     this.ready = true;
   }
 
+  /** A new sun: shadows change length and strength; the trees' shadows are repainted into the ground. */
+  setSun(sun: Sun, s: GameState) { const was = this.shadows.sun; this.shadows.setSun(sun); if (was.len !== sun.len || was.alpha !== sun.alpha) this.drawTerrain(s); }
   /** Scaffolding, rising building, hammering workers and dust. Purely visual (no waiting timers). */
   private construct(v: BView, w: number, h: number, rise: boolean) {
     const sc = this.scene, img = v.img, H = img.height, W = img.displayWidth, x = img.x, y = img.y;
