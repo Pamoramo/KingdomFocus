@@ -21,6 +21,11 @@ export function focusMinutes(min: number) {
   return m <= CAP_MIN ? (FOCUS_GROWTH ** m - 1) / L : (FOCUS_CAP - 1) / L + (m - CAP_MIN) * FOCUS_CAP;
 }
 /** Reward for a verified duration. Grows exponentially with session length; floors only the final units. */
+/** Productive time (not study): a flat 40% of the base rate per minute, without study's focus bonus. */
+export function workReward(ms: number, rates: Res = DEFAULT_RATES, mult: Mult = { gold: 1, wood: 1, stone: 1, renown: 1 }): Res {
+  const m = Math.max(0, ms) / 60000, f = (k: keyof Res) => Math.floor(m * rates[k] * mult[k] * 0.4 + 1e-9);
+  return { gold: f('gold'), wood: f('wood'), stone: f('stone'), renown: f('renown') };
+}
 export function studyReward(ms: number, rates: Res = DEFAULT_RATES, mult: Mult = { gold: 1, wood: 1, stone: 1, renown: 1 }, factor = 1): Res {
   const fm = focusMinutes(Math.max(0, ms) / 60000);
   const f = (k: keyof Res) => Math.floor(fm * rates[k] * mult[k] * factor + 1e-9);

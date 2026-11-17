@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useGame, fmt, hm } from './hooks.ts';
-import { ACHIEVEMENTS, armySize, maxLevel, type GameState, type StudyRecord } from '../lib/state.ts';
+import { ACHIEVEMENTS, armySize, maxLevel, studyOnly, isWork, taskOf, type GameState, type StudyRecord } from '../lib/state.ts';
 import { BUILDINGS, STAGES } from '../lib/economy.ts';
 import { dayKey, consistency, streak } from '../lib/habits.ts';
 import { Cost, Section, Tabs } from './Cost.tsx';
@@ -9,7 +9,9 @@ import { Cost, Section, Tabs } from './Cost.tsx';
 const DAY = 864e5;
 const startOfDay = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 const mins = (list: StudyRecord[]) => list.reduce((a, r) => a + r.verifiedSec, 0) / 60;
-const since = (s: GameState, t: number) => s.sessions.filter((r) => r.startedAt >= t);
+/** Study sessions since a time (productive time is counted apart). */
+const since = (s: GameState, t: number) => studyOnly(s.sessions).filter((r) => r.startedAt >= t);
+const workSince = (s: GameState, t: number) => s.sessions.filter((r) => isWork(r) && r.startedAt >= t);
 
 /** Plain-language summary of today, computed from saved records. */
 export function todaySummary(s: GameState) {
@@ -20,13 +22,14 @@ export function todaySummary(s: GameState) {
   const parts: string[] = [];
   parts.push(m ? `You studied for ${hm(m)} today. Your kingdom earned ${fmt(gold)} gold from it.` : 'No study logged yet today. Your kingdom awaits.');
   const acts = [recruits && `recruited ${recruits} soldier${recruits > 1 ? 's' : ''}`, built.length && `completed ${built.length > 2 ? `${built.length} works` : built.map((b) => `a new ${b}`).join(' and ')}`, habits && `kept ${habits} habit${habits > 1 ? 's' : ''}`].filter(Boolean);
+  const w = Math.round(mins(workSince(s, t0))); if (w) parts.push(`You also put in ${hm(w)} of productive time.`);
   if (acts.length) parts.push(`You ${acts.join(', ')}.`);
   return parts.join(' ');
 }
 
 function DayBars({ s }: { s: GameState }) {
   const days = Array.from({ length: 14 }, (_, i) => startOfDay(new Date(Date.now() - (13 - i) * DAY)));
-  const data = days.map((d) => { const l = s.sessions.filter((r) => r.startedAt >= d && r.startedAt < d + DAY); return { d, timed: mins(l.filter((r) => r.source !== 'manual')), manual: mins(l.filter((r) => r.source === 'manual')) }; });
+  const data = days.map((d) => { const l = studyOnly(s.sessions).filter((r) => r.startedAt >= d && r.startedAt < d + DAY); return { d, timed: mins(l.filter((r) => r.source !== 'manual')), manual: mins(l.filter((r) => r.source === 'manual')) }; });
   const max = Math.max(60, ...data.map((x) => x.timed + x.manual));
   return <div className="flex items-end gap-1 h-28" role="img" aria-label="Minutes studied per day for the last 14 days">{data.map((x) => <div key={x.d} className="flex-1 flex flex-col items-center justify-end h-full" title={`${new Date(x.d).toLocaleDateString()}: ${Math.round(x.timed)} timed, ${Math.round(x.manual)} manual`}>
     <span className="text-[10px]">{Math.round(x.timed + x.manual) || ''}</span>
@@ -38,8 +41,9 @@ function DayBars({ s }: { s: GameState }) {
 export function ChroniclePanel() {
   const s = useGame(), [tab, setTab] = useState<'dashboard' | 'history' | 'honours'>('dashboard'), [range, setRange] = useState<'week' | 'month' | 'all'>('week');
   const now = Date.now(), week = since(s, now - 7 * DAY), month = since(s, now - 30 * DAY), today = since(s, startOfDay());
+  const study = studyOnly(s.sessions), work = s.sessions.filter(isWork), byTask = new Map<string, number>(); work.filter((r) => r.startedAt >= now - 30 * DAY).forEach((r) => byTask.set(taskOf(r.subject), (byTask.get(taskOf(r.subject)) ?? 0) + r.verifiedSec / 60));
   const ci = s.sessions.reduce((a, r) => [a[0] + r.checkIns, a[1] + r.missed], [0, 0]);
-  const pool = range === 'week' ? week : range === 'month' ? month : s.sessions, bySubj = new Map<string, number>();
+  const pool = range === 'week' ? week : range === 'month' ? month : study, bySubj = new Map<string, number>();
   pool.forEach((r) => bySubj.set(r.subject, (bySubj.get(r.subject) ?? 0) + r.verifiedSec / 60));
   const total = [...bySubj.values()].reduce((a, b) => a + b, 0), keep = maxLevel(s, 'keep');
   const Stat = ({ k, v }: { k: string; v: string }) => <div className="card p-2"><div className="text-xs opacity-70">{k}</div><div className="font-bold text-lg leading-tight">{v}</div></div>;
@@ -49,11 +53,14 @@ export function ChroniclePanel() {
       <div className="card p-2.5 text-sm italic">{todaySummary(s)}</div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         <Stat k="Today" v={hm(mins(today))} /><Stat k="Last 7 days" v={hm(mins(week))} /><Stat k="Last 30 days" v={hm(mins(month))} />
-        <Stat k="Lifetime study" v={`${(mins(s.sessions) / 60).toFixed(1)} h`} /><Stat k="Sessions" v={String(s.sessions.filter((r) => r.endedAt).length)} /><Stat k="Check-ins kept" v={ci[0] + ci[1] ? `${Math.round((ci[0] / (ci[0] + ci[1])) * 100)}%` : '—'} />
+        <Stat k="Lifetime study" v={`${(mins(study) / 60).toFixed(1)} h`} /><Stat k="Sessions" v={String(study.filter((r) => r.endedAt).length)} /><Stat k="Check-ins kept" v={ci[0] + ci[1] ? `${Math.round((ci[0] / (ci[0] + ci[1])) * 100)}%` : '—'} />
         <Stat k="Troops" v={fmt(armySize(s))} /><Stat k="Battalions" v={String(s.battalions.length)} /><Stat k="Castle" v={keep ? BUILDINGS.keep.levels[keep - 1].name : 'No keep'} />
       </div>
       <Section title="Treasury"><Cost cost={s.res} /><div className="text-xs opacity-70">Lifetime earned: <Cost cost={s.lifetime} /></div></Section>
       <Section title="Study, last 14 days" right={<span className="text-xs">gold = timed · grey = manual</span>}><DayBars s={s} /></Section>
+      {work.length > 0 && <Section title="Productive time" right={<span className="text-xs">{hm(mins(workSince(s, now - 7 * DAY)))} this week · {(mins(work) / 60).toFixed(1)} h in all</span>}>
+        {[...byTask].sort((a, b) => b[1] - a[1]).map(([k, v]) => <div key={k} className="flex justify-between text-sm"><span>{k}</span><span>{hm(v)}</span></div>)}
+        <p className="text-xs opacity-70">Last 30 days. Productive time is counted apart from study.</p></Section>}
       <Section title="Subjects" right={<select className="inp !w-auto !py-0 text-sm" value={range} onChange={(e) => setRange(e.target.value as 'week')}><option value="week">7 days</option><option value="month">30 days</option><option value="all">All time</option></select>}>
         {[...bySubj].sort((a, b) => b[1] - a[1]).map(([k, v]) => <div key={k} className="text-sm"><div className="flex justify-between"><span>{k}</span><span>{hm(v)} · {Math.round((v / total) * 100)}%</span></div><div className="h-2 bg-black/15 rounded-sm"><div className="h-full bg-gold rounded-sm" style={{ width: `${(v / total) * 100}%` }} /></div></div>)}
         {!total && <p className="text-sm italic">No study in this period yet.</p>}

@@ -203,3 +203,24 @@ test('lands along the roads: more to settle, charted as your maps grow, dearer f
   const target = RA.knownSites(S.getState()).find((x) => x.road && x.kind === 'market')!; assert.equal(RA.foundSettlement(target.id), null);
   assert.ok(S.studyMult(S.getState()).gold > before.gold);
 });
+
+test('productive time: its own timer, a lesser reward, counted apart from study', async () => {
+  const { workReward, studyReward, DEFAULT_RATES } = await import('./rewards.ts');
+  const hour = workReward(3600000), study = studyReward(3600000);
+  assert.equal(hour.gold, Math.floor(60 * DEFAULT_RATES.gold * 0.4), 'a flat 40% of the base rate'); assert.ok(hour.gold < study.gold * 0.4, 'and no focus bonus');
+  const real = Date.now; let t = real();
+  try {
+    Date.now = () => t; S._with({ ...S.newGame(), events: [{ id: 'e', t: t - 10 * 864e5, type: 'stage', text: '' }] });
+    const idle = S.idleDays(S.getState());
+    assert.equal(S.workStart('Chores'), null); assert.match(S.studyStart('History')!, /productive/, 'one timer at a time');
+    t += 29 * 60000; S.workCheckIn(); t += 31 * 60000; S.workCheckIn(); S.workEnd();
+    const st = S.getState(), rec = st.sessions[0];
+    assert.equal(st.work, null); assert.ok(S.isWork(rec) && S.taskOf(rec.subject) === 'Chores' && rec.source === 'timer');
+    assert.equal(rec.reward.gold, workReward(60 * 60000, st.settings.rates, S.studyMult(st)).gold, 'paid at the productive rate');
+    assert.ok(rec.reward.gold > 0 && st.outbox.ledger.some((l) => l.kind === 'study' && l.ref === rec.id), 'banked like a study session (the cloud accepts it)');
+    assert.equal(S.idleDays(st), idle, 'it does not count as study for the realm\'s calm');
+    assert.ok(!st.achievements.includes('first') && !st.achievements.includes('hour'), 'nor for study honours');
+    assert.ok(!st.subjects.some((x) => x.includes('Chores')), 'activities are not study subjects');
+    assert.equal(S.studyStart('History'), null, 'study can start once it is done');
+  } finally { Date.now = real; }
+});

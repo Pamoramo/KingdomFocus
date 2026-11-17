@@ -1,9 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useGame, useUI, useNow, clock, fmt, hm } from './hooks.ts';
-import { idleDays, neglect, GRACE_DAYS, studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState, currentSubject, addSubject, removeSubject } from '../lib/state.ts';
+import { workStart, workCheckIn, workPause, workEnd, workDiscard, workTasks, addWorkTask, removeWorkTask, taskOf, isWork, WORK_FACTOR, idleDays, neglect, GRACE_DAYS, studyStart, studyCheckIn, studyPause, studyBreak, studyEnd, studyDiscard, setSettings, logManual, studyMult, fxBus, type Fx, getState, currentSubject, addSubject, removeSubject } from '../lib/state.ts';
 import { pendingAt, dueAt, isAwaiting, totalMs } from '../lib/study.ts';
-import { studyReward, focusMultiplier, MANUAL_FACTOR, type Res } from '../lib/rewards.ts';
+import { studyReward, workReward, focusMultiplier, MANUAL_FACTOR, type Res } from '../lib/rewards.ts';
+import { Tabs } from './Cost.tsx';
 import { TROOPS, BUILDINGS } from '../lib/economy.ts';
 import { setUI } from '../game/ui.ts';
 import { Icon } from './Icon.tsx';
@@ -12,6 +13,54 @@ import { Cost, Section, Bar } from './Cost.tsx';
 const Badge = ({ src }: { src: string }) => <span className={`text-xs px-1.5 rounded border ${src === 'manual' ? 'border-blood text-blood' : src === 'pomodoro' ? 'border-moss text-moss' : 'border-ink/40'}`}>{src}</span>;
 
 export function StudyPanel() {
+  const s = useGame(), [mode, setMode] = useState<'study' | 'work'>(s.work ? 'work' : 'study');
+  return <div className="space-y-3">
+    {!s.session && !s.work && <Tabs value={mode} onChange={setMode} items={[['study', 'Study'], ['work', 'Productive time']]} />}
+    {s.work || (mode === 'work' && !s.session) ? <WorkPanel /> : <StudyTimer />}
+  </div>;
+}
+
+/** Productive time that is not study (chores, exercise, work, practice): its own timer, at a lesser reward. */
+function WorkPanel() {
+  const s = useGame(), now = useNow(), w = s.work, tasks = workTasks(s), [task, setTask] = useState(tasks[0]), [custom, setCustom] = useState('');
+  const mult = studyMult(s), hour = workReward(3600000, s.settings.rates, mult), studyHour = studyReward(3600000, s.settings.rates, mult);
+  if (!w) return <div className="space-y-3">
+    <div className="card p-2.5 text-sm space-y-1">
+      <div>For useful things that are not study: chores, exercise, your job, errands, practice. Your realm rewards them too, at {Math.round(WORK_FACTOR * 100)}% of study&apos;s pay per minute and without study&apos;s focus bonus.</div>
+      <div>An hour earns <Cost cost={hour} plus /> <span className="opacity-70">(an hour of study: {fmt(studyHour.gold)} gold)</span>. Soldiers and sieges advance at the same lesser rate.</div>
+      <div className="text-xs opacity-75">Check-ins work as in study. It is counted apart from study: it does not keep the realm calm on its own, or count toward study streaks and honours.</div>
+    </div>
+    <Section title="Activity">
+      <div className="flex flex-wrap gap-1">{tasks.map((x) => <span key={x} className="inline-flex"><button onClick={() => setTask(x)} className={`btn text-sm !py-0.5 ${x === task ? 'btn-gold' : ''}`}>{x}</button>
+        {tasks.length > 1 && x !== task && <button className="text-xs opacity-50 hover:opacity-100 px-0.5" title={`Remove ${x}`} onClick={() => removeWorkTask(x)}>✕</button>}</span>)}</div>
+      <div className="flex gap-2"><input className="inp" placeholder="Add an activity…" value={custom} maxLength={40} onChange={(e) => setCustom(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && custom.trim()) { addWorkTask(custom); setTask(custom.trim()); setCustom(''); } }} />
+        <button className="btn" disabled={!custom.trim()} onClick={() => { addWorkTask(custom); setTask(custom.trim()); setCustom(''); }}>Add</button></div>
+    </Section>
+    <button className="btn btn-gold w-full text-xl py-2" onClick={() => workStart(task)}>Start: {task}</button>
+    <RecentSessions work />
+  </div>;
+  const total = totalMs(w, now), due = dueAt(w), projected = workReward(w.verifiedMs + pendingAt(w, now), s.settings.rates, mult);
+  const statusText = { running: isAwaiting(w, now) ? 'check-in needed!' : 'at work', paused: 'paused', missed: 'paused: check-in missed', break: 'on a break', ended: 'finished' }[w.status];
+  return <div className="space-y-3">
+    <div className="text-center">
+      <div className="text-sm opacity-75">{taskOf(w.subject)} · productive time · {statusText}</div>
+      <div className="text-6xl font-bold tabular-nums leading-none my-1">{clock(total)}</div>
+      {w.status === 'running' && due && <div className="text-sm">Next check-in in <b className="tabular-nums">{clock(Math.max(0, due - now))}</b></div>}
+    </div>
+    {w.status === 'running' && <Bar value={pendingAt(w, now)} max={w.cfg.intervalMin * 60000} color="bg-moss" />}
+    <div className="grid grid-cols-2 gap-2 text-sm">
+      <div className="card p-2"><div className="text-xs opacity-70">Earned (verified)</div><Cost cost={w.awarded} /></div>
+      <div className="card p-2"><div className="text-xs opacity-70">At next check-in</div><Cost cost={projected} /></div>
+    </div>
+    <div className="flex gap-2">
+      {w.status === 'running' ? <button className="btn flex-1" onClick={workPause}>Pause</button> : <button className="btn btn-gold flex-1" onClick={() => workCheckIn()}>{w.status === 'missed' ? 'Check in & resume' : 'Resume'}</button>}
+      <button className="btn btn-red flex-1" onClick={workEnd}>Finish</button>
+      {w.verifiedMs === 0 && <button className="btn" onClick={workDiscard}>Discard</button>}
+    </div>
+  </div>;
+}
+
+function StudyTimer() {
   const s = useGame(), now = useNow(), sess = s.session, cfg = s.settings.cfg;
   const ui = useUI(), [subj, setSubj] = useState(ui.studySubject ?? currentSubject(s)), [custom, setCustom] = useState(''), [manual, setManual] = useState(false);
   // "Study this" on an assignment opens the panel on that subject
@@ -102,37 +151,38 @@ function ManualEntry({ subjects }: { subjects: string[] }) {
   </Section>;
 }
 
-function RecentSessions() {
-  const s = useGame(), list = s.sessions.filter((r) => r.endedAt).slice(0, 8);
+function RecentSessions({ work = false }: { work?: boolean }) {
+  const s = useGame(), list = s.sessions.filter((r) => r.endedAt && isWork(r) === work).slice(0, 8);
   if (!list.length) return null;
   return <Section title="Recent sessions">{list.map((r) => <div key={r.id} className="flex items-center justify-between gap-2 text-sm border-b border-black/10 py-0.5">
-    <span className="truncate">{new Date(r.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · {r.subject} <Badge src={r.source} /></span>
+    <span className="truncate">{new Date(r.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · {taskOf(r.subject)} {!work && <Badge src={r.source} />}</span>
     <span className="whitespace-nowrap">{hm(r.verifiedSec / 60)} · {fmt(r.reward.gold)}g</span></div>)}</Section>;
 }
 
 /** Check-in and pomodoro prompts. Clearly visible, with a live countdown. */
 export function CheckInModal() {
-  const s = useGame(), now = useNow(500), sess = s.session;
+  const s = useGame(), now = useNow(500), sess = s.session ?? s.work, w = !s.session && !!s.work;
+  const ci = w ? workCheckIn : studyCheckIn, end = w ? workEnd : studyEnd;
   const [note, setNote] = useState('');
   if (!sess) return null;
   if (sess.status === 'break' && sess.breakUntil && now >= sess.breakUntil) return (
     <Modal><Icon name="hourglass" size={44} /><h2 className="font-title text-4xl">Break&apos;s Over</h2><p>Ready to return to your studies?</p>
-      <button className="btn btn-gold w-full text-xl py-3" onClick={() => studyCheckIn()}>Resume studying</button>
-      <button className="btn w-full" onClick={studyEnd}>Finish session</button></Modal>);
+      <button className="btn btn-gold w-full text-xl py-3" onClick={() => ci()}>Resume studying</button>
+      <button className="btn w-full" onClick={end}>Finish session</button></Modal>);
   if (!isAwaiting(sess, now)) return null;
-  const left = dueAt(sess)! + sess.cfg.graceMin * 60000 - now, ok = !s.settings.requireNote || note.trim().length > 1;
+  const left = dueAt(sess)! + sess.cfg.graceMin * 60000 - now, ok = w || !s.settings.requireNote || note.trim().length > 1;
   const submit = (f: (n?: string) => void) => { f(note.trim() || undefined); setNote(''); };
   return (
     <Modal pulse>
       <Icon name={sess.cfg.pomodoro ? 'hourglass' : 'check'} size={44} />
       <h2 className="font-title text-4xl">{sess.cfg.pomodoro ? 'Focus Block Complete' : "Sentry's Call"}</h2>
-      <p>{sess.cfg.pomodoro ? 'Well fought! Confirm your study to bank it.' : 'Are you still at your studies, my liege?'}</p>
+      <p>{sess.cfg.pomodoro ? 'Well fought! Confirm your study to bank it.' : w ? `Still at it (${taskOf(sess.subject).toLowerCase()}), my liege?` : 'Are you still at your studies, my liege?'}</p>
       <div className="text-6xl font-bold tabular-nums text-blood">{clock(left)}</div>
-      {(s.settings.requireNote || sess.cfg.pomodoro) && <input autoFocus className="inp" placeholder={s.settings.requireNote ? 'What did you study? (required)' : 'What did you study? (optional)'} value={note} onChange={(e) => setNote(e.target.value)} />}
+      {(s.settings.requireNote || sess.cfg.pomodoro) && <input autoFocus className="inp" placeholder={w ? 'What are you doing? (optional)' : s.settings.requireNote ? 'What did you study? (required)' : 'What did you study? (optional)'} value={note} onChange={(e) => setNote(e.target.value)} />}
       {sess.cfg.pomodoro ? <>
         <button disabled={!ok} className="btn btn-gold w-full text-xl py-3" onClick={() => submit(studyBreak)}>Bank it & take a break</button>
         <button disabled={!ok} className="btn w-full" onClick={() => submit(studyCheckIn)}>Bank it & keep going</button>
-      </> : <button disabled={!ok} className="btn btn-gold w-full text-xl py-3" onClick={() => submit(studyCheckIn)}>I am studying</button>}
+      </> : <button disabled={!ok} className="btn btn-gold w-full text-xl py-3" onClick={() => submit(ci)}>{w ? 'Still at it' : 'I am studying'}</button>}
       <p className="text-xs opacity-75">If the timer runs out, the session pauses. Everything already earned is kept.</p>
     </Modal>
   );
@@ -142,7 +192,9 @@ function Modal({ children, pulse }: { children: React.ReactNode; pulse?: boolean
 }
 
 export function StudyMini({ onOpen }: { onOpen: () => void }) {
-  const s = useGame(), now = useNow(), sess = s.session;
+  const s = useGame(), now = useNow(), sess = s.session, w = s.work;
+  if (!sess && w) return <button onClick={onOpen} className={`wood rounded px-3 py-1 flex items-center gap-2 ${isAwaiting(w, now) ? 'pulse' : ''}`}>
+    <Icon name="build" size={18} /><span className="font-bold tabular-nums">{clock(totalMs(w, now))}</span><span className="text-xs">{w.status === 'running' ? (isAwaiting(w, now) ? 'CHECK IN' : taskOf(w.subject).toLowerCase()) : w.status === 'missed' ? 'MISSED' : 'paused'}</span></button>;
   if (!sess) return <button onClick={onOpen} className="wood rounded px-3 py-1 flex items-center gap-2 text-sm"><Icon name="study" size={18} />Study</button>;
   const label = sess.status === 'running' ? (isAwaiting(sess, now) ? 'CHECK IN' : 'studying') : sess.status === 'missed' ? 'MISSED' : sess.status === 'break' ? 'break' : 'paused';
   return <button onClick={onOpen} className={`wood rounded px-3 py-1 flex items-center gap-2 ${isAwaiting(sess, now) ? 'pulse' : ''}`}>

@@ -25,6 +25,12 @@ const sync = (step: string) => {
 S._with({ ...S.newGame(), owner: USER });
 for (let i = 0; i < 6; i++) S.grantCompensation(S.stableUuid(`stress:${i}:${USER}`), 240, 3, 'History', 'stress'); // honest study income
 sync('study');
+{ // an hour of productive time (not study), timed in the past
+  const real = Date.now; let t = real() - 2 * 3600_000; Date.now = () => t;
+  const e = S.workStart('Exercise'); if (e) throw new Error(e); t += 29 * 60000; S.workCheckIn(); t += 31 * 60000; S.workCheckIn(); S.workEnd(); Date.now = real;
+  assert.ok(S.getState().sessions.some((r) => S.isWork(r) && r.reward.gold > 0));
+}
+sync('productive time');
 S._with({ ...S.getState(), stage: 4, techs: ['agriculture', 'masonry', 'archery', 'militia', 'engineering', 'cavalry'] as never });
 for (const [kind, x, y] of [...Array.from({ length: 8 }, (_, i) => ['house', 20 + i * 3, 40] as const), ['trainfield', 20, 46] as const, ['range', 27, 46] as const]) { const e = S.build(kind, x, y); if (e) console.log('build', kind, e); }
 for (const k of ['peasant', 'peasant', 'spearman', 'archer'] as const) { const e = S.recruit(k, 12); if (e) console.log('recruit', k, e); }

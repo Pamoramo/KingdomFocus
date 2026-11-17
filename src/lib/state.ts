@@ -1,4 +1,4 @@
-import { type Res, ZERO, DEFAULT_RATES, MANUAL_FACTOR, MANUAL_MAX_PER_DAY_MIN, add, sub, maxRes, canAfford, full, scale, studyReward, isZero, ceilingFor, minRes } from './rewards.ts';
+import { type Res, ZERO, DEFAULT_RATES, MANUAL_FACTOR, MANUAL_MAX_PER_DAY_MIN, add, sub, maxRes, canAfford, full, scale, studyReward, isZero, ceilingFor, minRes, workReward } from './rewards.ts';
 import { type Session, type SessionCfg, DEFAULT_CFG, startSession, tick, checkIn, pause, takeBreak, endSession, uid, MIN } from './study.ts';
 import { type Habit, type Freq, progress, streak, habitReward, MILESTONES, dayKey, periodKey } from './habits.ts';
 import { BUILDINGS, TROOPS, TECHS, STAGES, RANKS, OFFICERS, SQUAD_SIZE, SQUADS_PER_COMPANY, TCLASSES, XP_PER_MIN, DRILL_XP, COLORS, type BKind, type TClass, type TechId, type Effects, type Formation, type Req } from './economy.ts';
@@ -25,11 +25,12 @@ export interface Ledger { kind: LedgerKind; ref: string; amt: Res; at: number }
 export interface KEvent { id: string; t: number; type: string; text: string; n?: number }
 export type Table = 'buildings' | 'battalions' | 'squads' | 'habits' | 'sessions' | 'completions';
 /** hiddenSubjects: subjects you removed (the cloud keeps every subject ever used, so removals are remembered here). */
-export interface Settings { hiddenSubjects?: string[]; ambVol?: number; rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean; music: number; sfx: number; ambience: boolean }
+export interface Settings { /** activities for the productive-time timer */ workTasks?: string[]; hiddenSubjects?: string[]; ambVol?: number; rates: Res; cfg: SessionCfg; sound: boolean; requireNote: boolean; theme: string; dayNight: 'auto' | 'day' | 'night'; notify: boolean; music: number; sfx: number; ambience: boolean }
 export interface GameState {
   v: 2; owner: string | null; updatedAt: number; res: Res; lifetime: Res;
   buildings: Building[]; battalions: Battalion[]; squads: Squad[]; techs: TechId[];
   session: (Session & { xpMs: number; source: Source }) | null; sessions: StudyRecord[]; subjects: string[];
+  /** the productive-time timer (chores, exercise, work...): a separate, lesser-paying session */ work?: (Session & { xpMs: number; source: Source }) | null;
   habits: Habit[]; completions: Completion[]; achievements: string[]; events: KEvent[]; stage: number; world: WorldState;
   settings: Settings;
   outbox: { ledger: Ledger[]; dirty: Partial<Record<Table, string[]>>; dead: Partial<Record<Table, string[]>>; events: string[]; techs: boolean };
@@ -44,7 +45,7 @@ export function newGame(): GameState {
     v: 2, owner: null, updatedAt: now, res: { ...start }, lifetime: { ...ZERO },
     buildings: [{ id: camp, kind: 'camp', x: CAMP_X, y: CAMP_Y, level: 1, at: now }],
     battalions: [], squads: [], techs: [],
-    session: null, sessions: [], subjects: ['Mathematics', 'Languages', 'Science', 'History', 'Programming', 'Reading'],
+    session: null, work: null, sessions: [], subjects: ['Mathematics', 'Languages', 'Science', 'History', 'Programming', 'Reading'],
     habits: [], completions: [], achievements: [], events: [{ id: uid(), t: now, type: 'stage', text: 'A lonely camp is pitched on barren land.' }], stage: 1,
     settings: { rates: { ...DEFAULT_RATES }, cfg: { ...DEFAULT_CFG }, sound: true, requireNote: false, theme: 'parchment', dayNight: 'auto', notify: true, music: 0.5, sfx: 0.7, ambience: true },
     world: initWorld(now % 100000),
@@ -123,7 +124,7 @@ export const GRACE_DAYS = 2;
 /** Whole days since the last day with verified study (or since the kingdom was founded). */
 export function idleDays(s: GameState, now = Date.now()) {
   const day = (t: number) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
-  const studied = s.sessions.filter((r) => r.verifiedSec >= 300).map((r) => r.endedAt ?? r.startedAt);
+  const studied = s.sessions.filter((r) => r.verifiedSec >= 300 && !isWork(r)).map((r) => r.endedAt ?? r.startedAt);
   const founded = Math.min(...s.events.map((e) => e.t), now);
   const last = Math.max(founded, ...studied, s.session && s.session.verifiedMs > 0 ? now : 0);
   return Math.max(0, Math.round((day(now) - day(last)) / 864e5));
@@ -493,26 +494,27 @@ function record(sess: NonNullable<GameState['session']>, now: number): StudyReco
     missed: sess.checkIns.filter((c) => c.missed).length, notes: sess.notes.join(' · '), reward: sess.awarded };
 }
 /** Grants whatever the verified time has earned beyond what was already awarded. */
-function settle(s: GameState, sess: NonNullable<GameState['session']>): GameState {
-  const now = Date.now();
+function settle(s: GameState, sess: NonNullable<GameState['session']>, slot: 'session' | 'work' = 'session'): GameState {
+  const now = Date.now(), work = slot === 'work', k = work ? WORK_FACTOR : 1;
   // never more than the cloud database accepts per verified minute (big market/storehouse bonuses could exceed it)
-  const total = minRes(studyReward(sess.verifiedMs, s.settings.rates, studyMult(s)), ceilingFor(sess.verifiedMs / 1000, false));
+  const total = minRes(work ? workReward(sess.verifiedMs, s.settings.rates, studyMult(s)) : studyReward(sess.verifiedMs, s.settings.rates, studyMult(s)), ceilingFor(sess.verifiedMs / 1000, false));
   const awarded = maxRes(total, sess.awarded), delta = sub(awarded, sess.awarded);
   let o = studyLedger(s, 'study', sess.id, total, sess.awarded);
-  const xpMin = (sess.verifiedMs - sess.xpMs) / MIN;
+  const xpMin = ((sess.verifiedMs - sess.xpMs) / MIN) * k; // productive time trains soldiers and moves sieges at the lesser rate too
   o = giveXp(o, xpMin);
   o = studyHooks.reduce((acc, h) => h(acc, xpMin), o);
   const sess2 = { ...sess, awarded, xpMs: sess.verifiedMs };
   const rec = record(sess2, now);
   o = mark({ ...o, sessions: [rec, ...o.sessions.filter((r) => r.id !== rec.id)] }, 'sessions', rec.id);
+  const label = work ? taskOf(sess2.subject) : sess2.subject;
   if (sess2.status === 'ended') {
-    o = { ...o, session: null };
+    o = { ...o, [slot]: null };
     const m = Math.floor(sess2.verifiedMs / MIN);
-    o = event(o, 'study', `Studied ${sess2.subject} for ${m} min, earning ${awarded.gold} gold.`, m);
-    if (m > 0) emit({ kind: 'reward', text: `Session complete: ${m} min of ${sess2.subject}`, res: awarded, big: true });
+    o = event(o, 'study', work ? `Spent ${m} min on ${label.toLowerCase()} (productive time), earning ${awarded.gold} gold.` : `Studied ${label} for ${m} min, earning ${awarded.gold} gold.`, m);
+    if (m > 0) emit({ kind: 'reward', text: work ? `Productive time: ${m} min of ${label}` : `Session complete: ${m} min of ${label}`, res: awarded, big: true });
   } else {
-    o = { ...o, session: sess2 };
-    if (!isZero(delta)) emit({ kind: 'reward', text: 'Study verified', res: delta });
+    o = { ...o, [slot]: sess2 };
+    if (!isZero(delta)) emit({ kind: 'reward', text: work ? 'Productive time verified' : 'Study verified', res: delta });
   }
   return o;
 }
@@ -531,6 +533,7 @@ export const removeSubject = (name: string) => update((s) => (s.subjects.length 
 /** Subjects minus the ones you removed (applied whenever the cloud's list is merged in). */
 export const visibleSubjects = (subjects: string[], settings: Settings) => { const h = new Set((settings.hiddenSubjects ?? []).map((x) => x.toLowerCase())); const v = subjects.filter((x) => !h.has(x.toLowerCase())); return v.length ? v : subjects.slice(0, 1); };
 export const studyStart = (subject: string) => update((s) => {
+  if (s.work) return 'Stop your productive-time timer first: one thing at a time';
   if (s.session) return 'A session is already running';
   const subjects = s.subjects.includes(subject) ? s.subjects : [...s.subjects, subject];
   s = { ...s, settings: { ...s.settings, hiddenSubjects: (s.settings.hiddenSubjects ?? []).filter((x) => x.toLowerCase() !== subject.toLowerCase()) } };
@@ -538,11 +541,13 @@ export const studyStart = (subject: string) => update((s) => {
   return mark({ ...s, subjects, session: sess, sessions: [record(sess, Date.now()), ...s.sessions] }, 'sessions', sess.id);
 });
 export const studyTick = () => {
-  const s = state, sess = s.session; if (!sess) return;
-  const t = { ...sess, ...tick(sess, Date.now()) };
-  if (t.status !== sess.status) {
-    if (t.status === 'missed') emit({ kind: 'error', text: 'Check-in missed: timer paused. Everything already earned is kept.' });
-    setState(post(settle(s, t)));
+  for (const slot of ['session', 'work'] as const) {
+    const s = state, sess = s[slot]; if (!sess) continue;
+    const t = { ...sess, ...tick(sess, Date.now()) };
+    if (t.status !== sess.status) {
+      if (t.status === 'missed') emit({ kind: 'error', text: 'Check-in missed: timer paused. Everything already earned is kept.' });
+      setState(post(settle(s, t, slot)));
+    }
   }
 };
 const act = (f: (x: Session, now: number) => Session) => update((s) => (s.session ? settle(s, { ...s.session, ...f(s.session, Date.now()) }) : undefined));
@@ -550,6 +555,30 @@ export const studyCheckIn = (note?: string) => act((x, n) => checkIn(x, n, note)
 export const studyPause = () => act(pause);
 export const studyBreak = (note?: string) => act((x, n) => takeBreak(x, n, note));
 export const studyEnd = () => act(endSession);
+// ---------------- productive time: chores, exercise, work, practice ----------------
+/** Productive time pays this share of study's base rate, without study's focus bonus. */
+export const WORK_FACTOR = 0.4;
+/** Productive sessions are saved like study sessions, with this mark before the activity's name. */
+export const WORK_MARK = '⚒ ';
+export const isWork = (r: { subject: string }) => r.subject.startsWith(WORK_MARK);
+export const studyOnly = <T extends { subject: string }>(list: T[]) => list.filter((r) => !isWork(r));
+export const taskOf = (subject: string) => (isWork({ subject }) ? subject.slice(WORK_MARK.length) : subject);
+export const DEFAULT_TASKS = ['Chores', 'Exercise', 'Work', 'Errands', 'Cooking', 'Practice'];
+export const workTasks = (s: GameState) => s.settings.workTasks ?? DEFAULT_TASKS;
+export const workStart = (task: string) => update((s) => {
+  if (s.session) return 'Finish your study session first: one thing at a time';
+  if (s.work) return;
+  task = task.trim().replace(/\s+/g, ' ').slice(0, 40) || 'Productive time';
+  const sess = { ...startSession(WORK_MARK + task, Date.now(), { ...s.settings.cfg, pomodoro: false }), xpMs: 0, source: 'timer' as Source };
+  return mark({ ...s, work: sess, sessions: [record(sess, Date.now()), ...s.sessions] }, 'sessions', sess.id);
+});
+const actW = (f: (x: Session, now: number) => Session) => update((s) => (s.work ? settle(s, { ...s.work, ...f(s.work, Date.now()) }, 'work') : undefined));
+export const workCheckIn = (note?: string) => actW((x, n) => checkIn(x, n, note));
+export const workPause = () => actW(pause);
+export const workEnd = () => actW(endSession);
+export const workDiscard = () => update((s) => (s.work && s.work.verifiedMs === 0 ? kill({ ...s, work: null, sessions: s.sessions.filter((r) => r.id !== s.work!.id) }, 'sessions', s.work.id) : 'Only empty sessions can be discarded'));
+export const addWorkTask = (name: string) => update((s) => { name = name.trim().replace(/\s+/g, ' ').slice(0, 40); if (!name) return 'Name the activity'; const l = workTasks(s); if (l.some((x) => x.toLowerCase() === name.toLowerCase())) return; if (l.length >= 20) return 'Too many activities'; return { ...s, settings: { ...s.settings, workTasks: [...l, name] } }; });
+export const removeWorkTask = (name: string) => update((s) => { const l = workTasks(s); return l.length <= 1 ? 'Keep at least one activity' : { ...s, settings: { ...s.settings, workTasks: l.filter((x) => x !== name) } }; });
 export const studyDiscard = () => update((s) => (s.session && s.session.verifiedMs === 0 ? kill({ ...s, session: null, sessions: s.sessions.filter((r) => r.id !== s.session!.id) }, 'sessions', s.session.id) : 'Only empty sessions can be discarded'));
 
 /** Manual entry: clearly marked, earns MANUAL_FACTOR of the timed rate, capped per day. */
@@ -621,8 +650,8 @@ export const habitProgress = (id: string, amount = 1, note?: string) => update((
 });
 
 // ---------------- achievements & stage ----------------
-const studyMin = (s: GameState) => s.sessions.reduce((a, r) => a + r.verifiedSec, 0) / 60;
-const studyDays = (s: GameState) => new Set(s.sessions.filter((r) => r.verifiedSec > 0).map((r) => dayKey(new Date(r.startedAt)))).size;
+const studyMin = (s: GameState) => studyOnly(s.sessions).reduce((a, r) => a + r.verifiedSec, 0) / 60;
+const studyDays = (s: GameState) => new Set(studyOnly(s.sessions).filter((r) => r.verifiedSec > 0).map((r) => dayKey(new Date(r.startedAt)))).size;
 export interface Ach { id: string; name: string; desc: string; renown: number; unlock?: string; test: (s: GameState) => boolean }
 export const ACHIEVEMENTS: Ach[] = [
   { id: 'first', name: 'First Steps', desc: 'Finish a study session', renown: 5, test: (s) => s.sessions.some((r) => r.endedAt && r.verifiedSec >= 60) },
@@ -667,7 +696,8 @@ function post(s: GameState): GameState {
     out = event({ ...out, stage: st }, 'stage', `The realm became a ${STAGES[st - 1].name}!`);
     emit({ kind: 'stage', text: `Stage ${st}: ${STAGES[st - 1].name}`, big: true });
   }
-  for (const a of ACHIEVEMENTS) if (!out.achievements.includes(a.id) && a.test(out)) {
+  const scholar = { ...out, sessions: studyOnly(out.sessions) }; // study achievements count study, not productive time
+  for (const a of ACHIEVEMENTS) if (!out.achievements.includes(a.id) && a.test(scholar)) {
     out = ledger({ ...out, achievements: [...out.achievements, a.id] }, 'achievement', a.id, { ...ZERO, renown: a.renown });
     out = event(out, 'achieve', `Achievement: ${a.name}.`);
     emit({ kind: 'achieve', text: `${a.name}: +${a.renown} renown` });
