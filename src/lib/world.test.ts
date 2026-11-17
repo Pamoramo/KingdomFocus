@@ -153,3 +153,22 @@ test('with short days the world takes a turn each time a day ends', async () => 
     assert.ok(w.rivals.filter((r) => !r.bandits).every((r) => r.lordship && r.lordship.days >= 1), 'every lordship took its turn');
   } finally { Date.now = real; }
 });
+
+test('a device keeps world changes it never sent, unless another device has written since', async () => {
+  const { keepLocalWorld } = await import('./syncCore.ts');
+  assert.equal(keepLocalWorld(true, 'a', 'a'), true, 'unsent changes on top of the cloud copy are kept, then sent');
+  assert.equal(keepLocalWorld(true, 'a', 'b'), false, 'another device wrote since: its newer world wins');
+  assert.equal(keepLocalWorld(false, 'a', 'a'), false, 'nothing unsent: take the cloud copy');
+  assert.equal(keepLocalWorld(true, null, undefined), false);
+});
+
+test('reimbursement: three aid missions\' worth of relations with Kaelholm, once', () => {
+  const g = S.newGame(), k = g.world.rivals.find((r) => !r.bandits)!;
+  S._with({ ...g, world: { ...g.world, rivals: g.world.rivals.map((r) => (r.id === k.id ? { ...r, name: 'Kaelholm', relation: 24, power: 400 } : r)) } });
+  S.newBattalion('Foot'); const b = S.getState().battalions[0].id;
+  S._with({ ...S.getState(), squads: [{ id: 'q', cls: 'spearman', count: 12, xp: 0, rank: 1, bat: b }] });
+  WA.worldTick();
+  const r = S.getState().world.rivals.find((x) => x.id === k.id)!, gain = r.relation - 24;
+  assert.ok(gain >= 12 && gain % 3 <= 2, `three missions' worth (+${gain}, before the day's drift)`);
+  const once = r.relation; WA.worldTick(); assert.equal(S.getState().world.rivals.find((x) => x.id === k.id)!.relation, once, 'given once');
+});

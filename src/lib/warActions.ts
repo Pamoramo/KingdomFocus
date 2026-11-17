@@ -104,9 +104,33 @@ export const sendExpedition = () => update((s) => {
   emit({ kind: 'info', text: `Your explorers set out to the ${dir || 'horizon'}.` });
   return event(sendTo(spend(s, cost), 'explore', r, `Explorers heading ${dir || 'out'} into uncharted lands`, { data: { rival: r.id } }), 'diplomacy', `Sent an expedition into uncharted lands to the ${dir}.`);
 });
+/** The relations an aid mission earns: more for a battalion strong against the realm's own host (as in sendAid). */
+const aidRelation = (s: GameState, r: Rival, batId: string) => {
+  const p = sidePower(unitsOf(s.squads.filter((q) => q.bat === batId))), b = s.battalions.find((x) => x.id === batId);
+  return Math.round(Math.min(25, 4 + Math.round((p / Math.max(50, r.power)) * 80)) * (b && hasTrait(b.commander, 'diplomat') ? 1.5 : 1));
+};
+/** One-time reimbursements, each applied once per world (remembered in world.grants). */
+const GRANTS: { id: string; apply: (s: GameState) => GameState | null }[] = [
+  { // relation gains from aid to Kaelholm were lost (a save that never reached the cloud): repay three missions' worth
+    id: 'kaelholm-3-aids', apply: (s) => {
+      const k = s.world.rivals.find((r) => r.name === 'Kaelholm' && !r.bandits); if (!k || !s.battalions.length) return null;
+      const best = [...s.battalions].sort((a, b) => sidePower(unitsOf(s.squads.filter((q) => q.bat === b.id))) - sidePower(unitsOf(s.squads.filter((q) => q.bat === a.id))))[0];
+      const rel = aidRelation(s, k, best.id); let w = s.world; for (let i = 0; i < 3; i++) w = shiftRelations(w, k.id, rel);
+      const now = w.rivals.find((r) => r.id === k.id)!.relation;
+      emit({ kind: 'achieve', text: `Reimbursed: three battalions' worth of aid to Kaelholm (+${rel} relations each). Relations are now ${now}.`, big: true });
+      return event(W(s, w), 'diplomacy', `Kaelholm's gratitude for three battalions lent was restored (+${rel * 3} relations).`);
+    } },
+];
+/** Applies each grant once, when it applies (a grant waits until it can). */
+function applyGrants() {
+  const s = getState(), done = new Set(s.world.grants ?? []); let o = s; const applied: string[] = [];
+  for (const g of GRANTS) { if (done.has(g.id)) continue; const r = g.apply(o); if (r) { o = r; applied.push(g.id); } }
+  if (applied.length) setState(W(o, { ...o.world, grants: [...(s.world.grants ?? []), ...applied] }));
+}
 export const worldTick = () => {
   // the game's calendar: started the day you first studied, counting real days until you choose otherwise
   if (!getState().world.clock) { const first = Math.min(Date.now(), ...getState().sessions.map((x) => x.startedAt)); setState(W(getState(), { ...getState().world, clock: clockOf(getState().world, first) })); }
+  applyGrants();
   const s0 = getState(), today = gameDay(s0.world);
   if ((s0.world.v ?? 1) < 2) setState(W(s0, upgradeWorld(s0.world))); // the world grows
   discoverTick();
@@ -179,7 +203,7 @@ export const sendAid = (id: string, batId: string) => update((s) => {
   if (r.relation < -10) return 'They do not trust you enough to accept troops';
   if (awayBats(s).has(batId)) return 'That battalion is already away';
   const sq = s.squads.filter((q) => q.bat === batId), p = sidePower(unitsOf(sq)); if (!sq.length) return 'That battalion has no soldiers';
-  const lent = s.battalions.find((b) => b.id === batId), rel = Math.round(Math.min(25, 4 + Math.round((p / Math.max(50, r.power)) * 80)) * (lent && hasTrait(lent.commander, 'diplomat') ? 1.5 : 1));
+  const rel = aidRelation(s, r, batId); void p;
   let o = send(s, 'aid', r, `${s.battalions.find((b) => b.id === batId)?.name ?? 'Troops'} marching to ${r.name}`, { bats: [batId], data: { rel } });
   o = { ...o, world: { ...o.world, inbox: o.world.inbox.filter((m) => !(m.rival === id && m.kind === 'aid_request')) } };
   emit({ kind: 'info', text: `Your troops march to aid ${r.name}. They arrive in ${mins(travelMs('aid', r))}.` });

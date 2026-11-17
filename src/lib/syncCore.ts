@@ -57,6 +57,9 @@ export function clearSent(s: GameState, sent: Sent): GameState {
   for (const t of Object.keys(s.outbox.dead) as Table[]) { const was = new Set(sent.refs.dead[t] ?? []); const keep = (s.outbox.dead[t] ?? []).filter((id) => !was.has(id)); if (keep.length) dead[t] = keep; }
   return { ...s, outbox: { ledger: s.outbox.ledger.filter((l) => !sentLedger.has(l)), dirty, dead, events: s.outbox.events.filter((e) => !sentEv.has(e)), techs: s.outbox.techs && !sent.refs.techs } };
 }
+/** On start-up: keep this device's world instead of the cloud's only when it holds changes it never sent, made on top
+ *  of the very copy the cloud still has (no other device has written since). Otherwise the cloud's world is newer. */
+export const keepLocalWorld = (unsent: boolean, lastStampHere: string | null, cloudStamp: string | undefined) => unsent && !!cloudStamp && cloudStamp === lastStampHere;
 export const outboxEmpty = (s: GameState) => !s.outbox.ledger.length && !s.outbox.events.length && !s.outbox.techs
   && !Object.values(s.outbox.dirty).some((l) => l?.length) && !Object.values(s.outbox.dead).some((l) => l?.length);
 

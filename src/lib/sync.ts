@@ -2,7 +2,7 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 import { getState, setState, subscribe, newGame, emit, grantCompensation, stableUuid, cloudLacks, NEEDS_SCHEMA, type GameState } from './state.ts';
 import type { BKind } from './economy.ts';
 import { upgradeWorld } from './war.ts';
-import { buildPayload, clearSent, outboxEmpty, adoptSnapshot, heldBack, type Snapshot } from './syncCore.ts';
+import { buildPayload, clearSent, outboxEmpty, adoptSnapshot, heldBack, keepLocalWorld, type Snapshot } from './syncCore.ts';
 
 import { SUPABASE_URL as URL, SUPABASE_ANON_KEY as KEY } from './config.ts';
 export const supabase: SupabaseClient | null = URL && KEY ? createClient(URL, KEY) : null;
@@ -12,6 +12,10 @@ let user: User | null = null, pulled = false, busy = false, failures = 0;
  *  has written a newer world since, this device takes that world instead of overwriting it with its stale copy. */
 let seen: string | undefined, lastContact = 0, worldAtContact: GameState['world'] | null = null;
 const stampOf = (snap: Snapshot) => (snap.kingdom?.world as { stamp?: string } | null | undefined)?.stamp;
+/** Kept across reloads: the last cloud world this device saw or wrote, and whether it has world changes not yet sent. */
+const STAMP_KEY = 'kod-world-stamp', DIRTY_KEY = 'kod-world-unsent';
+const remember = (k: string, v: string | null) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* storage blocked */ } };
+const recall = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const newStamp = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 let saveT: ReturnType<typeof setTimeout> | undefined, syncT: ReturnType<typeof setTimeout> | undefined;
 export const syncStatus = new EventTarget();
@@ -62,18 +66,22 @@ export async function syncNow() {
             outbox: { ...s.outbox, dirty: { ...s.outbox.dirty, buildings: (s.outbox.dirty.buildings ?? []).filter((id) => id !== local?.id) } } };
         }
       }
-      // the cloud's world is the account's latest: never push this device's old copy over it
-      if (snap.kingdom?.world && s.owner === user.id) s = { ...s, world: upgradeWorld(snap.kingdom.world) };
-      seen = stampOf(snap); lastContact = Date.now();
+      // the cloud's world is the account's latest, unless this device holds changes it never managed to send on top of
+      // that very copy (closed too soon, or offline): then those changes are kept and sent now, not thrown away
+      const mine = recall(STAMP_KEY), unsent = recall(DIRTY_KEY) === '1', st = stampOf(snap);
+      const keepLocal = keepLocalWorld(unsent, mine, st);
+      if (snap.kingdom?.world && s.owner === user.id && !keepLocal) s = { ...s, world: upgradeWorld(snap.kingdom.world) };
+      seen = st; remember(STAMP_KEY, st ?? null); lastContact = Date.now();
       setState({ ...s, owner: user.id }, false); pulled = true; worldAtContact = getState().world;
     } else if (Date.now() - lastContact > 15_000) { // been away: check whether another device moved the world on
       const snap = await rpc({}), st = stampOf(snap);
       if (st && st !== seen && snap.kingdom?.world && getState().world === worldAtContact) { setState({ ...getState(), world: upgradeWorld(snap.kingdom.world) }, false); emit({ kind: 'info', text: 'Loaded newer progress from your other device.' }); }
-      seen = st; lastContact = Date.now(); worldAtContact = getState().world;
+      seen = st; remember(STAMP_KEY, st ?? null); lastContact = Date.now(); worldAtContact = getState().world;
     }
     await checkSchema().catch(() => {}); // know what the database can store before sending
     // an outdated database rejects big study rewards; send everything else and keep those waiting locally
     const probe = legacy && Date.now() - lastProbe > 10 * 60_000; // every 10 minutes, see whether the database was updated
+    const sentWorld = getState().world;
     let sent = stamped(buildPayload(getState(), legacy && !probe ? heldBack(getState()) : new Set(), cloudLacks)), snap: Snapshot;
     try { snap = await rpc(sent.payload); if (probe && legacy) setLegacy(false); }
     catch (e) {
@@ -82,7 +90,8 @@ export async function syncNow() {
       sent = stamped(buildPayload(getState(), heldBack(getState()), cloudLacks)); snap = await rpc(sent.payload);
     }
     if (probe) lastProbe = Date.now();
-    seen = (sent.payload.kingdom as { world?: { stamp?: string } }).world?.stamp; lastContact = Date.now();
+    seen = (sent.payload.kingdom as { world?: { stamp?: string } }).world?.stamp; remember(STAMP_KEY, seen ?? null); lastContact = Date.now();
+    if (getState().world === sentWorld) remember(DIRTY_KEY, null); // everything this device changed is in the cloud
     let s = clearSent(getState(), sent);
     const adopted = outboxEmpty(s);
     if (adopted) s = adoptSnapshot(s, snap);
@@ -117,6 +126,7 @@ export function initPersistence() {
   try { const raw = localStorage.getItem(LS); if (raw) { const d = JSON.parse(raw); if (d.v === 2) setState({ ...newGame(), ...d, world: d.world ? upgradeWorld(d.world) : newGame().world }, false); } } catch { /* corrupt save: start fresh */ }
   saveLocal();
   subscribe(() => {
+    if (pulled && user && !busy && getState().world !== worldAtContact) remember(DIRTY_KEY, '1'); // world changes not yet in the cloud
     clearTimeout(saveT); saveT = setTimeout(saveLocal, 250);
     if (user) { clearTimeout(syncT); syncT = setTimeout(syncNow, 4000); }
   });
