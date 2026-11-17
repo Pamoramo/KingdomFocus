@@ -169,10 +169,10 @@ test('quarters: beds in barracks take off-duty soldiers out of formation; they d
   // back to formation: out of quarters
   S.setOrders(b, 'formation'); assert.equal(S.quarterPlan(S.getState()).per.get(b), undefined);
   // drilling in quarters: faster experience while studying
-  S.setOrders(b, 'quarters'); S._with({ ...S.getState(), squads: S.getState().squads.map((q) => ({ ...q, xp: 0 })) });
-  S.grantCompensation(S.stableUuid('quarters-test'), 30, 1, 'History', 'test');
-  const xp = (id: string) => S.getState().squads.find((q) => q.id === id)!.xp;
-  assert.ok(xp('q4') > xp('q1') * 1.15, `quartered archers drilled (${xp('q4').toFixed(1)} vs ${xp('q1').toFixed(1)})`);
+  const xp = (id: string) => S.getState().squads.find((q) => q.id === id)!.xp, zero = () => S._with({ ...S.getState(), squads: S.getState().squads.map((q) => ({ ...q, xp: 0 })) });
+  zero(); S.grantCompensation(S.stableUuid('quarters-test-a'), 30, 1, 'History', 'test'); const standing = xp('q4'); // the same archers, in formation
+  S.setOrders(b, 'quarters'); zero(); S.grantCompensation(S.stableUuid('quarters-test-b'), 30, 1, 'History', 'test');
+  assert.ok(xp('q4') > standing * 1.2, `quartered archers drilled (${xp('q4').toFixed(1)} vs ${standing.toFixed(1)} in formation)`);
 });
 
 test('battalions on patrol, on guard or in quarters stay at their posts; only those in formation march', () => {

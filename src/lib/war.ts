@@ -17,6 +17,8 @@ export interface Rival {
   known?: boolean;
   /** when you took their castle (your troops are seen marching in for a while) */
   conquered?: number;
+  /** the realm's own life: its lord, treasury, holdings, ties, wars and history (see lordships.ts) */
+  lordship?: import('./lordships.ts').Lordship;
 }
 export type Engine = 'ram' | 'mangonel' | 'tower' | 'ballista' | 'trebuchet';
 export const ENGINES: Record<Engine, { name: string; cost: Partial<Res>; siege: number; bombard: number; desc: string }> = {
@@ -52,7 +54,7 @@ export interface Garrison { bat: string; at: string; since: number }
 export interface Journey { id: string; kind: JourneyKind; rival: string; depart: number; arrive: number; home?: boolean; label: string; bats?: string[]; data?: Record<string, unknown>; to?: { x: number; y: number } }
 /** A small bandit camp on the road: easy prey with a small purse. */
 export interface Outpost { id: string; name: string; x: number; y: number; power: number; loot: Res; biome: 'grassland' | 'forest' | 'highlands' | 'swamp' }
-export interface WorldState { /** set by the cloud save: which write this is */ stamp?: string; garrisons?: Garrison[]; /** battalions sent off duty to quarters */ quartered?: string[]; seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
+export interface WorldState { /** what the other realms have been doing */ news?: import('./lordships.ts').News[]; /** set by the cloud save: which write this is */ stamp?: string; garrisons?: Garrison[]; /** battalions sent off duty to quarters */ quartered?: string[]; seed: number; lastDay: string; rivals: Rival[]; engines: Engines; supplies: number; campaign: Campaign | null; threat: Threat | null; inbox: Missive[]; loans: Loan[]; reports: Report[]; conquests: number; town?: { day: string; thefts: number; caught: number; events?: number }; journeys?: Journey[]; outposts?: Outpost[]; outpostDay?: string; warnings?: Warning[]; assignments?: Assignment[]; court?: Court; settlements?: Settlement[]; v?: number;
   /** until when the town celebrates a victory */ festival?: number;
   /** buildings damaged in a lost battle, shown blackened and smoking until `until` */ scars?: { ids: string[]; until: number } }
 
@@ -198,7 +200,7 @@ export function advanceDays(w: WorldState, ctx: Context, today = dayStr()): Worl
     const base = BASE[r.personality] - (r.personality === 'aggressive' ? (ctx.stage - 1) * 4 : 0) + (r.status === 'ally' ? 30 : 0);
     r.relation = clamp(Math.round(r.relation + Math.sign(base - r.relation) * Math.min(tierOf(r) === 'far' ? 1 : 2, Math.abs(base - r.relation)))); // far kingdoms barely think of you
     if (r.personality === 'treacherous' && R() < 0.3) r.relation = clamp(r.relation - 3);
-    r.power = Math.round(r.power * (1 + (r.personality === 'aggressive' ? 0.015 : 0.008)) + (r.bandits ? 2 : 0));
+    if (r.bandits) r.power = Math.round(r.power * 1.015 + 2); // the lordships raise their own armies (lordships.ts)
     r.garrison = Math.max(r.garrison, Math.round(r.power * 0.4));
     if (r.status === 'ally' && r.relation < 30) r.status = 'neutral';
   }

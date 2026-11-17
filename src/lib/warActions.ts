@@ -7,6 +7,7 @@ import { type Res, ZERO, scale } from './rewards.ts';
 import { simulate, capLosses, sidePower, tacticLock, type Unit, type Tactic, type BattleResult, TACTICS } from './battle.ts';
 import { type Journey, type JourneyKind, travelMs, type WorldState, canStation, screenOf, marchMs, type Rival, type Engine, type Engines, type Stance, type Report, ENGINES, ENGINE_IDS, NO_ENGINES, SUPPLY_COST, advanceDays, tradeQuote, canTrade, giftRelation, shiftRelations, setStatus, newCampaign, siegeProgress, surrenderChance, wallFort, castleFort, armyOf, dayStr, refreshOutposts, LOAN_MIN, upgradeWorld, discover, leagues, isKnown, type Outpost, fieldSpoils, conquestSpoils, defenceSpoils } from './war.ts';
 import { uid } from './study.ts';
+import { simulateLordships } from './lordships.ts';
 import { RANKS, OFFICERS } from './economy.ts';
 
 const { update, ledger, spend, mark, kill, event } = _internal;
@@ -111,6 +112,10 @@ export const worldTick = () => {
   const s = getState();
   if (s.world.lastDay === today) return;
   let w = advanceDays(s.world, { stage: s.stage, myPower: myPower(s), fort: fortOf(s), active: true, neglect: neglect(s) }, today);
+  // the other castles live their own lives: one turn for each day that passed (at most three)
+  const elapsed = Math.min(3, Math.max(1, Math.round((new Date(today).getTime() - new Date(s.world.lastDay).getTime()) / 864e5)));
+  w = simulateLordships(w, elapsed, today);
+  for (const n of (w.news ?? []).filter((x) => x.day === today && !(s.world.news ?? []).includes(x)).slice(0, 2)) if (n.kind === 'war' || n.kind === 'ruler' || n.kind === 'alliance') emit({ kind: 'info', text: n.text });
   // your garrisons watch the roads: an enemy whose way to you passes one is less likely to come, and arrives bloodied
   w = { ...w, warnings: (w.warnings ?? []).map((x) => (!(s.world.warnings ?? []).some((o) => o.rival === x.rival) && screenOf(w, x.rival) ? { ...x, chance: Math.round(x.chance * 0.6 * 100) / 100 } : x)) };
   if (w.threat && !s.world.threat) { const by = screenOf(w, w.threat.rival); if (by) { w = { ...w, threat: { ...w.threat, power: Math.round(w.threat.power * 0.75) } }; emit({ kind: 'war', text: `Your garrison at ${by.name} harried the enemy host on the road: it arrives a quarter weaker.` }); } }
