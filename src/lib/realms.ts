@@ -35,7 +35,7 @@ export interface RealmLayout {
   /** the high street and lanes, and the paved market square */
   streets: { x: number; y: number }[]; plaza: { x: number; y: number }[]; landmarks: Landmark[];
 }
-const SIZE: Partial<Record<BKind, [number, number]>> = { keep: [4, 4], greathall: [4, 3], tower: [2, 2], gatehouse: [3, 2], gate: [2, 1], house: [2, 2], hut: [2, 2], farm: [3, 3], market: [3, 3], blacksmith: [2, 2], storehouse: [2, 2], barracks: [3, 3], range: [3, 3], trainfield: [3, 3], stable: [3, 2], armory: [3, 2], guardhouse: [2, 2], well: [1, 1], watchtower: [2, 2], camp: [4, 3] };
+const SIZE: Partial<Record<BKind, [number, number]>> = { tavern: [3, 2], keep: [4, 4], greathall: [4, 3], tower: [2, 2], gatehouse: [3, 2], gate: [2, 1], house: [2, 2], hut: [2, 2], farm: [3, 3], market: [3, 3], blacksmith: [2, 2], storehouse: [2, 2], barracks: [3, 3], range: [3, 3], trainfield: [3, 3], stable: [3, 2], armory: [3, 2], guardhouse: [2, 2], well: [1, 1], watchtower: [2, 2], camp: [4, 3] };
 function rng(seed: number) { return () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296); }
 
 /** Wealth from army strength relative to castle level: a rich realm builds bigger. */
@@ -240,13 +240,14 @@ export function realmLayout(w: Pick<WorldState, 'seed' | 'rivals'>, r: Rival): R
     slots.sort((a, b) => a.d - b.d);
     const best = Math.min(3, L - 1 + (wealth === 'rich' ? 1 : 0) + (wealth === 'poor' ? -1 : 0));
     let built = 0, smith = L >= 2, store = L >= 2 && (wealth !== 'poor'), stable = L >= 3, hall = L >= 3 && plan !== 'green' && R() < 0.6; // a covered market hall
+    let inn = L >= 2 && R() < 0.85; // most towns have an alehouse near the market
     for (const sl of slots) {
       if (built >= homes) break;
       if (!room(sl.x, sl.y, 2, 2)) continue;
-      const far = sl.d > 10 + L * 2, kind: BKind = smith ? 'blacksmith' : store && built > 4 ? 'storehouse' : stable && built > 8 ? 'stable' : hall && built > 2 ? 'market' : L <= 1 || (far && wealth === 'poor') ? 'hut' : 'house';
+      const far = sl.d > 10 + L * 2, kind: BKind = inn && built > 1 ? 'tavern' : smith ? 'blacksmith' : store && built > 4 ? 'storehouse' : stable && built > 8 ? 'stable' : hall && built > 2 ? 'market' : L <= 1 || (far && wealth === 'poor') ? 'hut' : 'house';
       const [w, h] = SIZE[kind] ?? [2, 2]; if (!room(sl.x, sl.y, w, h)) continue;
       claim(sl.x, sl.y, w, h); buildings.push({ kind, x: sl.x, y: sl.y, level: kind === 'house' ? Math.max(1, best - (far ? 1 : 0)) : kind === 'hut' ? 1 : Math.min(2, L) });
-      if (kind === 'blacksmith') smith = false; else if (kind === 'storehouse') store = false; else if (kind === 'stable') stable = false; else if (kind === 'market') hall = false; else built++;
+      if (kind === 'tavern') inn = false; else if (kind === 'blacksmith') smith = false; else if (kind === 'storehouse') store = false; else if (kind === 'stable') stable = false; else if (kind === 'market') hall = false; else built++;
     }
     // side streets run only as far as their last house (an empty one is never laid)
     const near = (t: { x: number; y: number }) => buildings.some((b) => { const [bw, bh] = SIZE[b.kind] ?? [2, 2]; return t.x >= b.x - 1 && t.x <= b.x + bw && t.y >= b.y - 1 && t.y <= b.y + bh; });

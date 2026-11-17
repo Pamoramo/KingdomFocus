@@ -19,12 +19,13 @@ export function heldBack(s: GameState): Set<GameState['outbox']['ledger'][number
   return out;
 }
 /** Builds the sync payload. With `hold`, those ledger rows are left out (and stay in the outbox). */
-export function buildPayload(s: GameState, hold: Set<GameState['outbox']['ledger'][number]> = new Set()): Sent {
+export function buildPayload(s: GameState, hold: Set<GameState['outbox']['ledger'][number]> = new Set(), skip: Set<string> = new Set()): Sent {
   const d = s.outbox.dirty, now = new Date().toISOString(), ledgerRows = s.outbox.ledger.filter((l) => !hold.has(l));
   // last line of defence: a study reward never exceeds what the database accepts for its verified time
   const fit = (l: GameState['outbox']['ledger'][number]) => { if (l.kind !== 'study' && l.kind !== 'manual') return l.amt; const r = s.sessions.find((x) => x.id === l.ref); return r ? minRes(l.amt, ceilingFor(r.verifiedSec, l.kind === 'manual')) : l.amt; };
   const sessions = pick(s.sessions, d.sessions), habits = pick(s.habits, d.habits), comps = pick(s.completions, d.completions);
-  const buildings = pick(s.buildings, d.buildings), bats = pick(s.battalions, d.battalions), squads = pick(s.squads, d.squads);
+  // a kind of building the database cannot store yet stays waiting here until it is updated
+  const buildings = pick(s.buildings, d.buildings).filter((b) => !skip.has(b.kind)), bats = pick(s.battalions, d.battalions), squads = pick(s.squads, d.squads);
   const evIds = new Set(s.outbox.events), events = s.events.filter((e) => evIds.has(e.id));
   const payload = {
     sessions: sessions.map((r) => ({ id: r.id, subject: r.subject, source: r.source, started_at: iso(r.startedAt), ended_at: iso(r.endedAt), verified_seconds: r.verifiedSec, forfeited_seconds: r.forfeitedSec, check_ins: r.checkIns, missed: r.missed, notes: r.notes })),

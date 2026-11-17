@@ -224,8 +224,12 @@ export function canPlace(s: GameState, kind: BKind, x: number, y: number, ignore
 const center = (b: { kind: BKind; x: number; y: number }) => { const [w, h] = footprint(b.kind); return { x: (b.x + w / 2) * TILE, y: (b.y + h / 2) * TILE }; };
 
 // ---------------- construction ----------------
+/** Building kinds the signed-in account's cloud database cannot store yet (it needs supabase/setup.sql re-run). */
+export const cloudLacks = new Set<BKind>();
+export const NEEDS_SCHEMA: Partial<Record<BKind, number>> = { tavern: 6 };
 export const build = (kind: BKind, x: number, y: number) => update((s) => {
   const d = BUILDINGS[kind];
+  if (cloudLacks.has(kind)) return `Your cloud database must be updated before it can save a ${d.name}: see Settings → Account`;
   if (d.unique && count(s, kind)) return `Only one ${d.name} allowed`;
   const lock = lockReason(s, kind, 0); if (lock) return lock;
   if (!canPlace(s, kind, x, y)) return 'Cannot build there';

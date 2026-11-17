@@ -30,6 +30,9 @@ for (const [kind, x, y] of [...Array.from({ length: 8 }, (_, i) => ['house', 20 
 for (const k of ['peasant', 'peasant', 'spearman', 'archer'] as const) { const e = S.recruit(k, 12); if (e) console.log('recruit', k, e); }
 console.log(JSON.stringify(S.getState().res), S.getState().buildings.length, S.getState().squads.length, S.getState().stage);
 sync('recruit');
+{ const e = S.build('tavern', 44, 50); if (e) throw new Error('tavern: ' + e); }
+assert.equal((buildPayload(S.getState(), new Set(), new Set(['tavern'])).payload.buildings as { kind: string }[]).some((b: { kind: string }) => b.kind === 'tavern'), false, 'an old database is not sent a tavern');
+sync('tavern'); assert.ok(S.getState().buildings.some((b) => b.kind === 'tavern'), 'the tavern is saved to the cloud');
 S.splitBattalion(S.getState().battalions[0].id, { kind: 'half' }, 'patrol'); sync('split');
 for (const op of S.getState().world.outposts ?? []) WA.raidOutpost(op.id, S.getState().battalions[0].id);
 sync('raid');

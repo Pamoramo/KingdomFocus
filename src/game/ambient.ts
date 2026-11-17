@@ -17,7 +17,7 @@ interface Thief { img: Phaser.GameObjects.Image; x: number; y: number; tx: numbe
 interface Actor { img: Phaser.GameObjects.Image; cls: string; rank: number; mode: Mode; x: number; y: number; tx: number; ty: number; wait: number; a: number; b: number; ph: number; target?: [number, number]; path?: Pt[]; dest?: Place; act?: Act; carry?: Phaser.GameObjects.Image }
 /** A place townsfolk go: its doorstep (or a spot in the field) and what they do there. */
 interface Place { kind: BKind; b: Building; at: Pt; cx: number; home?: boolean }
-type Act = 'inside' | 'browse' | 'draw' | 'hammer' | 'hoe' | 'chat' | 'rest' | 'cheer';
+type Act = 'inside' | 'browse' | 'draw' | 'hammer' | 'hoe' | 'chat' | 'rest' | 'cheer' | 'drink';
 /** What people say while busy at each kind of place. */
 const PLACE_LINES: Partial<Record<Act, string[]>> = {
   browse: ['How much for the apples?', 'Two loaves, please.', 'That price is robbery!', 'Fresh fish today?', 'A fine bolt of cloth.', 'I\'ll take a dozen eggs.', 'Any honey left?'],
@@ -25,6 +25,7 @@ const PLACE_LINES: Partial<Record<Act, string[]>> = {
   hammer: ['Mind the sparks!', 'Hot iron, coming through!', 'A new horseshoe, then.', 'Strike while it\'s hot!'],
   hoe: ['The wheat grows tall.', 'Back to the furrows.', 'Rain would help.', 'Good soil, this.'],
   rest: ['Home at last.', 'Supper time!', 'My feet ache.'],
+  drink: ['Another round!', 'To the king!', 'This ale\'s gone flat.', 'Did you hear about the miller\'s wife?', 'Sing it again!', 'Put it on my tab.', 'Cheers!'],
 };
 
 /** Hour of the day (respecting the always-day / always-night setting). */
@@ -223,6 +224,7 @@ export class Ambient {
       else if (a.act === 'draw') f = cyc % 6 < 3 ? 4 : 5; // winds the windlass
       else if (a.act === 'hammer') { f = cyc % 4 < 2 ? 4 : 5; if (cyc % 4 === 2 && Math.random() < 0.15) this.spark(a.x + (a.img.flipX ? -6 : 6), a.y - 8); }
       else if (a.act === 'hoe') f = cyc % 8 < 4 ? 4 : 5;
+      else if (a.act === 'drink') { f = cyc < 3 ? 4 : 0; a.img.setY(Math.round(a.y) - (cyc === 1 ? 1 : 0)); } // raises his tankard
       else if (a.act === 'cheer') { f = cyc % 4 < 2 ? 4 : 0; a.img.setY(Math.round(a.y) - (cyc % 4 < 2 ? 2 : 0)); }
       if (a.wait <= 0) {
         if (a.act === 'inside') { a.img.setVisible(true); this.scene.tweens.add({ targets: a.img, alpha: 1, duration: 300 }); } // steps back out of the door
@@ -263,11 +265,11 @@ export class Ambient {
     if (this.alarm) { this.shelter(a); return; }
     // daily routine: fields in the morning, market in the evening, home at night; a festival draws everyone to the square
     const hr = clockHour(), night = hr >= 21 || hr < 5, morning = hr >= 6 && hr < 11, evening = hr >= 17 && hr < 21, carrying = !!a.carry;
-    const base = { market: 5, well: 3, house: 3, hut: 3, farm: a.cls === 'worker' ? 5 : 0.5, blacksmith: a.cls === 'worker' ? 3 : 1, storehouse: a.cls === 'worker' ? 3 : 0.5, camp: 1, keep: 0.5, greathall: 1, stable: 1, palace: 0.5 } as Partial<Record<BKind, number>>;
+    const base = { tavern: a.cls === 'worker' ? 2 : 3, market: 5, well: 3, house: 3, hut: 3, farm: a.cls === 'worker' ? 5 : 0.5, blacksmith: a.cls === 'worker' ? 3 : 1, storehouse: a.cls === 'worker' ? 3 : 0.5, camp: 1, keep: 0.5, greathall: 1, stable: 1, palace: 0.5 } as Partial<Record<BKind, number>>;
     const weight = (p: Place) => { let w = base[p.kind] ?? 0.2; const home = p.kind === 'house' || p.kind === 'hut' || p.kind === 'camp';
       if (carrying) return p.kind === 'storehouse' || p.kind === 'market' ? 10 : 0.05; // deliver the load first
       if (this.festival) return p.kind === 'market' || p.kind === 'keep' || p.kind === 'camp' ? w * 8 : w * 0.3;
-      if (night) return home ? w * 6 : w * 0.12; if (morning && p.kind === 'farm') w *= 2; if (evening && (p.kind === 'market' || p.kind === 'well')) w *= 2; return w; };
+      if (night) return home ? w * 6 : w * 0.12; if (morning && p.kind === 'farm') w *= 2; if (evening && (p.kind === 'market' || p.kind === 'well')) w *= 2; if (evening && p.kind === 'tavern') w *= 4; if (night && p.kind === 'tavern') return w * 0.8; return w; };
     for (let tries = 0; tries < 4; tries++) {
       const total = this.places.reduce((t, p) => t + weight(p), 0); let r = Math.random() * total;
       const p = this.places.find((x) => (r -= weight(x)) <= 0) ?? this.places[0];
@@ -283,12 +285,12 @@ export class Ambient {
   private arrive(a: Actor) {
     const p = a.dest; if (!p) { a.wait = 1500; return; }
     const worker = a.cls === 'worker', home = ['house', 'hut', 'keep', 'greathall', 'palace', 'camp', 'stable', 'storehouse'].includes(p.kind);
-    const act: Act = p.kind === 'market' ? 'browse' : p.kind === 'well' ? 'draw' : p.kind === 'blacksmith' ? (worker ? 'hammer' : 'browse') : p.kind === 'farm' ? 'hoe' : home ? (Math.random() < 0.75 ? 'inside' : 'rest') : 'rest';
+    const act: Act = p.kind === 'tavern' ? (Math.random() < 0.5 ? 'inside' : 'drink') : p.kind === 'market' ? 'browse' : p.kind === 'well' ? 'draw' : p.kind === 'blacksmith' ? (worker ? 'hammer' : 'browse') : p.kind === 'farm' ? 'hoe' : home ? (Math.random() < 0.75 ? 'inside' : 'rest') : 'rest';
     const act1: Act = this.alarm && p.home ? 'inside' : act;
     const act2: Act = this.festival && (p.kind === 'market' || p.kind === 'keep' || p.kind === 'camp') ? 'cheer' : act1;
     if (a.carry && (p.kind === 'storehouse' || p.kind === 'market')) { a.carry.destroy(); a.carry = undefined; } // load delivered
     a.act = act2;
-    a.wait = act2 === 'cheer' ? 6000 + Math.random() * 6000 : { inside: 5000 + Math.random() * 9000, browse: 4000 + Math.random() * 5000, draw: 2500 + Math.random() * 1500, hammer: 4000 + Math.random() * 3000, hoe: 5000 + Math.random() * 5000, chat: 3000, rest: 2000 + Math.random() * 2500, cheer: 6000 }[act] * (act === 'inside' && (clockHour() >= 21 || clockHour() < 5) ? 5 : 1); // a night's sleep
+    a.wait = act2 === 'cheer' ? 6000 + Math.random() * 6000 : { drink: 8000 + Math.random() * 10000, inside: 5000 + Math.random() * 9000, browse: 4000 + Math.random() * 5000, draw: 2500 + Math.random() * 1500, hammer: 4000 + Math.random() * 3000, hoe: 5000 + Math.random() * 5000, chat: 3000, rest: 2000 + Math.random() * 2500, cheer: 6000 }[act] * (act === 'inside' && (clockHour() >= 21 || clockHour() < 5) ? 5 : 1); // a night's sleep
     if (act !== 'hoe') a.img.setFlipX(p.cx < a.x); // face the building
     if (a.cls === 'worker' && !a.carry && (act === 'hoe' || act === 'hammer') && Math.random() < 0.6 && this.places.some((x) => x.kind === 'storehouse' || x.kind === 'market')) this.scene.time.delayedCall(a.wait, () => { if (a.img.active && !a.carry) a.carry = this.scene.add.image(a.x, a.y, act === 'hoe' ? 'carry1' : 'carry0').setOrigin(0.5, 1); }); // the harvest or the forge's work goes to market
     if (act === 'inside') this.scene.tweens.add({ targets: a.img, alpha: 0, duration: 300, onComplete: () => { if (a.act === 'inside') a.img.setVisible(false); } });

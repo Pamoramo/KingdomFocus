@@ -22,7 +22,7 @@ function Account() {
     <div className="text-sm">Status: <b>{status}</b></div>
     {user && getSchemaVersion() !== null && getSchemaVersion()! < SCHEMA_WANTED && <div className="text-sm border-2 border-blood/60 bg-blood/10 p-2 space-y-1">
       <b>Your cloud database needs an update.</b>
-      <p className="text-xs">It still has an older reward limit, so rewards from long or boosted study sessions are kept on this device until it is updated. Open your Supabase project → <b>SQL Editor</b> → paste the whole of <code>supabase/setup.sql</code> from the game's files → <b>Run</b>. It is safe to run more than once, and nothing is lost.</p>
+      <p className="text-xs">{getSchemaVersion()! < 5 ? 'It still has an older reward limit, so rewards from long or boosted study sessions are kept on this device until it is updated. ' : ''}It cannot store taverns yet, so you can build one only after updating. Open your Supabase project → <b>SQL Editor</b> → paste the whole of <code>supabase/setup.sql</code> from the game's files → <b>Run</b>. It is safe to run more than once, and nothing is lost.</p>
     </div>}
     {!supabase && <p className="text-xs">Cloud sync is not configured for this deployment (see README). Progress is saved on this device.</p>}
     {supabase && (user ? <>

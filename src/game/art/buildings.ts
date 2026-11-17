@@ -1,7 +1,7 @@
 import { type C, P, r, px, canvas, outline, shade, rng, stoneBlock, planks, timber, crenel, gable, hip, cone, win, door, flag, pennant, shadow, tent, fire, torch, crate, barrel, hay, fence, crops, dummy, target, awning } from './px.ts';
 import { BUILDINGS, type BKind } from '../../lib/economy.ts';
 
-export const EXTRA: Partial<Record<BKind, number>> = { camp: 24, hut: 14, house: 24, farm: 18, well: 12, market: 16, blacksmith: 20, storehouse: 18, stable: 22, barracks: 32, range: 16, trainfield: 16, watchtower: 52, guardhouse: 28, armory: 30, cavstable: 30, siege: 26, gate: 20, gatehouse: 56, tower: 80, keep: 100, greathall: 38, palace: 88 };
+export const EXTRA: Partial<Record<BKind, number>> = { tavern: 30, camp: 24, hut: 14, house: 24, farm: 18, well: 12, market: 16, blacksmith: 20, storehouse: 18, stable: 22, barracks: 32, range: 16, trainfield: 16, watchtower: 52, guardhouse: 28, armory: 30, cavstable: 30, siege: 26, gate: 20, gatehouse: 56, tower: 80, keep: 100, greathall: 38, palace: 88 };
 export interface Art { cv: HTMLCanvasElement; lights: [number, number][]; smoke: [number, number][] }
 type Draw = (c: C, W: number, H: number, g: number, l: number, f: number, m: Art) => void;
 
@@ -63,6 +63,27 @@ const D: Partial<Record<BKind, Draw>> = {
     r(c, 20, g + 17, 6, 2, P.stoneDD); r(c, 21, g + 19, 4, 3, P.stoneD); if (f) { px(c, 23, g + 15, P.fireL); px(c, 25, g + 14, P.fire); }
     r(c, 3, g - 14, 5, 10, P.stoneD); m.smoke.push([5, g - 15]);
     if (l >= 3) { for (let i = 0; i < 3; i++) { r(c, 27 - i * 2, g + 9, 1, 8, P.stoneL); } r(c, 22, g + 9, 8, 1, P.woodD); flag(c, 28, g - 12, P.red, f); }
+  },
+  tavern: (c, W, H, g, l, f, m) => {
+    shadow(c, 2, H - 8, W - 4, 6);
+    const base = H - 9, top = l === 1 ? g + 6 : g - 2;
+    // the house: timber over a stone ground floor (an alehouse is all timber and thatch)
+    if (l === 1) { planks(c, 4, top, W - 8, base - top, 6); gable(c, 2, top - 14, W - 4, 15, P.thatch); }
+    else { stoneBlock(c, 4, base - 11, W - 8, 11, l === 3 ? P.stoneL : P.stone, 4); timber(c, 3, top, W - 6, base - 11 - top); r(c, 3, base - 12, W - 6, 1, P.woodD); // the upper storey juts out over the street
+      if (l === 2) gable(c, 1, top - 16, W - 2, 17, P.roof); else hip(c, 0, top - 15, W, 16, P.slate); }
+    // chimneys, windows glowing with firelight, a broad door
+    const ch = (x: number, y: number) => { r(c, x, y, 4, top - y - 1, P.stoneD); r(c, x - 1, y, 6, 2, P.stone); m.smoke.push([x + 2, y - 1]); }; // a stack rising from the roof
+    ch(W - 12, top - (l === 1 ? 16 : 20)); if (l >= 3) ch(8, top - 19);
+    door(c, 20, base - 10, 8, 10);
+    for (const x of [8, 34]) { win(c, x, base - 8, true); m.lights.push([x + 1, base - 6]); }
+    if (l >= 2) for (const x of [8, 19, 27, 36]) { win(c, x, top + 3, f === 1 || x === 19); if (x === 19) m.lights.push([x + 1, top + 5]); }
+    // the sign: a tankard on a bracket, swinging
+    r(c, 30, base - 14, 9, 1, P.woodD); r(c, 37 + (f ? 1 : 0), base - 13, 1, 2, P.woodD);
+    r(c, 34 + (f ? 1 : 0), base - 11, 7, 6, P.woodL); r(c, 35 + (f ? 1 : 0), base - 10, 5, 4, P.wood); r(c, 36 + (f ? 1 : 0), base - 10, 2, 3, P.gold); px(c, 38 + (f ? 1 : 0), base - 9, P.gold); px(c, 36 + (f ? 1 : 0), base - 11, P.cloth);
+    // barrels, a bench, and for the inn a lantern and a hay cart
+    barrel(c, 2, base - 3); barrel(c, 6, base - 2); r(c, 29, base + 1, 10, 1, P.woodD); r(c, 30, base + 2, 1, 2, P.woodD); r(c, 37, base + 2, 1, 2, P.woodD);
+    if (l >= 2) { torch(c, 17, base - 9, f); m.lights.push([17, base - 8]); }
+    if (l >= 3) { hay(c, W - 9, base - 1); crate(c, W - 6, base + 1); flag(c, 4, top - 24, P.red, f); }
   },
   storehouse: (c, W, H, g, l, f) => {
     shadow(c, 2, H - 8, W - 4, 6);

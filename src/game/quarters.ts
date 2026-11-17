@@ -24,20 +24,21 @@ const LINES: Partial<Record<Act, string[]>> = {
   dice: ['Sixes! Pay up!', 'Loaded dice, I swear.', 'Double or nothing.', 'One more throw...'],
   smith: ['Edge like a razor now.', 'Mind the grindstone.', 'Dented my helm again.'],
   groom: ['Easy, girl, easy.', 'Who\'s a good horse?', 'He bit me again!'],
-  leave: ['An hour\'s leave!', 'To the tavern!', 'Fresh pies at the market.'],
+  leave: ['An hour\'s leave!', 'To the tavern!', 'Fresh pies at the market.', 'First round\'s on me!', 'Ale! Ale for the lads!'],
   shoot: ['Bullseye!', 'Wind\'s picking up.', 'Nock, draw, loose!'],
 };
 
 export class QuartersLife {
   private men: Q[] = []; private sig = ''; private fires: Phaser.GameObjects.Image[] = [];
   private spots: Partial<Record<Act, Pt[]>> = {}; private doors: Pt[] = [];
+  /** a tavern in town: soldiers on leave go drinking, even of a night */ private tavern = false;
   constructor(private scene: Phaser.Scene, private amb: Ambient, private chatter: Chatter) {
     const T = scene.textures; for (const f of [0, 1]) if (!T.exists(`fire${f}`)) T.addCanvas(`fire${f}`, hdify(withoutOutline(() => campfire(f)), { grain: 3 }));
   }
   /** How many soldiers to show (most are indoors at any time), from what quarters hold. */
   sync(s: GameState) {
     const plan = quarterPlan(s), n = [...plan.per.values()].reduce((a, b) => a + b, 0);
-    const B = s.buildings, sig = `${n}|` + B.filter((b) => ['barracks', 'guardhouse', 'trainfield', 'range', 'stable', 'cavstable', 'blacksmith', 'armory', 'camp', 'greathall', 'keep', 'market', 'well'].includes(b.kind)).map((b) => b.id + b.level).join();
+    const B = s.buildings, sig = `${n}|` + B.filter((b) => ['tavern', 'barracks', 'guardhouse', 'trainfield', 'range', 'stable', 'cavstable', 'blacksmith', 'armory', 'camp', 'greathall', 'keep', 'market', 'well'].includes(b.kind)).map((b) => b.id + b.level).join();
     if (sig === this.sig) return; this.sig = sig;
     this.men.forEach((m) => m.img.destroy()); this.men = []; this.fires.forEach((f) => f.destroy()); this.fires = [];
     if (!n) return;
@@ -55,8 +56,9 @@ export class QuartersLife {
       spar: this.doors.slice(0, 2).flatMap((d) => [yard(d, 0), yard(d, 2)]),
       smith: [...first('blacksmith'), ...first('armory')].map(door),
       groom: [...first('stable'), ...first('cavstable')].map(door),
-      leave: [...first('market'), ...first('well')].map(door),
+      leave: [...first('tavern'), ...first('tavern'), ...first('market'), ...first('well')].map((b, i) => { const d = door(b); return { x: d.x + ((i % 3) - 1) * 8, y: d.y + (i % 2) * 3 }; }),
     };
+    this.tavern = first('tavern').length > 0;
     // the campfire before the main quarters, with seats round it
     const fp = yard(this.doors[0], 4), fire = this.scene.add.image(fp.x, fp.y + 2, 'fire0').setOrigin(0.5, 1).setScale(S * 0.8).setDepth(fp.y); this.fires.push(fire);
     this.spots.fire = [0, 1, 2, 3, 4].map((i) => ({ x: fp.x + Math.cos((i / 5) * Math.PI * 2) * 13, y: fp.y + Math.sin((i / 5) * Math.PI * 2) * 6 }));
@@ -76,8 +78,8 @@ export class QuartersLife {
   private choose(m: Q) {
     const h = getState().settings.dayNight === 'night' ? 23 : getState().settings.dayNight === 'day' ? 12 : new Date().getHours(), night = h >= 21 || h < 6;
     const free = (a: Act) => (this.spots[a] ?? []).filter((p) => !this.taken(p));
-    const w: [Act, number][] = night ? [['inside', 8], ['fire', 3], ['dice', 1]]
-      : [['drill', MOUNTED.has(m.cls) ? 0.5 : 3], ['shoot', RANGED.has(m.cls) ? 5 : 0], ['spar', RANGED.has(m.cls) ? 0.5 : 2], ['fire', 2], ['dice', 1.2], ['smith', 1], ['groom', MOUNTED.has(m.cls) ? 4 : 0.3], ['leave', 1], ['inside', 2]];
+    const w: [Act, number][] = night ? [['inside', 8], ['fire', 3], ['dice', 1], ['leave', this.tavern ? 2 : 0]]
+      : [['drill', MOUNTED.has(m.cls) ? 0.5 : 3], ['shoot', RANGED.has(m.cls) ? 5 : 0], ['spar', RANGED.has(m.cls) ? 0.5 : 2], ['fire', 2], ['dice', 1.2], ['smith', 1], ['groom', MOUNTED.has(m.cls) ? 4 : 0.3], ['leave', this.tavern ? 2.5 : 1], ['inside', 2]];
     const opts = w.filter(([a, v]) => v > 0 && (a === 'inside' || free(a).length));
     let roll = Math.random() * opts.reduce((a, [, v]) => a + v, 0), act: Act = 'inside';
     for (const [a, v] of opts) if ((roll -= v) <= 0) { act = a; break; }
@@ -111,6 +113,7 @@ export class QuartersLife {
           case 'shoot': { const c = (Math.floor(time / 250) + m.ph) % 12; f = c < 5 ? 0 : c < 10 ? 4 : 5; if (c === 10 && (m.face ?? 0) <= 0) { m.face = 1000; this.amb.shoot(m.x + 4, m.y - 12, m.x + 2, m.y - 60); } m.face = (m.face ?? 0) - dt; break; }
           case 'smith': f = cyc % 4 < 2 ? 4 : 5; if (cyc % 4 === 2 && Math.random() < 0.12) this.amb.spark(m.x + (m.img.flipX ? -6 : 6), m.y - 8); break;
           case 'groom': f = cyc < 6 ? 4 : 0; break;
+          case 'leave': f = cyc < 3 ? 4 : 0; break; // a tankard raised
           case 'dice': f = cyc === 0 ? 4 : 2; break;
           case 'fire': f = 2; break;
           default: f = 0;

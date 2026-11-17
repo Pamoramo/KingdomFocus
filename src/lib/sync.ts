@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
-import { getState, setState, subscribe, newGame, emit, grantCompensation, stableUuid, type GameState } from './state.ts';
+import { getState, setState, subscribe, newGame, emit, grantCompensation, stableUuid, cloudLacks, NEEDS_SCHEMA, type GameState } from './state.ts';
+import type { BKind } from './economy.ts';
 import { upgradeWorld } from './war.ts';
 import { buildPayload, clearSent, outboxEmpty, adoptSnapshot, heldBack, type Snapshot } from './syncCore.ts';
 
@@ -20,7 +21,7 @@ export const getSyncStatus = () => status;
 /** Schema version of the cloud database (null until checked; 0 = older than migration 0005). */
 let schema: number | null = null;
 export const getSchemaVersion = () => schema;
-export const SCHEMA_WANTED = 5;
+export const SCHEMA_WANTED = 6;
 /** True once the database rejected a study reward for exceeding its (old) ceiling: such rewards wait locally. */
 const LEGACY_KEY = 'kod-legacy-ceiling';
 let legacy = (() => { try { return localStorage.getItem(LEGACY_KEY) === '1'; } catch { return false; } })(), lastProbe = 0;
@@ -30,6 +31,7 @@ async function checkSchema() {
   if (!supabase || schema !== null) return;
   const { data, error } = await supabase.rpc('kod_schema_version');
   schema = error ? 0 : Number(data) || 0; syncStatus.dispatchEvent(new Event('change'));
+  cloudLacks.clear(); for (const [k, v] of Object.entries(NEEDS_SCHEMA)) if (schema < (v ?? 0)) cloudLacks.add(k as BKind);
 }
 export const getUser = () => user;
 
@@ -69,15 +71,15 @@ export async function syncNow() {
       if (st && st !== seen && snap.kingdom?.world && getState().world === worldAtContact) { setState({ ...getState(), world: upgradeWorld(snap.kingdom.world) }, false); emit({ kind: 'info', text: 'Loaded newer progress from your other device.' }); }
       seen = st; lastContact = Date.now(); worldAtContact = getState().world;
     }
-    void checkSchema().catch(() => {});
+    await checkSchema().catch(() => {}); // know what the database can store before sending
     // an outdated database rejects big study rewards; send everything else and keep those waiting locally
     const probe = legacy && Date.now() - lastProbe > 10 * 60_000; // every 10 minutes, see whether the database was updated
-    let sent = stamped(buildPayload(getState(), legacy && !probe ? heldBack(getState()) : new Set())), snap: Snapshot;
+    let sent = stamped(buildPayload(getState(), legacy && !probe ? heldBack(getState()) : new Set(), cloudLacks)), snap: Snapshot;
     try { snap = await rpc(sent.payload); if (probe && legacy) setLegacy(false); }
     catch (e) {
       if (!CEILING_ERR.test((e as Error).message)) throw e;
       lastProbe = Date.now(); setLegacy(true);
-      sent = stamped(buildPayload(getState(), heldBack(getState()))); snap = await rpc(sent.payload);
+      sent = stamped(buildPayload(getState(), heldBack(getState()), cloudLacks)); snap = await rpc(sent.payload);
     }
     if (probe) lastProbe = Date.now();
     seen = (sent.payload.kingdom as { world?: { stamp?: string } }).world?.stamp; lastContact = Date.now();
