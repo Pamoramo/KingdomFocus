@@ -236,7 +236,7 @@ export class Ambient {
     a.path = undefined; this.arrive(a); return 0;
   }
   /** Draw order for someone at a point: people working a field stand among its crops, in front of the field's sprite. */
-  private depthAt(x: number, y: number) {
+  depthAt(x: number, y: number) {
     // open yards (fields, the training ground, the archery range, paddocks): people inside stand in front of the yard's fence and ground
     for (const b of this.yards) { const [w, h] = footprint(b.kind); if (x >= b.x * TILE && x < (b.x + w) * TILE && y >= b.y * TILE && y <= (b.y + h) * TILE + 2) return (b.y + h) * TILE + 0.5 + y / 1000; }
     return y;
@@ -295,11 +295,11 @@ export class Ambient {
     const lines = PLACE_LINES[act];
     if (lines && this.chatter.count < 3 && Math.random() < 0.3) this.chatter.say({ get x() { return a.x; }, get y() { return a.y; }, h: 16, alive: () => a.img.active && a.img.visible }, lines[Math.floor(Math.random() * lines.length)], 300, this.chatter.voice(worker ? 'worker' : 'villager'));
   }
-  private shoot(x: number, y: number, tx: number, ty: number) {
+  shoot(x: number, y: number, tx: number, ty: number) {
     const ar = this.scene.add.image(x, y, 'arrow').setDepth(9000).setRotation(Math.atan2(ty - y, tx - x));
     this.scene.tweens.add({ targets: ar, x: tx, y: ty, duration: 380, onComplete: () => this.scene.time.delayedCall(700, () => ar.destroy()) });
   }
-  private spark(x: number, y: number) {
+  spark(x: number, y: number) {
     const p = this.scene.add.image(x, y, 'px').setTint(0xfff1a8).setDepth(9000);
     this.scene.tweens.add({ targets: p, alpha: 0, y: y - 4, duration: 250, onComplete: () => p.destroy() });
   }

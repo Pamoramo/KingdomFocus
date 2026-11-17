@@ -151,3 +151,25 @@ test('a removed subject stays removed when the cloud copy (which keeps every sub
   assert.ok(S.getState().subjects.some((x) => /history/i.test(x)), 'adding it again brings it back');
   assert.ok(adoptSnapshot(S.getState(), { ...snap, kingdom: { ...snap.kingdom, settings: S.getState().settings } } as never).subjects.some((x) => /history/i.test(x)), 'and it survives the next sync');
 });
+
+test('quarters: beds in barracks take off-duty soldiers out of formation; they drill and learn faster', () => {
+  const g = S.newGame(); S._with({ ...g, stage: 3 }); S.newBattalion('Foot'); S.newBattalion('Bows');
+  const [a, b] = S.getState().battalions.map((x) => x.id);
+  S._with({ ...S.getState(), squads: [{ id: 'q1', cls: 'spearman', count: 12, xp: 0, rank: 0, bat: a }, { id: 'q2', cls: 'spearman', count: 12, xp: 0, rank: 0, bat: a }, { id: 'q3', cls: 'spearman', count: 12, xp: 0, rank: 0, bat: a }, { id: 'q4', cls: 'archer', count: 10, xp: 0, rank: 0, bat: b }] });
+  const camp = S.quartersCap(S.getState()); assert.ok(camp > 0 && camp < 30, 'the old camp has a few tents');
+  S.setOrders(a, 'patrol'); // 24 on patrol, 12 spare
+  let p = S.quarterPlan(S.getState()); assert.equal(p.per.get(a), 12, 'the patrol\'s spare men go to quarters');
+  S.setOrders(b, 'quarters'); p = S.quarterPlan(S.getState());
+  assert.equal(p.per.get(b), 10, 'a battalion sent to quarters gets beds first'); assert.equal(p.used, camp); assert.ok(p.wanting > 0, 'not enough beds');
+  // a barracks makes room for everyone
+  S._with({ ...S.getState(), buildings: [...S.getState().buildings, { id: 'bk', kind: 'barracks', x: 60, y: 60, level: 1, at: 0 }] });
+  p = S.quarterPlan(S.getState()); assert.equal(p.wanting, 0); assert.equal(p.per.get(a), 12);
+  assert.ok(S.inQuarters(S.getState(), b) && S.getState().battalions.find((x) => x.id === b)!.orders === 'formation', 'stored without a new database value');
+  // back to formation: out of quarters
+  S.setOrders(b, 'formation'); assert.equal(S.quarterPlan(S.getState()).per.get(b), undefined);
+  // drilling in quarters: faster experience while studying
+  S.setOrders(b, 'quarters'); S._with({ ...S.getState(), squads: S.getState().squads.map((q) => ({ ...q, xp: 0 })) });
+  S.grantCompensation(S.stableUuid('quarters-test'), 30, 1, 'History', 'test');
+  const xp = (id: string) => S.getState().squads.find((q) => q.id === id)!.xp;
+  assert.ok(xp('q4') > xp('q1') * 1.15, `quartered archers drilled (${xp('q4').toFixed(1)} vs ${xp('q1').toFixed(1)})`);
+});

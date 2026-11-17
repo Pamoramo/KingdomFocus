@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { sunNow, FootShadows } from './shadows.ts';
+import { QuartersLife } from './quarters.ts';
 import { getState, subscribe, fxBus, type Fx, MAP_W, MAP_H, TILE, CAMP_X, CAMP_Y, canPlace, build, marchTo, marchArmy, moveBuilding, footprint, demolishMany } from '../lib/state.ts';
 import { BUILDINGS, type BKind } from '../lib/economy.ts';
 import { getUI, setUI, subUI, camBus } from './ui.ts';
@@ -30,7 +31,7 @@ const lerpColor = (a: number, b: number, t: number) => { const ch = (s: number) 
 export class KingdomScene extends Phaser.Scene {
   private world!: World; private army!: Army; private ambient!: Ambient; private chatter!: Chatter; private weather!: WeatherFx; happenings!: TownEvents;
   private ghost!: Phaser.GameObjects.Rectangle; private selRect!: Phaser.GameObjects.Rectangle; private shade!: Phaser.GameObjects.Rectangle;
-  private frame = 0; private unsub: (() => void)[] = []; private feet!: FootShadows;
+  private frame = 0; private unsub: (() => void)[] = []; private feet!: FootShadows; private quarters!: QuartersLife;
   private pinch: { d: number; z: number; wx: number; wy: number } | null = null;
   private drag: { x: number; y: number; sx: number; sy: number; moved: boolean; paint: boolean } | null = null;
   private lastPaint = ''; private keys!: Record<string, Phaser.Input.Keyboard.Key>; private night = 0;
@@ -39,7 +40,7 @@ export class KingdomScene extends Phaser.Scene {
 
   create() {
     makeTextures(this);
-    this.world = new World(this); this.feet = new FootShadows(this); this.army = new Army(this); this.chatter = new Chatter(this); this.ambient = new Ambient(this, this.chatter); this.life = new Life(this, this.world, this.ambient);
+    this.world = new World(this); this.feet = new FootShadows(this); this.army = new Army(this); this.chatter = new Chatter(this); this.ambient = new Ambient(this, this.chatter); this.quarters = new QuartersLife(this, this.ambient, this.chatter); this.life = new Life(this, this.world, this.ambient);
     this.ghost = this.add.rectangle(0, 0, 16, 16, 0x44ff66, 0.3).setOrigin(0).setStrokeStyle(1, 0xffffff, 0.9).setDepth(40000).setVisible(false);
     this.selRect = this.add.rectangle(0, 0, 16, 16).setOrigin(0).setStrokeStyle(1, 0xffe27a, 1).setDepth(40001).setVisible(false);
     this.shade = this.add.rectangle(-WW, -WH, WW * 3, WH * 3, 0xffffff).setOrigin(0).setDepth(20000).setBlendMode(Phaser.BlendModes.MULTIPLY);
@@ -97,7 +98,7 @@ export class KingdomScene extends Phaser.Scene {
 
   private sync() {
     const s = getState();
-    this.life?.sync(s); this.world.drawTerrain(s); this.world.syncBuildings(s); this.army.sync(s, this.frame); this.ambient.sync(s); this.life?.sync(s); this.syncUI(); this.applyNight();
+    this.life?.sync(s); this.world.drawTerrain(s); this.world.syncBuildings(s); this.army.sync(s, this.frame); this.ambient.sync(s); this.quarters.sync(s); this.life?.sync(s); this.syncUI(); this.applyNight();
   }
   applyNight() {
     const { n, warm } = nightFactor(getState().settings.dayNight);
@@ -111,7 +112,7 @@ export class KingdomScene extends Phaser.Scene {
 
   update(time: number, dt: number) {
     const s = getState(), ui = getUI(), cam = this.cameras.main;
-    this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.life.update(dt, Math.floor(time / 150));
+    this.army.setLod(cam.zoom); this.army.update(s, time, dt, ui.selBat); this.ambient.update(time, dt); this.quarters.update(time, dt); this.life.update(dt, Math.floor(time / 150));
     this.feet.draw(this.world.shadows.sun, (foot) => this.army.feet(foot));
     // smooth zoom toward the wheel's target
     if (this.zoomGoal) { const g = this.zoomGoal, z = Math.abs(g.z - cam.zoom) < 0.002 ? g.z : cam.zoom + (g.z - cam.zoom) * Math.min(1, dt / 90); this.placeZoom(z, g.sx, g.sy, g.wx, g.wy); if (z === g.z) this.zoomGoal = null; }
@@ -217,7 +218,7 @@ export class KingdomScene extends Phaser.Scene {
   private chat() {
     const cam = this.cameras.main; if (cam.zoom < 1.3 || this.chatter.count >= 2 || this.happenings?.playing || Math.random() < 0.4) return;
     const view = cam.worldView, onScreen = (t: { x: number; y: number }) => view.contains(t.x, t.y - 10);
-    const people = this.ambient.talkers().filter((p) => onScreen(p.t));
+    const people = [...this.ambient.talkers(), ...this.quarters.talkers()].filter((p) => onScreen(p.t));
     const walkers = people.filter((p) => p.walking);
     for (const a of walkers) { const b = walkers.find((x) => x !== a && Math.hypot(x.t.x - a.t.x, x.t.y - a.t.y) < 40); if (b && Math.random() < 0.3) { this.chatter.conversation(a.t, b.t); return; } }
     const soldier = this.army.randomSoldier();

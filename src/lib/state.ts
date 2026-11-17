@@ -132,6 +132,26 @@ export function idleDays(s: GameState, now = Date.now()) {
 export const neglect = (s: GameState, now = Date.now()) => Math.max(0, idleDays(s, now) - GRACE_DAYS);
 /** Soldiers on duty (patrol or garrison) at most this many per battalion. */
 export const DUTY_CAP = 24;
+// ---------------- quarters: where soldiers off duty live ----------------
+/** Beds for soldiers off duty: barracks, guardhouses, the keep and great hall, the palace, and tents at the old camp. */
+export const quartersCap = (s: GameState) => s.buildings.reduce((a, b) => a + (b.kind === 'barracks' ? 40 * b.level : b.kind === 'guardhouse' ? 12 * b.level : b.kind === 'greathall' ? 25 * b.level : b.kind === 'keep' ? 8 * b.level : b.kind === 'palace' ? 40 : b.kind === 'camp' ? 16 : 0), 0);
+/** Battalions away from home (campaign, loans, garrisons abroad, on the road). */
+export const awayOf = (s: GameState) => new Set([...(s.world?.campaign?.battalions ?? []), ...(s.world?.loans ?? []).map((l) => l.bat), ...(s.world?.garrisons ?? []).map((g) => g.bat), ...(s.world?.journeys ?? []).flatMap((j) => j.bats ?? [])]);
+export const inQuarters = (s: GameState, id: string) => (s.world?.quartered ?? []).includes(id);
+/** How many of each battalion's soldiers are off duty in quarters, while beds last: battalions sent to quarters first,
+ *  then the men a patrol or garrison does not need on duty. Whoever finds no bed stands in formation. */
+export function quarterPlan(s: GameState): { per: Map<string, number>; used: number; cap: number; wanting: number } {
+  const away = awayOf(s), cap = quartersCap(s), per = new Map<string, number>(); let left = cap, wanting = 0;
+  const home = s.battalions.filter((b) => !away.has(b.id));
+  const want = (b: Battalion) => { const n = batSize(s, b.id); return inQuarters(s, b.id) ? n : b.orders && b.orders !== 'formation' ? Math.max(0, n - DUTY_CAP) : 0; };
+  for (const b of [...home.filter((b) => inQuarters(s, b.id)), ...home.filter((b) => !inQuarters(s, b.id))]) { const w = want(b); if (!w) continue; const got = Math.min(w, left); left -= got; wanting += w - got; if (got) per.set(b.id, got); }
+  return { per, used: cap - left, cap, wanting };
+}
+/** Give a battalion its orders: hold formation, patrol, garrison, or rest in quarters (where they drill between duties). */
+export const setOrders = (id: string, o: Orders | 'quarters') => update((s) => {
+  const q = (s.world.quartered ?? []).filter((x) => x !== id), w = { ...s.world, quartered: o === 'quarters' ? [...q, id] : q };
+  return mark({ ...s, world: w, battalions: s.battalions.map((b) => (b.id === id ? { ...b, orders: o === 'quarters' ? 'formation' : o } : b)) }, 'battalions', id);
+});
 /** Town order: guards on duty versus what the population needs. */
 export function townOrder(s: GameState) {
   const pop = s.buildings.reduce((a, b) => a + (b.kind === 'hut' ? 3 * b.level : b.kind === 'house' ? 6 * b.level : b.kind === 'market' ? 10 * b.level : b.kind === 'farm' ? 2 : 0), 0);
@@ -446,10 +466,12 @@ export const promoteCommander = (id: string) => update((s) => {
 });
 
 // ---------------- study ----------------
-const XP_RATE = (s: GameState, bat: string) => { const c = s.battalions.find((b) => b.id === bat)?.commander; return (1 + effects(s).xp + (OFFICERS[c?.rank ?? 0]?.bonus ?? 0)) * (c && hasTrait(c, 'drillmaster') ? 1.25 : 1); };
+/** Soldiers in quarters drill between duties: a quarter faster, more with a training field or archery range to use. */
+const drillBonus = (s: GameState, bat: string, plan: ReturnType<typeof quarterPlan>) => { const n = plan.per.get(bat) ?? 0, size = batSize(s, bat); if (!n || !size) return 1; return 1 + (n / size) * (count(s, 'trainfield') || count(s, 'range') ? 0.4 : 0.25); };
+const XP_RATE = (s: GameState, bat: string, plan = quarterPlan(s)) => { const c = s.battalions.find((b) => b.id === bat)?.commander; return (1 + effects(s).xp + (OFFICERS[c?.rank ?? 0]?.bonus ?? 0)) * (c && hasTrait(c, 'drillmaster') ? 1.25 : 1) * drillBonus(s, bat, plan); };
 function giveXp(s: GameState, minutes: number): GameState {
   if (minutes <= 0 || !s.squads.length) return s;
-  let o: GameState = { ...s, squads: s.squads.map((q) => ({ ...q, xp: q.xp + minutes * XP_PER_MIN * XP_RATE(s, q.bat) })) };
+  const plan = quarterPlan(s); let o: GameState = { ...s, squads: s.squads.map((q) => ({ ...q, xp: q.xp + minutes * XP_PER_MIN * XP_RATE(s, q.bat, plan) })) };
   for (const q of s.squads) o = mark(o, 'squads', q.id);
   return o;
 }

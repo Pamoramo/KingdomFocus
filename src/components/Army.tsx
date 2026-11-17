@@ -3,7 +3,7 @@ import { stationOf, recallGarrison } from '../lib/warActions.ts';
 import { useState } from 'react';
 import { useGame, useUI, hex, fmt, mobile } from './hooks.ts';
 import { TROOPS, TCLASSES, RANKS, OFFICERS, SQUADS_PER_COMPANY, COLORS, HERALD_COLORS, EMBLEMS, HERALD_EMBLEMS, PRESTIGE_EMBLEMS, type TClass, type Formation } from '../lib/economy.ts';
-import { recruitCost, townOrder, DUTY_CAP, type Orders, recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, splitBattalion, mergeBattalion, musterOf, companiesOf, awayFromHome, type SplitHow, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
+import { recruitCost, townOrder, DUTY_CAP, type Orders, quarterPlan, inQuarters, setOrders, count, recruit, troopLock, armyCap, armySize, batSize, newBattalion, editBattalion, disbandBattalion, transferSquad, splitBattalion, mergeBattalion, musterOf, companiesOf, awayFromHome, type SplitHow, drill, promote, promoteAll, promoteCost, canPromote, promoteCommander, canAfford, has, unlocked, type GameState, type Battalion } from '../lib/state.ts';
 import { nameFor } from '../lib/names.ts';
 import { hash } from '../lib/names.ts';
 import { setUI, focusOn } from '../game/ui.ts';
@@ -93,7 +93,7 @@ function Host() {
         return <button key={b.id} className="w-full flex items-center gap-2 text-left border-b border-black/10 pb-1" onClick={() => { setUI({ selBat: b.id, selArmy: null }); focusOn(b.x, b.y - 20); }}>
           <Banner color={b.color} emblem={b.emblem} scale={1.5} /><Portrait b={b} scale={1.5} />
           <span className="flex-1 min-w-0"><b>{b.name}</b><br /><span className="text-sm">{OFFICERS[b.commander.rank].name} {b.commander.name}</span></span>
-          <span className="text-sm whitespace-nowrap text-right">{fmt(n)} soldiers{(() => { const l = s.world.loans.find((x) => x.bat === b.id); const g = stationOf(s, b.id); return l ? <span className="block text-xs text-moss">lent · {Math.max(0, Math.ceil(l.leftMin))} min left</span> : g ? <span className="block text-xs text-moss">garrison · {g.name}</span> : null; })()}</span>
+          <span className="text-sm whitespace-nowrap text-right">{fmt(n)} soldiers{(() => { const l = s.world.loans.find((x) => x.bat === b.id); const g = stationOf(s, b.id); return l ? <span className="block text-xs text-moss">lent · {Math.max(0, Math.ceil(l.leftMin))} min left</span> : g ? <span className="block text-xs text-moss">garrison · {g.name}</span> : inQuarters(s, b.id) ? <span className="block text-xs opacity-75">in quarters</span> : null; })()}</span>
         </button>; })}
     </Section>)}
     <div className="flex gap-2"><input className="inp" placeholder="New battalion name" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} /><button className="btn" onClick={() => { newBattalion(name.trim()); setName(''); }}>Raise</button></div>
@@ -179,9 +179,15 @@ function BattalionDetail({ bat }: { bat: Battalion }) {
       <CommanderRecord bat={bat} />
     </Section>
     <Section title="Orders">
-      <div className="grid grid-cols-3 gap-1">{([['formation', 'Hold formation', 'Stand in formation where you send them.'], ['patrol', 'Patrol town', `Up to ${DUTY_CAP} soldiers walk the streets in pairs.`], ['garrison', 'Garrison', `Up to ${DUTY_CAP} soldiers guard doors, gates and towers; bowmen man the walls.`]] as [Orders, string, string][]).map(([k, n, d]) =>
-        <button key={k} title={d} className={`btn text-sm !px-1 ${(bat.orders ?? 'formation') === k ? 'btn-gold' : ''}`} onClick={() => editBattalion(bat.id, { orders: k })}>{n}</button>)}</div>
-      <p className="text-xs opacity-80">{bat.orders === 'patrol' ? `Patrolling: ${Math.min(DUTY_CAP, n)} soldiers roam the town in pairs and chase down thieves.` : bat.orders === 'garrison' ? `On guard: ${Math.min(DUTY_CAP, n)} soldiers stand watch at doors, gates and towers. Archers and crossbowmen take the wall-walks.` : 'Soldiers on patrol or garrison duty keep thieves away.'}{bat.orders && bat.orders !== 'formation' && n > DUTY_CAP ? ` The other ${n - DUTY_CAP} stay in formation.` : ''}</p>
+      {(() => { const plan = quarterPlan(s), here = plan.per.get(bat.id) ?? 0, cur: Orders | 'quarters' = inQuarters(s, bat.id) ? 'quarters' : bat.orders ?? 'formation', stand = Math.max(0, n - (cur === 'patrol' || cur === 'garrison' ? Math.min(DUTY_CAP, n) : 0) - here);
+        return <>
+          <div className="grid grid-cols-2 gap-1">{([['formation', 'Hold formation', 'Stand in formation where you send them.'], ['patrol', 'Patrol town', `Up to ${DUTY_CAP} soldiers walk the streets in pairs; the rest rest in quarters.`], ['garrison', 'Garrison', `Up to ${DUTY_CAP} soldiers guard doors, gates and towers; bowmen man the walls; the rest rest in quarters.`], ['quarters', 'Quarters', 'Off duty in the barracks: they drill, shoot, spar, eat and sleep, and gain experience faster while you study.']] as [Orders | 'quarters', string, string][]).map(([k, nm, d]) =>
+            <button key={k} title={d} className={`btn text-sm !px-1 ${cur === k ? 'btn-gold' : ''}`} onClick={() => setOrders(bat.id, k)}>{nm}</button>)}</div>
+          <p className="text-xs opacity-80">{cur === 'patrol' ? `Patrolling: ${Math.min(DUTY_CAP, n)} soldiers roam the town in pairs and chase down thieves.` : cur === 'garrison' ? `On guard: ${Math.min(DUTY_CAP, n)} soldiers stand watch at doors, gates and towers. Archers and crossbowmen take the wall-walks.` : cur === 'quarters' ? 'Off duty in quarters: drilling on the training field, shooting at the butts, sparring, dicing by the fire, sharpening blades and grooming horses, then in to eat and sleep.' : 'Standing in formation. Send them to quarters and they keep busy (and train faster) instead.'}
+            {here > 0 && cur !== 'quarters' ? ` The other ${here} rest in quarters.` : ''}{here > 0 ? ` Drilling in quarters: +${count(s, 'trainfield') || count(s, 'range') ? 40 : 25}% experience while you study.` : ''}
+            {cur !== 'formation' && stand > 0 ? ` ${stand} find no bed and stand in formation: build barracks (40 beds a level), guardhouses or a great hall.` : ''}</p>
+          <p className="text-xs opacity-70">Quarters: {plan.used} of {plan.cap} beds in use{plan.wanting ? `, ${plan.wanting} soldiers without a bed` : ''}.</p>
+        </>; })()}
     </Section>
     <Section title="Formation">
       <div className="flex gap-1">{(['line', 'block', 'column'] as Formation[]).map((f) => <button key={f} className={`btn flex-1 capitalize ${bat.formation === f ? 'btn-gold' : ''}`} onClick={() => editBattalion(bat.id, { formation: f })}>{f}</button>)}</div>

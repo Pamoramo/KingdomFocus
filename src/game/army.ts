@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { type GameState, type Battalion, type Squad, batSize, DUTY_CAP } from '../lib/state.ts';
+import { type GameState, type Battalion, type Squad, batSize, DUTY_CAP, quarterPlan } from '../lib/state.ts';
 import { TCLASSES, OFFICERS } from '../lib/economy.ts';
 import { awayBats } from '../lib/warActions.ts';
 import { sFrame, bFrame, bannerTex, BW, BH, S } from './textures.ts';
@@ -37,11 +37,11 @@ export class Army {
   constructor(private scene: Phaser.Scene) {}
 
   sync(s: GameState, frame: number) {
-    const seen = new Set<string>(), away = awayBats(s);
+    const seen = new Set<string>(), away = awayBats(s), plan = quarterPlan(s);
     for (const bat of s.battalions) {
       if (away.has(bat.id)) continue; // on campaign or lent to an ally: shown on the world map instead
       seen.add(bat.id);
-      let duty = bat.orders && bat.orders !== 'formation' ? DUTY_CAP : 0; // soldiers on town duty leave the formation
+      let duty = (bat.orders && bat.orders !== 'formation' ? DUTY_CAP : 0) + (plan.per.get(bat.id) ?? 0); // soldiers on town duty or resting in quarters leave the formation
       const squads = s.squads.filter((q) => q.bat === bat.id && q.count > 0).sort((a, b) => TCLASSES.indexOf(a.cls) - TCLASSES.indexOf(b.cls) || b.rank - a.rank)
         .map((q) => { const t = Math.min(duty, q.count); duty -= t; return { ...q, count: q.count - t }; }).filter((q) => q.count > 0);
       const sig = squads.map((q) => q.id + q.cls + q.count + q.rank).join() + bat.formation + bat.orders;
@@ -67,6 +67,7 @@ export class Army {
         for (const it of items) v.bobs.push({ ...it, b: v.detail.create(it.ox, it.oy, sFrame(it.cls, it.rank, 0)) });
       }
       const n = batSize(s, bat.id);
+      const empty = !squads.length; v.banner.setVisible(!empty); v.label.setVisible(!empty); // everyone is on duty or in quarters
       v.label.setText(`${bat.name} · ${OFFICERS[bat.commander.rank].name} ${bat.commander.name.split(' ')[0]} (${n})`);
       v.banner.setTexture(bannerTex(this.scene, bat.color, bat.emblem, frame % 2));
       v.ring.setSize(v.w + 16, Math.max(14, v.w * 0.35)).setDisplayOrigin((v.w + 16) / 2, Math.max(14, v.w * 0.35) / 2);
